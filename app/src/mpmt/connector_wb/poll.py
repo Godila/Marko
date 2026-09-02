@@ -1,0 +1,23 @@
+import logging
+from datetime import date, timedelta
+
+from sqlalchemy.orm import Session
+
+from mpmt.connector_wb.ingest import fbs_rids, ingest_excise
+from mpmt.settings import settings
+
+log = logging.getLogger("mpmt.poll")
+
+
+def run_once(db: Session, client) -> dict:
+    # Порядок обязателен (review Task 10): orders() → fbs-множество СТРОГО ДО
+    # excise_report()/ingest — строка, journaled как skip_fbw, уже никогда не
+    # станет sale. orders() ничего не пишет, поэтому _gate_excise (commit внутри
+    # excise_report) не подтянет незавершённые journal-записи.
+    orders = client.orders()
+    fbs = fbs_rids(orders)
+    to, frm = date.today(), date.today() - timedelta(days=settings.excise_days_back)
+    rows = client.excise_report(frm.isoformat(), to.isoformat())
+    stats = ingest_excise(db, rows, fbs)
+    log.info("poll done: %s (fbs_rids=%d)", stats, len(fbs))
+    return stats

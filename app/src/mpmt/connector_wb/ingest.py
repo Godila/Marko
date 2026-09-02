@@ -22,6 +22,7 @@ def fbs_rids(order_rows: list[dict]) -> set[str]:
     return {o["rid"] for o in order_rows if o.get("rid")}
 
 
+# Контракт порядка (worker/poll): fbs-множество строится ДО ingest_excise — строка, journaled как skip_fbw, уже никогда не станет sale (dedup по source_event_id).
 def ingest_excise(db: Session, rows: list[dict], fbs: set[str]) -> dict:
     stats = {"sale": 0, "return": 0, "skipped_fbw": 0, "duplicates": 0}
     for ev in excise_rows_to_events(rows):
