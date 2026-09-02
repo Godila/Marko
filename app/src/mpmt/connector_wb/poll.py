@@ -1,9 +1,12 @@
 import logging
+import time
 from datetime import date, timedelta
 
+from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.orm import Session
 
 from mpmt.connector_wb.ingest import fbs_rids, ingest_excise
+from mpmt.platform.models import PlatformKV
 from mpmt.settings import settings
 
 log = logging.getLogger("mpmt.poll")
@@ -19,5 +22,14 @@ def run_once(db: Session, client) -> dict:
     to, frm = date.today(), date.today() - timedelta(days=settings.excise_days_back)
     rows = client.excise_report(frm.isoformat(), to.isoformat())
     stats = ingest_excise(db, rows, fbs)
+    now = time.time()
+    marker = {"at": now, "stats": stats}
+    db.execute(pg_insert(PlatformKV).values(
+        key="wb_last_poll", value=marker,
+    ).on_conflict_do_update(
+        index_elements=[PlatformKV.key],
+        set_={"value": marker},
+    ))
+    db.commit()
     log.info("poll done: %s (fbs_rids=%d)", stats, len(fbs))
     return stats

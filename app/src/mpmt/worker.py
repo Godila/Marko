@@ -24,8 +24,9 @@ async def poll_cycle():
     except (WbHttpError, WbLimitError) as e:
         log.error("poll failed: %s", e)
         await send(f"ALERT: WB poll failed: {e}")
-    except Exception:
+    except Exception as e:
         log.exception("poll cycle crashed")
+        await send(f"ALERT: WB poll crashed: {e.__class__.__name__}: {e}")
     finally:
         db.close()
 

@@ -22,6 +22,10 @@ def test_missing_token_401(client):
     # no Authorization header -> 401
     assert client.get("/v1/me").status_code == 401
 
+def test_unknown_token_401(client):
+    r = client.get("/v1/me", headers={"Authorization": "Bearer no-such-token"})
+    assert r.status_code == 401
+
 def test_wrong_scope_403(client):
     # valid token without the required "read" scope -> 403
     r = client.get("/v1/me", headers={"Authorization": "Bearer tok-noaccess"})
