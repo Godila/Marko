@@ -87,3 +87,13 @@ def test_return_route(db, client):
     r = client.post("/v1/batches/return", headers=AUTH, json={"inn": INN})
     assert r.status_code == 200 and r.json() == {"docs": 1, "blocked": 0}
     assert client.get("/v1/journal?state=RETURNED", headers=AUTH).json()[0]["km"] == KM
+
+def test_mutation_audit_rows_written(db, client):
+    from mpmt.platform.models import PlatformAudit
+    apply_event(db, source="wb_excise", source_event_id="a:1", kind="sale",
+                km="0104630520676025215AUDIT001", srid="a", payload={"price": 100})
+    r = client.post("/v1/batches/withdraw", headers={"Authorization": "Bearer t1"},
+                    json={"inn": "090201471350"})
+    assert r.status_code == 200
+    actions = [a.action for a in db.query(PlatformAudit).all()]
+    assert "batch.withdraw" in actions

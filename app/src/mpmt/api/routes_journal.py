@@ -1,6 +1,6 @@
 from fastapi import APIRouter, Depends, HTTPException, Query
 from fastapi.responses import PlainTextResponse
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 from sqlalchemy import func
 from sqlalchemy.orm import Session
 
@@ -15,13 +15,13 @@ router = APIRouter(prefix="/v1")
 
 class BatchBody(BaseModel):
     inn: str
-    limit: int = 100
+    limit: int = Field(100, ge=1, le=1000)
 
 
 @router.get("/journal")
 def journal_list(
     state: str | None = None,
-    limit: int = Query(100, le=1000),
+    limit: int = Query(100, ge=1, le=1000),
     tok: PlatformToken = Depends(require_scope("read")),
     db: Session = Depends(get_db),
 ):
@@ -69,7 +69,7 @@ def batches_return(
 
 @router.get("/docs")
 def docs_list(
-    limit: int = Query(100, le=1000),
+    limit: int = Query(100, ge=1, le=1000),
     tok: PlatformToken = Depends(require_scope("read")),
     db: Session = Depends(get_db),
 ):
