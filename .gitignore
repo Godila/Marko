@@ -1,0 +1,13 @@
+__pycache__/
+*.pyc
+.pytest_cache/
+.venv/
+.env
+secrets/
+*.db
+node_modules/
+ui/dist/
+app/alembic/versions/*.pyc
+.playwright-mcp/
+.codegraph/
+*.egg-info/

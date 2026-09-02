@@ -1,0 +1,55 @@
+{
+ "_http": 200,
+ "payload": {
+  "cards": [
+   {
+    "nmID": 365830,
+    "imtID": 365828,
+    "nmUUID": "869000f2-f797-4632-babe-572c5631fb20",
+    "subjectID": 4636,
+    "subjectName": "Пончо для малышей",
+    "vendorCode": "GISMT-TEST-001",
+    "brand": "GISMT",
+    "title": "Пончо тест ГИСМТ",
+    "description": "Тестовая карточка для сценария песочницы вывода из оборота",
+    "needKiz": false,
+    "dimensions": {
+     "length": 0,
+     "width": 0,
+     "height": 0,
+     "weightBrutto": 0.001,
+     "isValid": false
+    },
+    "characteristics": [
+     {
+      "id": 54337,
+      "name": "Размер",
+      "value": "92"
+     },
+     {
+      "id": 18769,
+      "name": "Сезон",
+      "value": "демисезон"
+     }
+    ],
+    "sizes": [
+     {
+      "chrtID": 365829,
+      "techSize": "92",
+      "wbSize": "1",
+      "skus": [
+       "2030000123452"
+      ]
+     }
+    ],
+    "createdAt": "2026-09-01T19:08:42.726Z",
+    "updatedAt": "2026-09-01T19:08:42.726Z"
+   }
+  ],
+  "cursor": {
+   "updatedAt": "2026-09-01T19:08:42Z",
+   "nmID": 365830,
+   "total": 1
+  }
+ }
+}

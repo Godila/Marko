@@ -1,0 +1,3 @@
+# SDD Progress Ledger — phase 0-1 (plan: docs/superpowers/plans/2026-09-02-phase-0-1-foundation-wb.md)
+
+Task 0 (controller, env prep): complete — SSH key ~/.ssh/mpmt_beget on VM (password auth disabled), Docker 29.7.2 pre-installed on VM, postgres:16 container mpmt-pg on VM 127.0.0.1:5432 (dbs: mpmt, mpmt_test; password in secrets/vm-postgres.txt), SSH tunnel localhost:15432 (background bash exec_d89cc51c; restart cmd: ssh -i ~/.ssh/mpmt_beget -N -L 15432:127.0.0.1:5432 root@155.212.142.199). Local env: python=C:/Users/geor/AppData/Local/Programs/Python/Python313/python.exe (PATH python is 3.14 WITHOUT pip), node v24, no local docker.

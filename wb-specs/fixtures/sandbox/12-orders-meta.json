@@ -1,0 +1,32 @@
+{
+ "_http": 200,
+ "payload": {
+  "orders": [
+   {
+    "id": 124193,
+    "meta": {
+     "imei": {
+      "value": null
+     },
+     "uin": {
+      "value": null
+     },
+     "gtin": {
+      "value": null
+     },
+     "sgtin": {
+      "value": [
+       "010463052067602521CuMtjE0Zp7TGw\u001d91T3U5\u001d92CnKnDK5PQ86HkdlA56nSarhklJcrlnZumvuhvO5uD6o="
+      ]
+     },
+     "expiration": {
+      "value": null
+     },
+     "customsDeclaration": {
+      "value": null
+     }
+    }
+   }
+  ]
+ }
+}

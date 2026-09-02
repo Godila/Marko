@@ -1,0 +1,17 @@
+{
+ "_http": 200,
+ "payload": {
+  "orders": [
+   {
+    "id": 124193,
+    "supplierStatus": "complete",
+    "wbStatus": "sold"
+   },
+   {
+    "id": 124194,
+    "supplierStatus": "complete",
+    "wbStatus": "canceled_by_client"
+   }
+  ]
+ }
+}

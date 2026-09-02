@@ -1,0 +1,12 @@
+{
+ "_http": 200,
+ "payload": [
+  {
+   "name": "GISMT-TEST",
+   "officeId": 1,
+   "id": 124182,
+   "cargoType": 1,
+   "deliveryType": 1
+  }
+ ]
+}
