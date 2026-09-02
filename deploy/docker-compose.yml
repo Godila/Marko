@@ -1,0 +1,47 @@
+services:
+  postgres:
+    image: postgres:16
+    environment: { POSTGRES_USER: mpmt, POSTGRES_PASSWORD: "${PG_PASSWORD}", POSTGRES_DB: mpmt }
+    volumes: [pgdata:/var/lib/postgresql/data]
+    healthcheck: { test: ["CMD-SHELL", "pg_isready -U mpmt"], interval: 10s, retries: 5 }
+    restart: unless-stopped
+
+  api:
+    build: { context: ../app }
+    env_file: .env
+    volumes: ["../secrets:/srv/secrets:ro"]
+    depends_on: { postgres: { condition: service_healthy } }
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request;urllib.request.urlopen('http://127.0.0.1:8000/healthz')"]
+      interval: 30s
+      retries: 3
+    restart: unless-stopped
+
+  worker:
+    build: { context: ../app }
+    command: ["python", "-m", "mpmt.worker"]
+    env_file: .env
+    volumes: ["../secrets:/srv/secrets:ro"]
+    depends_on: { postgres: { condition: service_healthy } }
+    restart: unless-stopped
+
+  ui:
+    image: nginx:1.27-alpine
+    volumes: ["./ui-dist:/usr/share/nginx/html:ro"]
+    restart: unless-stopped
+
+  caddy:
+    image: caddy:2
+    ports: ["80:80", "443:443"]
+    volumes: ["./Caddyfile:/etc/caddy/Caddyfile:ro", "caddy_data:/data"]
+    restart: unless-stopped
+
+  backup:
+    image: postgres:16
+    volumes: ["../backups:/backups", "./backup.sh:/backup.sh:ro"]
+    entrypoint: ["/bin/sh", "-c", "while true; do /backup.sh; sleep 86400; done"]
+    environment: { PGHOST: postgres, PGUSER: mpmt, PGDATABASE: mpmt, PGPASSWORD: "${PG_PASSWORD}" }
+    depends_on: { postgres: { condition: service_healthy } }
+    restart: unless-stopped
+
+volumes: { pgdata: {}, caddy_data: {} }

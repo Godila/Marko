@@ -1,0 +1,5 @@
+gis.adel-factory.ru {
+    handle /v1/* { reverse_proxy api:8000 }
+    handle /healthz { reverse_proxy api:8000 }
+    handle { reverse_proxy ui:80 }
+}
