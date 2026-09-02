@@ -8,6 +8,9 @@ RULES = {
     ("PENDING_RETURN", "sale"): "PENDING_WITHDRAW",
     ("PENDING_RETURN", "return"): "ANOMALY_RERETURN",
     ("RETURNED", "sale"): "PENDING_WITHDRAW",
+    # emitter-действия (подаётся через journal.log_action, state ставит emitter напрямую)
+    ("PENDING_WITHDRAW", "withdraw"): "WITHDRAWN",
+    ("PENDING_RETURN", "return_apply"): "RETURNED",
 }
 
 
