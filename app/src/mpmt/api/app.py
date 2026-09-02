@@ -9,6 +9,9 @@ def create_app() -> FastAPI:
     def healthz():
         return {"status": "ok"}
 
+    from mpmt.api.routes_me import router as me_router
+    app.include_router(me_router)
+
     return app
 
 app = create_app()
