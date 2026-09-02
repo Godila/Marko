@@ -1,7 +1,7 @@
 from fastapi import Depends, HTTPException, Request
 from sqlalchemy.orm import Session
 from mpmt.db import SessionLocal
-from mpmt.platform.models import PlatformPrincipal, PlatformToken, PlatformAudit, hash_token
+from mpmt.platform.models import PlatformToken, PlatformAudit, hash_token
 
 def get_db():
     db = SessionLocal()
@@ -11,7 +11,7 @@ def get_db():
         db.close()
 
 def require_scope(scope: str):
-    def dep(request: Request, db: Session = Depends(get_db)) -> PlatformPrincipal:
+    def dep(request: Request, db: Session = Depends(get_db)) -> PlatformToken:
         auth = request.headers.get("Authorization", "")
         if not auth.startswith("Bearer "):
             raise HTTPException(401, "missing token")
@@ -20,7 +20,7 @@ def require_scope(scope: str):
             raise HTTPException(401, "unknown token")
         if scope not in row.scopes.split(","):
             raise HTTPException(403, f"scope {scope} required")
-        return db.get(PlatformPrincipal, row.principal_id)
+        return row
     return dep
 
 def audit(db: Session, principal_id: int, action: str, detail: dict):
