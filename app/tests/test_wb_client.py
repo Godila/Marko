@@ -46,15 +46,16 @@ def test_excise_limit_gate(db, monkeypatch):
 
 
 def test_orders_pagination():
+    # реальные семантики WB v3: целочисленный курсор, next=0 = документированный конец
     calls = []
 
     def handler(r):
         calls.append(str(r.url.params["next"]))
         if r.url.params["next"] == "0":
-            return httpx.Response(200, json={"next": "C1", "orders": [{"rid": "a"}]})
-        return httpx.Response(200, json={"next": "C1", "orders": [{"rid": "b"}]})
+            return httpx.Response(200, json={"next": 1001, "orders": [{"rid": "a"}]})
+        return httpx.Response(200, json={"next": 0, "orders": [{"rid": "b"}]})
 
     c = WBClient(token="t", transport=httpx.MockTransport(handler), sleeper=lambda s: None)
     out = c.orders()
     assert [o["rid"] for o in out] == ["a", "b"]
-    assert calls == ["0", "C1"]  # ровно 2 http-вызова, стоп на повторном курсоре
+    assert calls == ["0", "1001"]  # ровно 2 http-вызова; сам тест завершается — зацикливания нет

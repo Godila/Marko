@@ -81,16 +81,18 @@ class WBClient:
     def orders(self, limit: int = 1000) -> list[dict]:
         out: list[dict] = []
         cursor = 0
-        while True:
+        for _ in range(1000):  # жёсткий потолок страниц — страховка от зацикливания
             r = self._fetch("GET", self.orders_base + "/api/v3/orders",
                             params={"next": cursor, "limit": limit})
             data = r.json()
             batch = data.get("orders", [])
             out.extend(batch)
             nxt = data.get("next", 0)
-            if not batch or nxt == cursor:
-                break  # пустая страница или курсор повторился — данных больше нет
+            if not nxt or not batch or nxt == cursor:
+                break  # next=0/None — документированный конец WB; пустая партия; повтор курсора
             cursor = nxt
+        else:
+            log.error("orders pagination cap hit")
         return out
 
 
