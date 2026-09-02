@@ -11,6 +11,8 @@ def create_app() -> FastAPI:
 
     from mpmt.api.routes_me import router as me_router
     app.include_router(me_router)
+    from mpmt.api.routes_journal import router as journal_router
+    app.include_router(journal_router)
 
     return app
 
