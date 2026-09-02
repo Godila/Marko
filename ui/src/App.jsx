@@ -28,7 +28,7 @@ export default function App() {
   const mkBatch = async (kind) => {
     try {
       const r = await api(`/v1/batches/${kind}`, token, { method: 'POST', body: JSON.stringify({ inn }) })
-      if (kind === 'withdraw' && r && r.doc_id === 0) { setMsg('нет позиций к выводу'); setPre('') }
+      if (kind === 'withdraw' && r && r.doc_id === 0) { setPre('нет позиций к выводу'); setMsg('') }
       else { setMsg(''); setPre(JSON.stringify(r, null, 2)) }
       load()
     } catch (e) { setMsg('ошибка: ' + e.message) }
