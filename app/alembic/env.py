@@ -8,6 +8,7 @@ from alembic import context
 from mpmt.db import Base
 from mpmt.settings import settings
 import mpmt.platform.models  # noqa: F401  (регистрация ORM-моделей для autogenerate)
+import mpmt.journal.models  # noqa: F401
 
 # this is the Alembic Config object, which provides
 # access to the values within the .ini file in use.

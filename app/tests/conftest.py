@@ -1,6 +1,8 @@
 import pytest
 from sqlalchemy import text
 
+import mpmt.journal.models  # noqa: F401  (регистрация journal-моделей в Base.metadata)
+
 
 @pytest.fixture
 def db():
