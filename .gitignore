@@ -11,3 +11,4 @@ app/alembic/versions/*.pyc
 .playwright-mcp/
 .codegraph/
 *.egg-info/
+backups/
