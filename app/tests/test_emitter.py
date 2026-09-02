@@ -43,3 +43,25 @@ def test_return_batch_with_receipt(db):
     assert n == (1, 0)
     from mpmt.journal.models import Item
     assert db.get(Item, km).state == "RETURNED"
+
+def test_withdraw_nonfiscal_wb_number_persists(db):
+    """Non-fiscal ветка: OTHER + WB-<id>; перечитываем из НОВОЙ сессии —
+    проверяем, что flag_modified действительно сохранил подставленный номер."""
+    import base64, json as _json
+    from mpmt.db import SessionLocal
+    km = "0104630520676025215NOFISCAL"
+    apply_event(db, source="wb_excise", source_event_id="nf:1", kind="sale", km=km,
+                srid="nf", payload={"price": 500})   # без fiscal_doc_number
+    doc_id = withdraw_batch(db, INN)
+    s2 = SessionLocal()
+    try:
+        doc = s2.get(MtDoc, doc_id)
+        assert doc.payload["document_type"] == "OTHER"
+        assert doc.payload["document_number"] == f"WB-{doc_id}"
+        assert doc.payload["document_number"]  # не пустая строка после reload
+        assert base64.b64decode(doc.product_document_b64) == \
+            _json.dumps(doc.payload, ensure_ascii=False).encode()
+        lines = __import__("mpmt.emitter.batch", fromlist=["to_csv"]).to_csv(s2, doc_id)
+        assert km in lines and "50000" in lines
+    finally:
+        s2.close()
