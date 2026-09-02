@@ -18,9 +18,14 @@ async def send(text: str) -> None:
             log.warning("ALERT (no tg): %s", text)
             return
         async with _client() as c:
-            await c.post(
+            resp = await c.post(
                 f"https://api.telegram.org/bot{settings.tg_bot_token}/sendMessage",
                 json={"chat_id": settings.tg_chat_id, "text": text},
             )
+            if resp.status_code >= 400:
+                # Do NOT use raise_for_status()/log.exception here:
+                # httpx error messages embed the full URL (with bot token).
+                log.error("tg sendMessage failed: HTTP %s (token redacted)", resp.status_code)
+                return
     except Exception:
         log.exception("notify failed: %s", text)
