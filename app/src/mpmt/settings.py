@@ -9,7 +9,6 @@ class Settings(BaseSettings):
     tg_bot_token: str = ""
     tg_chat_id: str = ""
     poll_excise_cron: list[str] = ["06:30", "18:30"]   # МСК, ровно 2 запроса/24ч
-    poll_orders_interval_sec: int = 3600
     excise_days_back: int = 7
 
 settings = Settings()

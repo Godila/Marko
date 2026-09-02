@@ -60,7 +60,9 @@ class WBClient:
             return
         kv = self.db.get(PlatformKV, "wb_excise_usage")
         now = time.time()
-        stamps = [t for t in (kv.value["stamps"] if kv else []) if now - t < 86400]
+        # окно чуть короче 24ч: cron-слоты ровно в 12ч, джиттер исполнения
+        # не должен оставлять вчерашний штамп в окне и ложно блокировать поллинг
+        stamps = [t for t in (kv.value["stamps"] if kv else []) if now - t < 86400 - 120]
         if len(stamps) >= 2:
             raise WbLimitError("excise 2/24h limit reached")
         self.db.execute(pg_insert(PlatformKV).values(
