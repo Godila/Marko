@@ -14,16 +14,18 @@ export default function App() {
   const [stats, setStats] = useState(null)
   const [inn, setInn] = useState('090201471350'); const [msg, setMsg] = useState('')
   const [pre, setPre] = useState('')
+  const [stateFilter, setStateFilter] = useState('')
 
   const load = async () => {
     if (!token) return
     try {
-      setItems(await api('/v1/journal?limit=200', token))
+      const q = stateFilter ? `&state=${encodeURIComponent(stateFilter)}` : ''
+      setItems(await api(`/v1/journal?limit=200${q}`, token))
       setDocs(await api('/v1/docs', token))
       setStats(await api('/v1/journal/stats', token)); setMsg('')
     } catch (e) { setMsg('ошибка: ' + e.message) }
   }
-  useEffect(() => { localStorage.setItem('tok', token); load() }, [token])
+  useEffect(() => { localStorage.setItem('tok', token); load() }, [token, stateFilter])
 
   const mkBatch = async (kind) => {
     try {
@@ -46,6 +48,10 @@ export default function App() {
       {['journal', 'batches'].map(t => (
         <button key={t} onClick={() => setTab(t)} style={{ marginLeft: 8, fontWeight: tab === t ? 'bold' : 'normal' }}>
           {t === 'journal' ? 'Журнал' : 'Батчи'}</button>))}
+      <select value={stateFilter} onChange={e => setStateFilter(e.target.value)} style={{ marginLeft: 12 }}>
+        <option value="">все состояния</option>
+        {Object.keys(stats || {}).map(s => <option key={s} value={s}>{s} ({stats[s]})</option>)}
+      </select>
       <span style={{ color: 'red', marginLeft: 12 }}>{msg}</span>
       {tab === 'journal' && (
         <table border="1" cellPadding="4" style={{ borderCollapse: 'collapse', marginTop: 12, width: '100%' }}>
