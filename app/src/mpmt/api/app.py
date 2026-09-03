@@ -28,8 +28,10 @@ def create_app() -> FastAPI:
         return {"status": "ok", "last_poll": last_poll}
 
     from mpmt.api.routes_me import router as me_router
-    app.include_router(me_router)
+    from mpmt.api.routes_sign import router as sign_router
     from mpmt.api.routes_journal import router as journal_router
+    app.include_router(me_router)
+    app.include_router(sign_router)
     app.include_router(journal_router)
 
     return app

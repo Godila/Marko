@@ -2,7 +2,8 @@ import pytest
 from sqlalchemy import text
 
 import mpmt.journal.models  # noqa: F401  (регистрация journal-моделей в Base.metadata)
-import mpmt.mt.models  # noqa
+import mpmt.mt.models
+import mpmt.sign.models  # noqa  # noqa
 
 
 @pytest.fixture
