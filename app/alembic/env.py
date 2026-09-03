@@ -10,6 +10,7 @@ from mpmt.settings import settings
 import mpmt.platform.models  # noqa: F401  (регистрация ORM-моделей для autogenerate)
 import mpmt.journal.models  # noqa: F401
 import mpmt.mt.models  # noqa: F401
+import mpmt.nkmt.models  # noqa: F401
 import mpmt.sign.models  # noqa: F401
 
 # this is the Alembic Config object, which provides
