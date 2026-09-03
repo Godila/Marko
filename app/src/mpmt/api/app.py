@@ -8,7 +8,8 @@ def create_app() -> FastAPI:
 
     @app.get("/healthz")
     def healthz():
-        # публичный, без require_scope: живой пинг БД + маркер последнего поллинга WB
+        # публичный, без require_scope: живой пинг БД + маркеры wb_last_poll (поллинг WB)
+        # и signer_last_seen (lease-запросы signer-агента)
         from sqlalchemy import text
         from mpmt.db import engine, SessionLocal
         from mpmt.platform.models import PlatformKV
@@ -17,15 +18,18 @@ def create_app() -> FastAPI:
                 c.execute(text("SELECT 1"))
         except Exception:
             return JSONResponse({"status": "degraded", "db": "down"}, status_code=503)
-        last_poll = None
+        wb_last_poll, signer_last_seen = None, None
         try:
             with SessionLocal() as s:
                 kv = s.get(PlatformKV, "wb_last_poll")
                 if kv is not None:
-                    last_poll = kv.value
+                    wb_last_poll = kv.value
+                kv = s.get(PlatformKV, "signer_last_seen")
+                if kv is not None:
+                    signer_last_seen = kv.value
         except Exception:
-            last_poll = None
-        return {"status": "ok", "last_poll": last_poll}
+            pass
+        return {"status": "ok", "wb_last_poll": wb_last_poll, "signer_last_seen": signer_last_seen}
 
     from mpmt.api.routes_me import router as me_router
     from mpmt.api.routes_sign import router as sign_router

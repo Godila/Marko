@@ -7,7 +7,7 @@ def test_healthz():
     assert r.status_code == 200
     body = r.json()
     assert body["status"] == "ok"
-    assert "last_poll" in body
+    assert "wb_last_poll" in body and "signer_last_seen" in body
 
 def test_healthz_db_down(monkeypatch):
     import mpmt.db as dbmod
