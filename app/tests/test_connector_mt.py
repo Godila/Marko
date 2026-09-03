@@ -71,6 +71,15 @@ def test_sign_via_gateway_roundtrip(db):
     assert st["result"]["signature_b64"] == "REAL-SIG"
 
 
+def test_get_token_uuid_form(db, sg):
+    """ЧЗ в UUID-форме отдаёт токен в поле uuidToken (прод-поведение)."""
+    class UuidClient(FakeMtClient):
+        def sign_in(self, uuid, signature_b64, inn):
+            return {"uuidToken": "UUID-TOK",
+                    "expireDate": (datetime.utcnow() + timedelta(hours=10)).isoformat() + "Z"}
+    assert manager.get_token(db, UuidClient()) == "UUID-TOK"
+
+
 def _draft_doc(db):
     km = "0104630520676025215MTTEST1"
     apply_event(db, source="wb_excise", source_event_id="m:1", kind="sale",

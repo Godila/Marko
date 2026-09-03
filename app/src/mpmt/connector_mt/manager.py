@@ -56,7 +56,7 @@ def get_token(db: Session, client: MtClient | None = None) -> str:
     pair = c.auth_key()
     signature = _sign_via_gateway(db, "auth_sign", {"data": pair["data"]})
     resp = c.sign_in(pair["uuid"], signature, settings.mt_inn)
-    token = resp.get("token")
+    token = resp.get("token") or resp.get("uuidToken")   # UUID-форма: uuidToken
     if not token:
         raise RuntimeError(f"simpleSignIn no token: {json.dumps(resp)[:300]}")
     exp = TOKEN_TTL_FALLBACK
