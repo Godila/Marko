@@ -1,7 +1,7 @@
 import React, { useEffect, useState } from 'react'
 
 const api = async (path, token, opts = {}) => {
-  const r = await fetch(path, { ...opts, headers: { 'Authorization': `Bearer ${token}`,
+  const r = await fetch(path, { ...opts, headers: { 'Authorization': `Bearer ${token.trim()}`,
     'Content-Type': 'application/json', ...(opts.headers || {}) } })
   if (!r.ok) throw new Error(`${r.status}`)
   return r.headers.get('content-type')?.includes('json') ? r.json() : r.text()
