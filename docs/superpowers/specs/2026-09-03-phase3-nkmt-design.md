@@ -79,8 +79,9 @@ xlsx → POST /v1/nkmt/import
   → воркер (раз в ~10 мин) + POST refresh: feed-status → карточки moderation/notsigned/errors
   → авто-подписание notsigned: feed-product-document (батчи ≤10) → doc_sign (наш signer) →
       feed-product-sign-pkcs → published → TG-уведомление на финальных статусах
-  → GET /v1/nkmt/batches/{id}/report → GTIN-фактура xlsx/csv
-     (товар → атрибуты → gtin → статус → good_id)
+  → GET /v1/nkmt/batches/{id}/report → выгрузной артефакт для 1С: XLSX с двумя
+     колонками «GTIN | Наименование» (published-карточки батча; подробности —
+     статус/атрибуты/good_id — в UI и API карточек, в файл не пишем)
 ```
 
 Ошибки модерации: правка xlsx → повторный импорт: существующий `article` обновляет
@@ -123,7 +124,7 @@ xlsx → POST /v1/nkmt/import
 | POST /v1/nkmt/batches/{id}/feed | generate-gtins + feed |
 | POST /v1/nkmt/batches/{id}/sign | подписание вручную (дубль воркера) |
 | POST /v1/nkmt/batches/{id}/refresh | пересинка статусов |
-| GET /v1/nkmt/batches/{id}/report?format=xlsx|csv | GTIN-фактура |
+| GET /v1/nkmt/batches/{id}/report | артефакт для 1С: XLSX «GTIN \| Наименование» (published); `?format=csv` опция; машиночитаемый формат — в будущем |
 | GET/POST/DELETE /v1/nkmt/declarations[/{id}] | реестр РД |
 | GET /v1/nkmt/dicts/attributes?tnved= | атрибутная модель (агент/UI) |
 | GET /v1/nkmt/defaults, PUT | дефолты платформы |
@@ -154,4 +155,5 @@ xlsx → POST /v1/nkmt/import
    второй feed по good_id до модерации).
 2. Формат цвета: свободный текст или строго preset (36 preset_only=false — НК может
    принять произвольный; валидируем по preset с предупреждением, не блокируя).
-3. Точное имя файла отчёта/фактуры и колонки — зафиксировать при реализации report.
+3. ~~Формат отчёта~~ — решён владельцем: XLSX «GTIN | Наименование» для 1С
+   (машиночитаемый экспорт — будущая фаза).
