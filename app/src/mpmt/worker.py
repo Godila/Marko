@@ -68,11 +68,35 @@ def _signer_watchdog():
         time.sleep(1800)
 
 
+
+
+def _docs_checker():
+    """Раз в 10 мин: документы в submitted → опросить статус в ЧЗ до CHECKED_OK."""
+    from mpmt.db import SessionLocal
+    from mpmt.mt.models import MtDoc
+    from mpmt.connector_mt import manager
+    while True:
+        try:
+            db = SessionLocal()
+            for doc in db.query(MtDoc).filter_by(status="submitted").all():
+                try:
+                    info = manager.check_doc(db, doc.id)
+                    if doc.status in ("checked_ok", "error"):
+                        asyncio.run(send(f"ЧЗ документ {doc.id} ({doc.type}): {doc.status} — {str(info.get('status'))}"))
+                except Exception as e:
+                    log.warning("docs check failed for %s: %s", doc.id, e)
+            db.close()
+        except Exception:
+            log.exception("docs checker failed")
+        time.sleep(600)
+
+
 def main():
     setup_logging()
     log.info("worker started, excise cron %s MSK", settings.poll_excise_cron)
     import threading
     threading.Thread(target=_signer_watchdog, daemon=True).start()
+    threading.Thread(target=_docs_checker, daemon=True).start()
     while True:
         wait = seconds_until(settings.poll_excise_cron, datetime.now(MSK))
         log.info("next excise poll in %.0f s", wait)

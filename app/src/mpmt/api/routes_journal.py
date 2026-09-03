@@ -101,3 +101,36 @@ def docs_csv(
     if not db.get(MtDoc, doc_id):
         raise HTTPException(404, "doc not found")
     return PlainTextResponse(to_csv(db, doc_id), media_type="text/csv")
+
+
+@router.post("/docs/{doc_id}/submit")
+def submit_mt_doc(doc_id: int,
+                  tok=Depends(require_scope("docs:submit")),
+                  db: Session = Depends(get_db)):
+    from mpmt.connector_mt import manager
+    from mpmt.api.deps import audit
+    try:
+        external_id = manager.submit_doc(db, doc_id)
+    except LookupError:
+        raise HTTPException(404, "doc not found")
+    except Exception as e:
+        raise HTTPException(502, f"submit failed: {e}")
+    audit(db, tok.principal_id, "doc.submit", {"doc_id": doc_id, "external_id": external_id})
+    return {"external_id": external_id, "status": "submitted"}
+
+
+@router.post("/docs/{doc_id}/check")
+def check_mt_doc(doc_id: int,
+                 tok=Depends(require_scope("docs:submit")),
+                 db: Session = Depends(get_db)):
+    from mpmt.connector_mt import manager
+    from mpmt.api.deps import audit
+    try:
+        info = manager.check_doc(db, doc_id)
+    except LookupError:
+        raise HTTPException(404, "doc not found or not submitted")
+    except Exception as e:
+        raise HTTPException(502, f"check failed: {e}")
+    doc = db.get(MtDoc, doc_id)
+    audit(db, tok.principal_id, "doc.check", {"doc_id": doc_id, "mt_status": info.get("status")})
+    return {"status": doc.status, "mt_status": info.get("status")}
