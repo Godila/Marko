@@ -1,0 +1,19 @@
+auth OK, token_len 36
+
+=== categories_gismt_lp params={'gismt_code': 'lp'} HTTP 404 len=0 ===
+
+
+=== categories_tnved_6109 params={'tnved': '6109'} HTTP 404 len=0 ===
+
+
+=== attrs_6109_m params={'tnved': '6109', 'attr_type': 'm'} HTTP 404 len=0 ===
+
+
+=== attrs_6109_r params={'tnved': '6109', 'attr_type': 'r'} HTTP 404 len=0 ===
+
+
+=== attrs_6109_all params={'tnved': '6109'} HTTP 404 len=0 ===
+
+
+=== gtins_exist params={'exist': 1} HTTP 200 len=222 ===
+{"apiversion":3,"result":{"error":"Из-за настроек по Вашей организации, генерация GTIN доступна только в системе ГС1. Пожалуйста, обратитесь в техническую поддержку.","monthly-limit":{"limit":11000,"usage":0},"drafts":[]}}
