@@ -41,6 +41,11 @@ export default function App() {
       .then(d => setPre(fmt === 'csv' ? d : JSON.stringify(d, null, 2)))
       .catch(e => setMsg('ошибка: ' + e.message))
 
+  const mtAction = (id, action) =>
+    api(`/v1/docs/${id}/${action}`, token, { method: 'POST' })
+      .then(r => { setPre(JSON.stringify(r, null, 2)); load() })
+      .catch(e => setMsg('ошибка: ' + e.message))
+
   return (
     <div style={{ fontFamily: 'sans-serif', margin: '0 auto', maxWidth: 1100 }}>
       <h2>MP-GIS_MT</h2>
@@ -69,11 +74,14 @@ export default function App() {
           <button onClick={() => mkBatch('withdraw')} style={{ marginLeft: 8 }}>Собрать вывод</button>
           <button onClick={() => mkBatch('return')} style={{ marginLeft: 8 }}>Собрать возврат</button>
           <table border="1" cellPadding="4" style={{ borderCollapse: 'collapse', marginTop: 12, width: '100%' }}>
-            <thead><tr><th>id</th><th>тип</th><th>статус</th><th>создан</th><th>Док</th></tr></thead>
+            <thead><tr><th>id</th><th>тип</th><th>статус</th><th>ЧЗ uuid</th><th>создан</th><th>Док</th><th>ЧЗ</th></tr></thead>
             <tbody>{docs.map(d => (
-              <tr key={d.id}><td>{d.id}</td><td>{d.type}</td><td>{d.status}</td><td>{d.created_at}</td>
+              <tr key={d.id}><td>{d.id}</td><td>{d.type}</td><td>{d.status}</td>
+                <td style={{ fontFamily: 'monospace' }}>{d.external_id || '—'}</td><td>{d.created_at}</td>
                 <td>[<a href="#" onClick={e => { e.preventDefault(); showDoc(d.id, 'json') }}>json</a>
-                  {' '}|{' '}<a href="#" onClick={e => { e.preventDefault(); showDoc(d.id, 'csv') }}>csv</a>]</td></tr>))}</tbody>
+                  {' '}|{' '}<a href="#" onClick={e => { e.preventDefault(); showDoc(d.id, 'csv') }}>csv</a>]</td>
+                <td>{d.status === 'draft' && <button onClick={() => mtAction(d.id, 'submit')}>Подать</button>}
+                    {(d.status === 'submitted' || d.status === 'error') && <button onClick={() => mtAction(d.id, 'check')}>Проверить</button>}</td></tr>))}</tbody>
           </table></div>)}
       <pre style={{ background: '#f4f4f4', padding: 8, marginTop: 12, maxHeight: 300, overflow: 'auto' }}>{pre || msg}</pre>
     </div>

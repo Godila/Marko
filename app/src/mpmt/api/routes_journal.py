@@ -74,7 +74,7 @@ def docs_list(
     db: Session = Depends(get_db),
 ):
     return [
-        {"id": d.id, "type": d.type, "status": d.status, "created_at": d.created_at}
+        {"id": d.id, "type": d.type, "status": d.status, "external_id": d.external_id, "created_at": d.created_at}
         for d in db.query(MtDoc).order_by(MtDoc.id.desc()).limit(limit).all()
     ]
 
