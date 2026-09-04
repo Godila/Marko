@@ -1,3 +1,6 @@
+import json
+from pathlib import Path
+
 import pytest
 from sqlalchemy import text
 
@@ -22,3 +25,15 @@ def db():
     yield s
     s.rollback()
     s.close()
+
+
+@pytest.fixture
+def model(monkeypatch):
+    """Справочники НК без сети: атрибутная модель — фикстура 6109100000,
+    бренд/категория — константы (как в test_nk_validate)."""
+    from mpmt.nkmt import validate
+    fix = json.loads((Path(__file__).parent / "fixtures" / "nk_attrs_6109100000.json")
+                     .read_text(encoding="utf-8"))
+    monkeypatch.setattr(validate.dicts, "attrs_model", lambda *a, **k: fix)
+    monkeypatch.setattr(validate.dicts, "resolve_brand", lambda *a, **k: 2102811)
+    monkeypatch.setattr(validate.dicts, "resolve_category", lambda *a, **k: "214943")

@@ -1,22 +1,12 @@
-import json
-from pathlib import Path
-import pytest
 from mpmt.nkmt import validate
 
-FIX = json.loads(Path("tests/fixtures/nk_attrs_6109100000.json").read_text(encoding="utf-8"))
+# model-фикстура (патчи dicts на фикстуру модели 6109100000) — общая, в conftest.py
 BASE = {"article": "T-1", "tnved": "6109100000", "name": "Футболка тест", "product_type": "ФУТБОЛКА",
         "color": "БЕЛЫЙ", "composition": "100% хлопок", "size": "M", "model": "Tee",
         "brand": "YCPB", "target_gender": "ЖЕНСКИЙ", "size_system": "РОССИЯ",
         "techreg": 'ТР ТС 017/2011 "О безопасности продукции легкой промышленности"',
         "country": "РОССИЯ", "producer": "ИП", "declaration_number": "Д-1", "declaration_date": "2026-01-01",
         "gtin": "", "category_hint": ""}
-
-
-@pytest.fixture
-def model(monkeypatch):
-    monkeypatch.setattr(validate.dicts, "attrs_model", lambda *a, **k: FIX)
-    monkeypatch.setattr(validate.dicts, "resolve_brand", lambda *a, **k: 2102811)
-    monkeypatch.setattr(validate.dicts, "resolve_category", lambda *a, **k: "214943")
 
 
 def _row(**kw): return {**BASE, **kw}

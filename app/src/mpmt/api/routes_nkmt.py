@@ -1,4 +1,4 @@
-"""REST НК: декларации (справочник), дефолты карточек, атрибутные модели по ТН ВЭД.
+"""REST НК: декларации (справочник), дефолты карточек, атрибутные модели по ТН ВЭД, импорт выгрузки.
 
 Чтение — scope read, запись — nkmt:import, все мутации через audit().
 dicts/attributes: сначала дешёвая валидация 10 цифр (400), и только потом
@@ -6,13 +6,13 @@ dicts/attributes: сначала дешёвая валидация 10 цифр (
 """
 import re
 
-from fastapi import APIRouter, Depends, HTTPException, Query
+from fastapi import APIRouter, Depends, File, HTTPException, Query, UploadFile
 from pydantic import BaseModel
 from sqlalchemy.orm import Session
 
 from mpmt.api.deps import audit, get_db, require_scope
 from mpmt.nkmt.dicts import attrs_model, get_defaults, set_defaults
-from mpmt.nkmt.models import Declaration
+from mpmt.nkmt.models import Batch, Card, Declaration
 from mpmt.platform.models import PlatformToken
 
 router = APIRouter(prefix="/v1/nkmt")
@@ -110,3 +110,59 @@ def dicts_attributes(
         return attrs_model(db, client, token, tnved)
     except NkHttpError as e:
         raise HTTPException(502, f"nk upstream error: {e}")
+
+
+@router.post("/import")
+def nkmt_import(
+    file: UploadFile = File(...),
+    tok: PlatformToken = Depends(require_scope("nkmt:import")),
+    db: Session = Depends(get_db),
+):
+    from mpmt.connector_mt import manager
+    from mpmt.nkmt.client import NkClient, NkHttpError
+    from mpmt.nkmt.service import import_batch
+    from mpmt.settings import settings
+    try:
+        token = manager.get_token(db)
+        client = NkClient(settings.mt_base_v3)
+        batch_id = import_batch(db, file.filename, file.file.read(), client, token)
+    except NkHttpError as e:
+        raise HTTPException(502, f"nk upstream error: {e}")
+    b = db.get(Batch, batch_id)
+    audit(db, tok.principal_id, "nkmt.import",
+          {"batch_id": batch_id, "filename": file.filename, "stats": b.stats})
+    return {"batch_id": batch_id, "stats": b.stats}
+
+
+@router.get("/batches")
+def batches_list(
+    status: str = "",
+    tok: PlatformToken = Depends(require_scope("read")),
+    db: Session = Depends(get_db),
+):
+    q = db.query(Batch)
+    if status:
+        q = q.filter(Batch.status == status)
+    return [{"id": b.id, "status": b.status, "source_filename": b.source_filename,
+             "stats": b.stats, "created_at": b.created_at}
+            for b in q.order_by(Batch.id.desc()).all()]
+
+
+@router.get("/batches/{batch_id}")
+def batch_detail(
+    batch_id: int,
+    card_status: str = "",
+    tok: PlatformToken = Depends(require_scope("read")),
+    db: Session = Depends(get_db),
+):
+    b = db.get(Batch, batch_id)
+    if not b:
+        raise HTTPException(404, "batch not found")
+    q = db.query(Card).filter(Card.batch_id == batch_id)
+    if card_status:
+        q = q.filter(Card.status == card_status)
+    cards = [{"id": c.id, "article": c.article, "gtin": c.gtin, "name": c.name,
+              "status": c.status, "error_text": c.error_text}
+             for c in q.order_by(Card.id).all()]
+    return {"id": b.id, "status": b.status, "source_filename": b.source_filename,
+            "stats": b.stats, "created_at": b.created_at, "cards": cards}
