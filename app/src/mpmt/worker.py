@@ -152,6 +152,29 @@ def _nkmt_loop():
         time.sleep(600)
 
 
+def _wb_returns_loop():
+    """Раз в час: монитор возвратов WB (goods-return, квота 2/1ч — гейт в клиенте)
+    + TG-алерты (новый возврат; дедлайн забора ≤48 ч)."""
+    from mpmt.connector_wb.returns import run_returns_once
+    from mpmt.db import SessionLocal
+    while True:
+        db = None
+        try:
+            db = SessionLocal()
+            client = WBClient(token=load_wb_token(settings.wb_token_file), db=db)
+            res = run_returns_once(db, client)
+            for text in res.get("alerts", []):
+                asyncio.run(send(text))
+        except (WbHttpError, WbLimitError) as e:
+            log.error("wb returns poll failed: %s", e)
+        except Exception:
+            log.exception("wb returns loop failed")
+        finally:
+            if db:
+                db.close()
+        time.sleep(3600)
+
+
 def main():
     setup_logging()
     log.info("worker started, excise cron %s MSK", settings.poll_excise_cron)
@@ -159,6 +182,7 @@ def main():
     threading.Thread(target=_signer_watchdog, daemon=True).start()
     threading.Thread(target=_docs_checker, daemon=True).start()
     threading.Thread(target=_nkmt_loop, daemon=True).start()
+    threading.Thread(target=_wb_returns_loop, daemon=True).start()
     while True:
         wait = seconds_until(settings.poll_excise_cron, datetime.now(MSK))
         log.info("next excise poll in %.0f s", wait)

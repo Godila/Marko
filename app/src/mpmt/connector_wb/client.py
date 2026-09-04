@@ -80,6 +80,30 @@ class WBClient:
                          json_body={"countries": ["RU"]})
         return r.json()["response"]["data"]
 
+    # ---- goods-return: лимит 2 запроса/1ч на базовом токене ----
+    def _gate_goods_return(self):
+        if self.db is None:
+            return
+        kv = self.db.get(PlatformKV, "wb_goodsreturn_usage")
+        now = time.time()
+        stamps = [t for t in (kv.value["stamps"] if kv else []) if now - t < 3600 - 120]
+        if len(stamps) >= 2:
+            raise WbLimitError("goods-return 2/1h limit reached")
+        self.db.execute(pg_insert(PlatformKV).values(
+            key="wb_goodsreturn_usage", value={"stamps": stamps + [now]},
+        ).on_conflict_do_update(
+            index_elements=[PlatformKV.key],
+            set_={"value": {"stamps": stamps + [now]}},
+        ))
+        self.db.commit()
+
+    def goods_return(self, date_from: str, date_to: str) -> list[dict]:
+        """Отчёт «Возвраты и перемещение товаров» (окно ≤31 день)."""
+        self._gate_goods_return()
+        r = self.request("GET", "/api/v1/analytics/goods-return",
+                         params={"dateFrom": date_from, "dateTo": date_to})
+        return r.json().get("report") or []
+
     def orders(self, limit: int = 1000) -> list[dict]:
         out: list[dict] = []
         cursor = 0

@@ -46,6 +46,8 @@ export default function App() {
   const fileRef = useRef(null)
   const [decls, setDecls] = useState([]); const [dnum, setDnum] = useState(''); const [ddate, setDdate] = useState('')
   const [defs, setDefs] = useState(null)
+  // Возвраты (WB goods-return + LP_RETURN)
+  const [wbRet, setWbRet] = useState([])
 
   const load = async () => {
     if (!token) return
@@ -67,6 +69,26 @@ export default function App() {
     loadNb(); loadDecls()
     nkmt('/v1/nkmt/defaults', token).then(setDefs).catch(e => setMsg('ошибка: ' + e.message))
   }, [token, tab])
+
+  const loadRet = async () => {
+    try { setWbRet(await api('/v1/wb/returns', token)); setMsg('') } catch (e) { setMsg('ошибка: ' + e.message) }
+  }
+  useEffect(() => { if (token && tab === 'returns') { loadRet(); load() } }, [token, tab])
+
+  const pollRet = async () => {
+    try {
+      const r = await api('/v1/wb/returns/poll', token, { method: 'POST' })
+      setMsg(''); setPre(`goods-return poll:\n${JSON.stringify(r, null, 2)}`)
+      loadRet(); load()
+    } catch (e) { setMsg('ошибка: ' + e.message) }
+  }
+
+  // дедлайн забора ≤48 ч и ещё не выдан → красный (WB хранит возврат 7 дней)
+  const retRowColor = (r) => {
+    if (r.completed_dt) return ''
+    const dl = r.expired_dt ? new Date(r.expired_dt).getTime() : 0
+    return dl && dl - Date.now() < 48 * 3600 * 1000 ? '#ffcccc' : ''
+  }
 
   const loadCards = async (id) => {
     try {
@@ -143,9 +165,9 @@ export default function App() {
     <div style={{ fontFamily: 'sans-serif', margin: '0 auto', maxWidth: 1100 }}>
       <h2>MP-GIS_MT</h2>
       <input value={token} onChange={e => setToken(e.target.value)} placeholder="API token" size={40} />
-      {['journal', 'batches', 'catalog'].map(t => (
+      {['journal', 'batches', 'catalog', 'returns'].map(t => (
         <button key={t} onClick={() => setTab(t)} style={{ marginLeft: 8, fontWeight: tab === t ? 'bold' : 'normal' }}>
-          {t === 'journal' ? 'Журнал' : t === 'batches' ? 'Батчи' : 'Каталог'}</button>))}
+          {t === 'journal' ? 'Журнал' : t === 'batches' ? 'Батчи' : t === 'catalog' ? 'Каталог' : 'Возвраты'}</button>))}
       <select value={stateFilter} onChange={e => setStateFilter(e.target.value)} style={{ marginLeft: 12 }}>
         <option value="">все состояния</option>
         {Object.keys(stats || {}).map(s => <option key={s} value={s}>{s} ({stats[s]})</option>)}
@@ -176,6 +198,37 @@ export default function App() {
                 <td>{d.status === 'draft' && <button onClick={() => mtAction(d.id, 'submit')}>Подать</button>}
                     {(d.status === 'submitted' || d.status === 'error') && <button onClick={() => mtAction(d.id, 'check')}>Проверить</button>}</td></tr>))}</tbody>
           </table></div>)}
+      {tab === 'returns' && (
+        <div style={{ marginTop: 12 }}>
+          <button onClick={pollRet}>Обновить WB</button>
+          <span style={{ marginLeft: 12 }}>к возврату в ЧЗ (PENDING_RETURN): <b>{(stats || {}).PENDING_RETURN || 0}</b></span>
+          <input value={inn} onChange={e => setInn(e.target.value)} size={14} style={{ marginLeft: 12 }} />
+          <button onClick={() => mkBatch('return')} style={{ marginLeft: 4 }}>Собрать возврат</button>
+          <table border="1" cellPadding="4" style={{ borderCollapse: 'collapse', marginTop: 12, width: '100%' }}>
+            <thead><tr>
+              <th>заказ</th><th>предмет</th><th>статус WB</th><th>причина</th>
+              <th>готов к выдаче</th><th>выдан продавцу</th><th>забрать до</th><th>ПВЗ</th>
+            </tr></thead>
+            <tbody>{wbRet.map(r => (
+              <tr key={r.srid} style={{ background: retRowColor(r) }}>
+                <td>{r.order_id}</td><td>{r.subject || r.srid}</td><td>{r.status}</td><td>{r.reason || '—'}</td>
+                <td>{r.ready_dt || '—'}</td><td>{r.completed_dt || '—'}</td>
+                <td>{r.expired_dt || '—'}</td><td>{r.office || '—'}</td>
+              </tr>))}</tbody>
+          </table>
+          {wbRet.length === 0 && <p>Возвратов нет (или нажмите «Обновить WB» — квота 2 запроса/час).</p>}
+          <h3>Документы возврата (LP_RETURN)</h3>
+          <table border="1" cellPadding="4" style={{ borderCollapse: 'collapse', width: '100%' }}>
+            <thead><tr><th>id</th><th>статус</th><th>ЧЗ uuid</th><th>создан</th><th></th><th>ЧЗ</th></tr></thead>
+            <tbody>{docs.filter(d => d.type === 'LP_RETURN').map(d => (
+              <tr key={d.id}><td>{d.id}</td><td>{d.status}</td>
+                <td style={{ fontFamily: 'monospace' }}>{d.external_id || '—'}</td><td>{d.created_at}</td>
+                <td>[<a href="#" onClick={e => { e.preventDefault(); showDoc(d.id, 'json') }}>json</a>]</td>
+                <td>{d.status === 'draft' && <button onClick={() => mtAction(d.id, 'submit')}>Подать</button>}
+                    {(d.status === 'submitted' || d.status === 'error') && <button onClick={() => mtAction(d.id, 'check')}>Проверить</button>}</td>
+              </tr>))}</tbody>
+          </table>
+        </div>)}
       {tab === 'catalog' && (
         <div style={{ marginTop: 12 }}>
           <h3>Импорт</h3>

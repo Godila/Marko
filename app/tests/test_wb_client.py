@@ -59,3 +59,18 @@ def test_orders_pagination():
     out = c.orders()
     assert [o["rid"] for o in out] == ["a", "b"]
     assert calls == ["0", "1001"]  # ровно 2 http-вызова; сам тест завершается — зацикливания нет
+
+
+def test_goods_return_limit_gate(db, monkeypatch):
+    import mpmt.connector_wb.client as wb_client
+
+    monkeypatch.setattr(wb_client.time, "time", lambda: 1_800_000_000.0)
+
+    def handler(r):
+        return httpx.Response(200, json={"report": [{"srid": "r1"}]})
+
+    c = WBClient(token="t", transport=httpx.MockTransport(handler), sleeper=lambda s: None, db=db)
+    assert c.goods_return("2026-09-01", "2026-09-02") == [{"srid": "r1"}]
+    c.goods_return("2026-09-01", "2026-09-02")
+    with pytest.raises(WbLimitError):
+        c.goods_return("2026-09-01", "2026-09-02")   # 3-й за окно 1ч

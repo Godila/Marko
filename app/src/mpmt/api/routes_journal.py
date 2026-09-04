@@ -2,13 +2,18 @@ from fastapi import APIRouter, Depends, HTTPException, Query
 from fastapi.responses import PlainTextResponse
 from pydantic import BaseModel, Field
 from sqlalchemy import func
+from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.orm import Session
 
 from mpmt.api.deps import audit, get_db, require_scope
+from mpmt.connector_wb.client import WBClient, WbHttpError, WbLimitError, load_wb_token
+from mpmt.connector_wb.models import WbReturn
+from mpmt.connector_wb.returns import run_returns_once
 from mpmt.emitter.batch import return_batch, to_csv, withdraw_batch
 from mpmt.journal.models import Item
 from mpmt.mt.models import MtDoc
-from mpmt.platform.models import PlatformToken
+from mpmt.platform.models import PlatformKV, PlatformToken
+from mpmt.settings import settings
 
 router = APIRouter(prefix="/v1")
 
@@ -16,6 +21,35 @@ router = APIRouter(prefix="/v1")
 class BatchBody(BaseModel):
     inn: str
     limit: int = Field(100, ge=1, le=1000)
+
+
+class EmitterDefaultsBody(BaseModel):
+    fias_id: str = ""
+    primary_custom_name: str = ""
+
+
+@router.get("/emitter/defaults")
+def emitter_defaults_get(
+    tok: PlatformToken = Depends(require_scope("read")),
+    db: Session = Depends(get_db),
+):
+    kv = db.get(PlatformKV, "emitter_defaults")
+    return kv.value if kv else {"fias_id": "", "primary_custom_name": ""}
+
+
+@router.put("/emitter/defaults")
+def emitter_defaults_put(
+    body: EmitterDefaultsBody,
+    tok: PlatformToken = Depends(require_scope("docs:submit")),
+    db: Session = Depends(get_db),
+):
+    value = body.model_dump()
+    db.execute(pg_insert(PlatformKV).values(key="emitter_defaults", value=value)
+               .on_conflict_do_update(index_elements=[PlatformKV.key],
+                                      set_={"value": value}))
+    db.commit()
+    audit(db, tok.principal_id, "emitter.defaults", value)
+    return value
 
 
 @router.get("/journal")
@@ -65,6 +99,46 @@ def batches_return(
     audit(db, tok.principal_id, "batch.return",
           {"inn": body.inn, "result": {"docs": docs, "blocked": blocked}})
     return {"docs": docs, "blocked": blocked}
+
+
+@router.get("/wb/returns")
+def wb_returns_list(
+    active: bool | None = None,
+    tok: PlatformToken = Depends(require_scope("read")),
+    db: Session = Depends(get_db),
+):
+    out = []
+    for r in db.query(WbReturn).order_by(WbReturn.updated_at.desc()).limit(500).all():
+        p = r.payload or {}
+        if active is not None and bool(p.get("isStatusActive")) != active:
+            continue
+        out.append({"srid": r.srid, "order_id": r.order_id, "status": r.status,
+                    "expired_dt": r.expired_dt, "reason": p.get("reason"),
+                    "return_type": p.get("returnType"), "subject": p.get("subjectName"),
+                    "office": p.get("dstOfficeAddress"), "order_dt": p.get("orderDt"),
+                    "ready_dt": p.get("readyToReturnDt"), "completed_dt": p.get("completedDt"),
+                    "is_active": bool(p.get("isStatusActive"))})
+    return out
+
+
+@router.post("/wb/returns/poll")
+def wb_returns_poll(
+    tok: PlatformToken = Depends(require_scope("docs:submit")),
+    db: Session = Depends(get_db),
+):
+    """Ручной поллинг goods-return (квота 2/1ч — гейт внутри клиента)."""
+    import asyncio
+    from mpmt.notifier import send
+    try:
+        client = WBClient(token=load_wb_token(settings.wb_token_file), db=db)
+        res = run_returns_once(db, client)
+    except (WbHttpError, WbLimitError) as e:
+        raise HTTPException(502, f"wb poll failed: {e}")
+    for text in res.get("alerts", []):
+        asyncio.run(send(text))
+    audit(db, tok.principal_id, "wb.returns.poll",
+          {k: v for k, v in res.items() if k != "alerts"})
+    return res
 
 
 @router.get("/docs")
