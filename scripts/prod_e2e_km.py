@@ -46,10 +46,17 @@ def new_doc(db, doc_type: str, payload: dict) -> int:
 
 
 def wait_ok(db, doc_id: int, label: str) -> dict:
+    from mpmt.connector_mt.client import MtHttpError
     deadline = time.monotonic() + POLL_SEC
     last = None
     while time.monotonic() < deadline:
-        info = manager.check_doc(db, doc_id)
+        try:
+            info = manager.check_doc(db, doc_id)
+        except MtHttpError as e:
+            if e.status == 404:   # документ ещё индексируется после create
+                time.sleep(POLL_INTERVAL)
+                continue
+            raise
         st = info.get("status") if isinstance(info, dict) else None
         if st != last:
             last = st
