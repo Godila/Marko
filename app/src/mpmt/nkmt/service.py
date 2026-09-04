@@ -3,9 +3,10 @@
 Семантика пакета: повторный артикул ВНУТРИ файла — ошибка строки (первое
 вхождение выигрывает, дубль идёт только в stats — article в cards UNIQUE);
 артикул из прошлых батчей обновляется на месте: контент заново из выгрузки,
-gtin/good_id сохраняются, карточка переезжает в новый батч; gtin, занятый
+good_id/непустой gtin сохраняются (пустой gtin карточки дозаполняется
+валидным gtin строки), карточка переезжает в новый батч; gtin, занятый
 другой карточкой (другой артикул, включая уже записанные в этом батче), —
-ошибка строки «gtin занят».
+ошибка строки «gtin занят», отклонённый gtin в карточку не записывается.
 """
 from mpmt.nkmt.dicts import get_defaults
 from mpmt.nkmt.models import Batch, Card
@@ -29,16 +30,20 @@ def import_batch(db, filename: str, data: bytes, client, token) -> int:
             continue
         seen.add(article)
         status, error = ("ok", "") if v["ok"] else ("error", v["error"])
-        if v["gtin"]:
-            clash = db.query(Card).filter(Card.gtin == v["gtin"],
+        gtin = v["gtin"]
+        if gtin:
+            clash = db.query(Card).filter(Card.gtin == gtin,
                                           Card.article != article).first()
             if clash:
                 status = "error"
                 error = f"{error}; gtin занят" if error else "gtin занят"
+                gtin = ""  # отклонённый gtin не сохраняем
         card = db.query(Card).filter_by(article=article).first()
         if card is None:
-            card = Card(article=article, gtin=v["gtin"], batch_id=batch.id)
+            card = Card(article=article, gtin=gtin, batch_id=batch.id)
             db.add(card)
+        elif gtin and not card.gtin:
+            card.gtin = gtin  # дозаполняем только пустой gtin; непустой сохраняем
         card.batch_id = batch.id
         card.tnved, card.name, card.cat_id = v["tnved"], v["name"], v["cat_id"]
         card.attributes = v["attributes"]
