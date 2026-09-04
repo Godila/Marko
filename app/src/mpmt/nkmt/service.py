@@ -8,6 +8,8 @@ good_id/непустой gtin сохраняются (пустой gtin карт
 другой карточкой (другой артикул, включая уже записанные в этом батче), —
 ошибка строки «gtin занят», отклонённый gtin в карточку не записывается.
 """
+import json
+
 from mpmt.nkmt.dicts import get_defaults
 from mpmt.nkmt.models import Batch, Card
 from mpmt.nkmt.parse import apply_defaults, parse_xlsx
@@ -127,3 +129,60 @@ def feed_batch(db, batch_id: int, client, token) -> dict:
     batch.status = "moderation"
     db.commit()
     return {"feed_id": feed_ids[-1], "feed_ids": feed_ids}
+
+
+def _rejected_error(raw: dict) -> str:
+    """Позиционная ошибка отклонённого фида — компактная сериализация среза.
+
+    Дампы trueapi нестабильны (errors/goodErrors, словарь или список) — берём
+    что найдётся, сериализуем json.dumps (без гарантий структуры).
+    """
+    for key in ("errors", "goodErrors"):
+        payload = raw.get(key)
+        if payload:
+            try:
+                return json.dumps(payload, ensure_ascii=False)[:500]
+            except (TypeError, ValueError):
+                return str(payload)[:500]
+    return "фид отклонён"
+
+
+def refresh_batch(db, batch_id: int, client, token) -> dict:
+    """Статус фида → статусы карточек/батча (опрос /nk/feed-status).
+
+    Применим к батчам moderation|signing с feed_id (иначе ValueError → 409).
+    Received/Processing — в полёте, ничего не меняем; Moderated — карточки
+    (кроме error*) готовы к подписи → notsigned; Signed → published;
+    Rejected → errors + текст ошибки фида. Возвращает статусы фида и батча.
+    """
+    batch = db.get(Batch, batch_id)
+    if batch is None:
+        raise ValueError(f"batch {batch_id} not found")
+    if batch.status not in ("moderation", "signing") or not batch.feed_id:
+        raise ValueError(f"batch status '{batch.status}' is not refreshable")
+
+    raw = client.feed_status(token, batch.feed_id) or {}
+    st = raw.get("status", "")
+    cards = db.query(Card).filter(
+        Card.batch_id == batch_id, Card.status.notin_(
+            ("error", "errors", "error_sign"))).all()
+    if st in ("Received", "Processing"):
+        return {"feed_status": st, "batch_status": batch.status}  # в полёте — ничего не меняем
+    if st == "Moderated":
+        for card in cards:
+            card.status = "notsigned"
+        batch.status = "signing"
+    elif st == "Signed":
+        for card in cards:
+            card.status = "published"
+        batch.status = "published"
+    elif st == "Rejected":
+        text = _rejected_error(raw)
+        for card in cards:
+            card.status = "errors"
+            card.error_text = text
+        batch.status = "error"
+    else:
+        raise RuntimeError(f"unexpected feed status '{st}'")
+    db.commit()
+    return {"feed_status": st, "batch_status": batch.status}

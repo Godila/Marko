@@ -159,6 +159,32 @@ def nkmt_feed(
     return out
 
 
+@router.post("/batches/{batch_id}/refresh")
+def nkmt_refresh(
+    batch_id: int,
+    tok: PlatformToken = Depends(require_scope("nkmt:import")),
+    db: Session = Depends(get_db),
+):
+    from mpmt.connector_mt import manager
+    from mpmt.nkmt.client import NkClient, NkHttpError
+    from mpmt.nkmt.service import refresh_batch
+    from mpmt.settings import settings
+    if not db.get(Batch, batch_id):
+        raise HTTPException(404, "batch not found")
+    try:
+        token = manager.get_token(db)
+        client = NkClient(settings.mt_base_v3)
+        out = refresh_batch(db, batch_id, client, token)
+    except (NkHttpError, RuntimeError) as e:
+        raise HTTPException(502, f"nk upstream error: {e}")
+    except ValueError as e:
+        raise HTTPException(409, str(e))
+    audit(db, tok.principal_id, "nkmt.refresh",
+          {"batch_id": batch_id, "feed_status": out["feed_status"],
+           "batch_status": out["batch_status"]})
+    return out
+
+
 @router.get("/batches")
 def batches_list(
     status: str = "",
