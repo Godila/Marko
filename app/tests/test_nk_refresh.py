@@ -116,6 +116,18 @@ def test_refresh_multichunk_mixed_inflight(db, chunked):
     assert all(c.status == "fed" for c in cards(db, chunked.id).values())  # ничего не меняем
 
 
+def test_refresh_keeps_published_cards(db, seeds):
+    """published-карточка пережила все переходы refresh'а: Moderated не
+    откатывает её в notsigned (докручиваются только неопубликованные)."""
+    cards(db, seeds.id)["FED"].status = "published"
+    db.commit()
+    out = refresh_batch(db, seeds.id, FakeNk("Moderated"), "T")
+    assert out == {"feed_status": "Moderated", "batch_status": "signing"}
+    cs = cards(db, seeds.id)
+    assert cs["FED"].status == "published"  # не тронута
+    assert cs["MOD"].status == "notsigned"
+
+
 def test_refresh_guards(db, seeds):
     db.get(Batch, seeds.id).status = "new"; db.commit()
     with pytest.raises(ValueError):  # статус не кормимый refresh'ем

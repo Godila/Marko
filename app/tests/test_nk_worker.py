@@ -69,6 +69,57 @@ def test_signing_batch_without_notsigned_skipped(db, monkeypatch):
     assert calls["sign"] == []
 
 
+def test_signing_batch_with_error_sign_signed(db, monkeypatch):
+    """signing-батч с error_sign-карточкой — повод для повторного подписания."""
+    mod, sgn, new = seed_batches(db)
+    db.query(Card).filter(Card.batch_id == sgn.id).one().status = "error_sign"
+    db.commit()
+    calls = patch_service(monkeypatch)
+    worker.nkmt_cycle(db)
+    assert calls["sign"] == [sgn.id]
+
+
+def _patch_send(monkeypatch):
+    sent = []
+
+    async def fake_send(text):
+        sent.append(text)
+
+    monkeypatch.setattr(worker, "send", fake_send)
+    return sent
+
+
+def _set_status(status):
+    def effect(db, bid, client, token):
+        db.get(Batch, bid).status = status
+        db.commit()
+    return effect
+
+
+def test_nkmt_cycle_notifies_on_terminal(db, monkeypatch):
+    """Терминальный переход батча (published/error) → TG: id + статус + счёт карточек."""
+    mod, sgn, new = seed_batches(db)
+    sent = _patch_send(monkeypatch)
+    patch_service(monkeypatch, refresh=_set_status("error"))
+    worker.nkmt_cycle(db)  # moderation → error: уведомление
+    patch_service(monkeypatch, sign=_set_status("published"))
+    worker.nkmt_cycle(db)  # sgn signing → published: уведомление (mod уже error)
+    assert len(sent) == 2
+    assert any(f"батч {mod.id}" in m and "error" in m and "fed=1" in m for m in sent)
+    assert any(f"батч {sgn.id}" in m and "published" in m for m in sent)
+
+
+def test_nkmt_cycle_no_notify_without_transition(db, monkeypatch):
+    """Без терминального перехода (moderation → signing / без изменений) — тишина."""
+    mod, sgn, new = seed_batches(db)
+    sent = _patch_send(monkeypatch)
+    patch_service(monkeypatch, refresh=_set_status("signing"))
+    worker.nkmt_cycle(db)  # Moderated: signing — не терминальный
+    patch_service(monkeypatch)  # refresh/sign без смены статуса
+    worker.nkmt_cycle(db)
+    assert sent == []
+
+
 def test_main_runs_nkmt_loop_thread():
     # поток-обвязка main() — бойлерплейт, проверяем ссылкой в исходнике
     assert "_nkmt_loop" in inspect.getsource(worker.main)

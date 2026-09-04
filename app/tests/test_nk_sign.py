@@ -144,6 +144,30 @@ def test_sign_document_subset_reorder(db, seeds, signer):
     assert [base64.b64decode(p["data_b64"]) for _, p in signer] == [b"<x2/>"]
 
 
+def test_sign_retries_error_sign_cards(db, seeds, signer):
+    """error_sign не тупик: «Подписать» берёт карточку в повторную попытку,
+    старый error_text сбрасывается, happy path → published."""
+    cs = cards(db, seeds.id)
+    cs["A"].status, cs["A"].error_text = "error_sign", "не получен xml карточки"
+    db.commit()
+    out = sign_batch(db, seeds.id, FakeNk(), "T")
+    assert out == {"signed": 2, "failed": 0}
+    cs = cards(db, seeds.id)
+    assert (cs["A"].status, cs["A"].error_text, cs["A"].good_id) == ("published", "", "501")
+    assert cs["B"].status == "published"
+    assert db.get(Batch, seeds.id).status == "published"
+
+
+def test_sign_guards_only_error_sign_still_signable(db, seeds, signer):
+    """Батч с ОДНИМИ error_sign-карточками валиден для повторного подписания."""
+    for c in db.query(Card).filter(Card.batch_id == seeds.id).all():
+        c.status, c.error_text = "error_sign", "старая ошибка"
+    db.commit()
+    assert sign_batch(db, seeds.id, FakeNk(), "T") == {"signed": 2, "failed": 0}
+    assert all(c.status == "published" and not c.error_text
+               for c in cards(db, seeds.id).values())
+
+
 def test_sign_batch_published_strict(db, seeds, signer):
     """Finding 3: батч → published только без error_sign; импортные
     error-карточки частичной выгрузки published не блокируют (как в refresh)."""

@@ -3,6 +3,8 @@ import logging
 import time
 from datetime import datetime, timedelta, timezone
 
+from sqlalchemy import func
+
 from mpmt.connector_mt import manager
 from mpmt.connector_wb.client import WBClient, WbHttpError, WbLimitError, load_wb_token
 from mpmt.connector_wb.poll import run_once
@@ -96,11 +98,14 @@ def _docs_checker():
 
 
 def nkmt_cycle(db) -> None:
-    """Один проход НКМТ: moderation-батчи → refresh, signing с notsigned → sign.
+    """Один проход НКМТ: moderation-батчи → refresh, signing с notsigned/
+    error_sign-карточками → sign; терминальный переход батча (published/
+    error) → TG-уведомление (id + статус + счёт карточек по статусам).
 
-    Signing без notsigned-карточек не дёгается (sign_batch и так бросил бы
-    ValueError — не шумим лишним вызовом). Исключение батча не роняет цикл
-    (паттерн _docs_checker): log.exception + rollback, следующий батч.
+    Signing без notsigned/error_sign-карточек не дёргается (sign_batch и так
+    бросил бы ValueError — не шумим лишним вызовом). Исключение батча не
+    роняет цикл (паттерн _docs_checker): log.exception + rollback, следующий
+    батч. send() не бросает и без TG-кредов — no-op (notifier).
     """
     try:
         client = NkClient(settings.mt_base_v3)
@@ -114,8 +119,21 @@ def nkmt_cycle(db) -> None:
             if batch.status == "moderation":
                 refresh_batch(db, batch.id, client, token)
             elif db.query(Card).filter(Card.batch_id == batch.id,
-                                       Card.status == "notsigned").count():
+                                       Card.status.in_(("notsigned",
+                                                        "error_sign"))).count():
                 sign_batch(db, batch.id, client, token)
+            else:
+                continue  # нечего подписывать — терминального перехода нет
+            db.refresh(batch)  # сервис мог закоммитить новый статус батча
+            if batch.status in ("published", "error"):
+                counts = dict(db.query(Card.status, func.count(Card.id))
+                              .filter(Card.batch_id == batch.id)
+                              .group_by(Card.status).all())
+                tally = ", ".join(f"{st}={n}" for st, n in sorted(counts.items()))
+                word = ("опубликован" if batch.status == "published"
+                        else "завершился ошибкой")
+                asyncio.run(send(f"НКМТ батч {batch.id}: {word} "
+                                 f"({batch.status}); карточки: {tally}"))
         except Exception:
             db.rollback()
             log.exception("nkmt cycle failed for batch %s", batch.id)

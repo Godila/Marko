@@ -21,7 +21,7 @@ from mpmt.platform.models import PlatformToken
 
 router = APIRouter(prefix="/v1/nkmt")
 
-TNVED_10 = re.compile(r"\d{10}")
+TNVED_10 = re.compile(r"[0-9]{10}")  # [0-9], не \d: \d ловит не-ASCII цифры
 
 
 class DeclarationBody(BaseModel):

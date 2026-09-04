@@ -15,6 +15,17 @@ ROW = ["GH8460", "6505009000", "Шапка Мокко", "ШАПКА", "олив�
        "one size", "Мокко", "", "", "", "", ""]
 
 
+def test_parse_excel_date_cells():
+    """Дата-ячейка xlsx (openpyxl отдаёт date/datetime) → ISO 'YYYY-MM-DD',
+    а не str(datetime) '2026-01-01 00:00:00', который валит DATE_RE."""
+    from datetime import date, datetime
+    from mpmt.nkmt.parse import parse_xlsx
+    row = list(ROW); row[12] = date(2026, 1, 1)
+    assert parse_xlsx(make_xlsx(HDR, [row]))[0]["declaration_date"] == "2026-01-01"
+    row = list(ROW); row[0], row[12] = "GH8461", datetime(2026, 2, 3, 13, 45)
+    assert parse_xlsx(make_xlsx(HDR, [row]))[0]["declaration_date"] == "2026-02-03"
+
+
 def test_parse_and_defaults():
     from mpmt.nkmt.parse import apply_defaults, parse_xlsx
     rows = parse_xlsx(make_xlsx(HDR, [ROW, [None] * len(HDR)]))

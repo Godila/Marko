@@ -1,11 +1,13 @@
 """Парсер выгрузки xlsx для деклараций НК: первый лист, строка 1 — заголовки.
 
 Нераспознанные колонки игнорируются, пустые строки пропускаются, все значения
-нормализуются в str().strip(). apply_defaults подставляет платформенные
-дефолты в пустые ключи (techreg — всегда) и возвращает новые dict'ы,
-не мутируя вход.
+нормализуются в str().strip() (дата-ячейки — date/datetime от openpyxl —
+в ISO-дату 'YYYY-MM-DD', иначе str(datetime) «2026-01-01 00:00:00» валит
+DATE_RE валидатора). apply_defaults подставляет платформенные дефолты в
+пустые ключи (techreg — всегда) и возвращает новые dict'ы, не мутируя вход.
 """
 import io
+from datetime import date, datetime
 
 import openpyxl
 
@@ -24,6 +26,10 @@ DEFAULTED_KEYS = ["brand", "target_gender", "size_system", "declaration_number",
 
 
 def _cell(value) -> str:
+    if isinstance(value, datetime):  # datetime — подкласс date, проверяем первым
+        return value.date().isoformat()
+    if isinstance(value, date):
+        return value.isoformat()
     return "" if value is None else str(value).strip()
 
 

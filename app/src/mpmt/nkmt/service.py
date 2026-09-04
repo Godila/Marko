@@ -159,12 +159,13 @@ def refresh_batch(db, batch_id: int, client, token) -> dict:
 
     Применим к батчам moderation|signing с feed_id (иначе ValueError → 409).
     Опрашиваются ВСЕ чанки фида (stats.feed_ids; feed_id — только последний
-    чанк). Агрегат: любой Rejected → карточки (кроме error*) → errors с
-    текстом ошибки первого отклонённого чанка, батч → error; все Signed →
-    published; все Moderated → notsigned + батч → signing; микс с
-    Received/Processing — в полёте, ничего не меняем (ярлык «Processing»).
-    Незнакомый статус любого чанка — RuntimeError. Возвращает агрегатный
-    статус фида и статус батча.
+    чанк). Агрегат: любой Rejected → карточки (кроме error*, published) →
+    errors с текстом ошибки первого отклонённого чанка, батч → error; все
+    Signed → published; все Moderated → notsigned + батч → signing; published
+    не трогаем ни в какой ветке — карточка вышла из-под всех переходов
+    refresh'а. Микс с Received/Processing — в полёте, ничего не меняем (ярлык
+    «Processing»). Незнакомый статус любого чанка — RuntimeError. Возвращает
+    агрегатный статус фида и статус батча.
     """
     batch = db.get(Batch, batch_id)
     if batch is None:
@@ -184,7 +185,7 @@ def refresh_batch(db, batch_id: int, client, token) -> dict:
     statuses = [st for st, _ in polls]
     cards = db.query(Card).filter(
         Card.batch_id == batch_id, Card.status.notin_(
-            ("error", "errors", "error_sign"))).all()
+            ("error", "errors", "error_sign", "published"))).all()
     if "Rejected" in statuses:  # любой отклонённый чанк топит весь батч
         st, raw = polls[statuses.index("Rejected")]
         text = _rejected_error(raw)
@@ -210,10 +211,13 @@ def refresh_batch(db, batch_id: int, client, token) -> dict:
 
 
 def sign_batch(db, batch_id: int, client, token) -> dict:
-    """Подписание notsigned-карточек боевым signer-агентом → published.
+    """Подписание notsigned/error_sign-карточек боевым signer-агентом → published.
 
-    Батч должен существовать и иметь notsigned-карточки (иначе ValueError →
-    409); сразу → signing (коммит). Чанки по ≤10: /nk/feed-product-document
+    error_sign — не тупик: карточка берётся в повторную попытку (xml
+    докачивается заново, ошибки применяются поштучно), старый error_text
+    сбрасывается при взятии в попытку. Батч должен существовать и иметь
+    re-signable-карточки (notsigned|error_sign, иначе ValueError → 409);
+    сразу → signing (коммит). Чанки по ≤10: /nk/feed-product-document
     отдаёт xmls [{goodId, gtin, xml}] — карточки спариваются с xml ПО GTIN:
     порядок и полнота ответа не гарантируются (дамп: xmls — возможное
     подмножество + собственный errors[] по товарам). Карточка без своего
@@ -233,10 +237,13 @@ def sign_batch(db, batch_id: int, client, token) -> dict:
     if batch is None:
         raise ValueError(f"batch {batch_id} not found")
     cards = db.query(Card).filter(Card.batch_id == batch_id,
-                                  Card.status == "notsigned").order_by(Card.id).all()
+                                  Card.status.in_(("notsigned",
+                                                   "error_sign"))).order_by(Card.id).all()
     if not cards:
-        raise ValueError(f"batch {batch_id} has no notsigned cards")
+        raise ValueError(f"batch {batch_id} has no re-signable cards")
     batch.status = "signing"
+    for card in cards:  # новая попытка: старый error_text не должен сбивать
+        card.error_text = ""
     db.commit()
 
     n_signed = n_failed = 0

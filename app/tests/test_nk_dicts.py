@@ -38,6 +38,19 @@ def test_category_ambiguous_and_hint(db):
     assert resolve_category(FakeNk(cats=cats), "T", "6109100000", "2") == "2"
 
 
+def test_category_prefetched_cats_skip_client():
+    """cats= (кэш вызывающего) — клиент не дёргается, выбор как обычно."""
+    calls = []
+
+    class NC:
+        def categories(self, token, tnved):
+            calls.append(tnved)
+            return []
+    cats = [{"cat_id": 1, "cat_name": "А"}, {"cat_id": 2, "cat_name": "Б"}]
+    assert resolve_category(NC(), "T", "6109100000", "2", cats=cats) == "2"
+    assert calls == []
+
+
 def test_defaults_kv(db):
     assert get_defaults(db)["brand"] == "YCPB"
     set_defaults(db, {**get_defaults(db), "brand": "ADEL"})

@@ -2,8 +2,10 @@
 
 Атрибутная модель по ТН ВЭД меняется редко — кладём целиком в platform.kv
 («nk_attrs:{tnved}», fetched_at + m/r списки) и перевыбираем не чаще раза в сутки.
-Бренды кэшируем в nkmt.brand_cache (имя — casefold), категории без кэша:
-они нужны один раз на строку и часто требуют подсказки оператора.
+Бренды кэшируем в nkmt.brand_cache (имя — casefold), категории без
+платформенного кэша: validate_rows передаёт cats_cache — один запрос
+/nk/categories на ТН ВЭД на вызов импорта; при неоднозначностях нужна
+подсказка оператора.
 """
 import time
 
@@ -67,9 +69,19 @@ def resolve_brand(db: Session, client, token: str, name: str) -> int:
     raise UnknownBrand(name)
 
 
-def resolve_category(client, token: str, tnved: str, hint: str = "") -> str:
-    """cat_id (str) по ТН ВЭД; 0 категорий обычно = 404 → NkHttpError из клиента прокинется."""
-    cats = client.categories(token, tnved)
+def resolve_category(client, token: str, tnved: str, hint: str = "",
+                     cats=None, cats_cache: dict | None = None) -> str:
+    """cat_id (str) по ТН ВЭД; 0 категорий обычно = 404 → NkHttpError из клиента
+    прокинется. cats — готовый список категорий: клиент не дёргается вообще.
+    cats_cache — кэш вызывающего «раз на ТН ВЭД» (массовый импорт): первый
+    вызов тянет /nk/categories, повторные ТН ВЭД-строки берут из словаря."""
+    if cats is None:
+        if cats_cache is not None and tnved in cats_cache:
+            cats = cats_cache[tnved]
+        else:
+            cats = client.categories(token, tnved)
+            if cats_cache is not None:
+                cats_cache[tnved] = cats
     if len(cats) == 1:
         return str(cats[0]["cat_id"])
     if hint:

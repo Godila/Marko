@@ -19,9 +19,9 @@ _ALLOWED_CLASS = "0-9A-Za-z\u0400-\u04FF .,:;\\-()/+«»\"%№'&!?*—"
 ALLOWED_UNICODE_RE = re.compile(f"^[{_ALLOWED_CLASS}]*$")
 _FORBIDDEN_RE = re.compile(f"[^{_ALLOWED_CLASS}]")
 
-TNVED_RE = re.compile(r"\d{10}")
-DATE_RE = re.compile(r"\d{4}-\d{2}-\d{2}")
-GTIN_RE = re.compile(r"\d{14}")
+TNVED_RE = re.compile(r"[0-9]{10}")  # [0-9], не \d: \d ловит не-ASCII цифры (U+0660…)
+DATE_RE = re.compile(r"[0-9]{4}-[0-9]{2}-[0-9]{2}")
+GTIN_RE = re.compile(r"[0-9]{14}")
 
 TEXT_KEYS = ["article", "name", "product_type", "color", "composition", "size", "model",
              "brand", "target_gender", "size_system", "techreg", "country", "producer",
@@ -67,7 +67,8 @@ def _normalize_color(amap: dict, color: str) -> str:
     return color
 
 
-def _validate_row(db, client, token: str, row: dict, errors: list, models: dict) -> ValidatedRow:
+def _validate_row(db, client, token: str, row: dict, errors: list,
+                  models: dict, cats_cache: dict) -> ValidatedRow:
     # 1. обязательные ключи и форматы
     for key in REQUIRED_ROW_KEYS:
         if not str(row.get(key, "")).strip():
@@ -130,10 +131,15 @@ def _validate_row(db, client, token: str, row: dict, errors: list, models: dict)
         elif not declaration_date:
             declaration_date = decl.doc_date
 
-    # 8. категория по ТН ВЭД (hint выбирает при неоднозначности)
+    # 8. категория по ТН ВЭД (hint выбирает при неоднозначности); список
+    #    категорий — один запрос /nk/categories на ТН ВЭД на вызов
+    #    (cats_cache передаётся в resolve_category, тестовые заглушки его
+    #    игнорируют и клиента не трогают)
     cat_id = ""
     try:
-        cat_id = str(dicts.resolve_category(client, token, tnved, str(row.get("category_hint", ""))))
+        cat_id = str(dicts.resolve_category(
+            client, token, tnved, str(row.get("category_hint", "")),
+            cats_cache=cats_cache))
     except dicts.AmbiguousCategory as e:
         options = "; ".join(f"{c.get('cat_id')}={c.get('cat_name')}" for c in e.args[0])
         errors.append(f"категория неоднозначна, уточните подсказкой: {options}")
@@ -167,11 +173,13 @@ def _validate_row(db, client, token: str, row: dict, errors: list, models: dict)
 def validate_rows(db, client, token: str, rows: list[dict]) -> list[ValidatedRow]:
     """Строки выгрузки → ValidatedRow по конвейеру; ошибка строки не роняет остальные."""
     models: dict = {}  # кэш attr-карт по tnved внутри одного вызова
+    cats_cache: dict = {}  # кэш списков категорий по tnved (1 запрос /nk/categories на ТН ВЭД)
     result = []
     for row in rows:
         errors: list = []
         try:
-            result.append(_validate_row(db, client, token, row, errors, models))
+            result.append(_validate_row(db, client, token, row, errors, models,
+                                        cats_cache))
         except Exception as e:  # страховка: одна строка не должна ронять пакет
             result.append(ValidatedRow(
                 article=str(row.get("article", "")), tnved=str(row.get("tnved", "")),

@@ -1,3 +1,6 @@
+import json
+from pathlib import Path
+
 from mpmt.nkmt import validate
 
 # model-фикстура (патчи dicts на фикстуру модели 6109100000) — общая, в conftest.py
@@ -39,3 +42,25 @@ def test_declaration_must_be_in_registry(model, db):
     assert out["ok"] and out["attributes"]["23557"]["date"] == "2025-12-01"
     out2 = validate.validate_rows(db, None, None, [_row(declaration_number="ХХ-9")])[0]
     assert not out2["ok"] and "реестре" in out2["error"]
+
+
+def test_categories_fetched_once_per_tnved(db, monkeypatch):
+    """/nk/categories тянется РАЗ на ТН ВЭД на вызов validate_rows (массовый
+    импорт), не на строку; resolve_category — настоящий, клиент считает вызовы."""
+    fix = json.loads((Path(__file__).parent / "fixtures" / "nk_attrs_6109100000.json")
+                     .read_text(encoding="utf-8"))
+    monkeypatch.setattr(validate.dicts, "attrs_model", lambda *a, **k: fix)
+    monkeypatch.setattr(validate.dicts, "resolve_brand", lambda *a, **k: 2102811)
+    from mpmt.nkmt.models import Declaration
+    db.add(Declaration(doc_number="Д-1", doc_date="2025-12-01")); db.commit()
+    calls = []
+
+    class CountingNk:
+        def categories(self, token, tnved):
+            calls.append(tnved)
+            return [{"cat_id": 214943, "cat_name": "Футболки"}]
+
+    out = validate.validate_rows(db, CountingNk(), "T", [_row(), _row(article="T-2")])
+    assert [o["ok"] for o in out] == [True, True]
+    assert out[0]["cat_id"] == out[1]["cat_id"] == "214943"
+    assert calls == ["6109100000"]  # две строки, один ТН ВЭД → один запрос
