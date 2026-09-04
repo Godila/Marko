@@ -3,10 +3,14 @@ import logging
 import time
 from datetime import datetime, timedelta, timezone
 
+from mpmt.connector_mt import manager
 from mpmt.connector_wb.client import WBClient, WbHttpError, WbLimitError, load_wb_token
 from mpmt.connector_wb.poll import run_once
 from mpmt.db import SessionLocal
 from mpmt.log import setup_logging
+from mpmt.nkmt.client import NkClient
+from mpmt.nkmt.models import Batch, Card
+from mpmt.nkmt.service import refresh_batch, sign_batch
 from mpmt.notifier import send
 from mpmt.settings import settings
 
@@ -91,12 +95,52 @@ def _docs_checker():
         time.sleep(600)
 
 
+def nkmt_cycle(db) -> None:
+    """Один проход НКМТ: moderation-батчи → refresh, signing с notsigned → sign.
+
+    Signing без notsigned-карточек не дёгается (sign_batch и так бросил бы
+    ValueError — не шумим лишним вызовом). Исключение батча не роняет цикл
+    (паттерн _docs_checker): log.exception + rollback, следующий батч.
+    """
+    try:
+        client = NkClient(settings.mt_base_v3)
+        token = manager.get_token(db)
+    except Exception:
+        log.exception("nkmt: client/token failed")
+        return
+    for batch in db.query(Batch).filter(
+            Batch.status.in_(("moderation", "signing"))).order_by(Batch.id).all():
+        try:
+            if batch.status == "moderation":
+                refresh_batch(db, batch.id, client, token)
+            elif db.query(Card).filter(Card.batch_id == batch.id,
+                                       Card.status == "notsigned").count():
+                sign_batch(db, batch.id, client, token)
+        except Exception:
+            db.rollback()
+            log.exception("nkmt cycle failed for batch %s", batch.id)
+
+
+def _nkmt_loop():
+    """Раз в 10 мин: refresh модерации + автоподписание signing-батчей."""
+    from mpmt.db import SessionLocal
+    while True:
+        try:
+            db = SessionLocal()
+            nkmt_cycle(db)
+            db.close()
+        except Exception:
+            log.exception("nkmt loop failed")
+        time.sleep(600)
+
+
 def main():
     setup_logging()
     log.info("worker started, excise cron %s MSK", settings.poll_excise_cron)
     import threading
     threading.Thread(target=_signer_watchdog, daemon=True).start()
     threading.Thread(target=_docs_checker, daemon=True).start()
+    threading.Thread(target=_nkmt_loop, daemon=True).start()
     while True:
         wait = seconds_until(settings.poll_excise_cron, datetime.now(MSK))
         log.info("next excise poll in %.0f s", wait)
