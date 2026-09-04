@@ -241,9 +241,11 @@ def sign_batch(db, batch_id: int, client, token) -> dict:
     сбрасывается при взятии в попытку. Батч должен существовать и иметь
     re-signable-карточки (notsigned|error_sign, иначе ValueError → 409);
     сразу → signing (коммит). Чанки по ≤10: /nk/feed-product-document
-    отдаёт xmls [{goodId, gtin, xml}] — карточки спариваются с xml ПО GTIN:
-    порядок и полнота ответа не гарантируются (дамп: xmls — возможное
-    подмножество + собственный errors[] по товарам). Карточка без своего
+    отдаёт xmls [{goodId, gtin, xml}] — карточки спариваются с xml ПО GTIN
+    (live: gtin может лежать под ключом GTIN и без ведущего нуля — 13 цифр;
+    обе стороны нормализуются zfill(14)): порядок и полнота ответа
+    не гарантируются (дамп: xmls — возможное подмножество + собственный
+    errors[] по товарам). Карточка без своего
     xml → error_sign («не получен xml карточки», либо message из errors[]
     ответа, если он по gtin) и никогда не уходит в подписание. Каждый xml
     спаренной карточки подписывается doc_sign-задачей шлюза (CAdES PKCS#7
@@ -280,14 +282,17 @@ def sign_batch(db, batch_id: int, client, token) -> dict:
                 continue
             gtin = str(err.get("gtin") or err.get("GTIN") or "")
             if gtin:
-                doc_errors[gtin] = str(err.get("message") or "ошибка получения xml товара")
-        by_gtin = {c.gtin: c for c in chunk}
+                # live: gtin без ведущего нуля — ключ нормализуем к 14 цифрам
+                doc_errors[gtin.zfill(14)] = str(err.get("message") or "ошибка получения xml товара")
+        by_gtin = {(c.gtin or "").zfill(14): c for c in chunk}
         paired, paired_ids = [], set()
         for entry in doc.get("xmls") or []:
             # битая запись (не dict / без xml / чужой или дубль gtin) не спаривается
             if not isinstance(entry, dict) or not entry.get("xml"):
                 continue
-            card = by_gtin.get(str(entry.get("gtin") or ""))
+            # live: gtin под ключом GTIN и без ведущего нуля (13 цифр) — zfill(14)
+            g = str(entry.get("gtin") or entry.get("GTIN") or "").zfill(14)
+            card = by_gtin.get(g)
             if card is None or id(card) in paired_ids:
                 continue
             paired_ids.add(id(card))
@@ -295,7 +300,8 @@ def sign_batch(db, batch_id: int, client, token) -> dict:
         for card in chunk:
             if id(card) not in paired_ids:  # без своего xml не подписываем никогда
                 card.status = "error_sign"
-                card.error_text = doc_errors.get(card.gtin, "не получен xml карточки")
+                card.error_text = doc_errors.get((card.gtin or "").zfill(14),
+                                                 "не получен xml карточки")
                 n_failed += 1
         items = []
         for card, entry in paired:

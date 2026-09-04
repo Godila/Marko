@@ -144,6 +144,25 @@ def test_sign_document_subset_reorder(db, seeds, signer):
     assert [base64.b64decode(p["data_b64"]) for _, p in signer] == [b"<x2/>"]
 
 
+def test_sign_pairs_gtin_key_no_leading_zero(db, seeds, signer):
+    """Live (боевой батч): xmls несут gtin под ВЕРХНИМ ключом GTIN и БЕЗ
+    ведущего нуля (13 цифр) — «4630562322355» должен спариться с карточкой
+    gtin «04630562322355» (карточки всегда 14-значные) и уйти в подписание."""
+    cs = cards(db, seeds.id)
+    cs["A"].gtin, cs["B"].gtin = "04630562322355", "04630562322356"
+    db.commit()
+    fake = FakeNk(doc_json={"apiversion": 3, "result": {
+        "xmls": [{"goodId": 501, "GTIN": "4630562322355", "xml": "<x1/>"},
+                 {"goodId": 502, "GTIN": "4630562322356", "xml": "<x2/>"}]}})
+    out = sign_batch(db, seeds.id, fake, "T")
+    assert out == {"signed": 2, "failed": 0}
+    cs = cards(db, seeds.id)
+    assert (cs["A"].status, cs["A"].good_id) == ("published", "501")
+    assert (cs["B"].status, cs["B"].good_id) == ("published", "502")
+    assert db.get(Batch, seeds.id).status == "published"
+    assert [i["goodId"] for i in fake.items] == [501, 502]  # обе в подписании
+
+
 def test_sign_retries_error_sign_cards(db, seeds, signer):
     """error_sign не тупик: «Подписать» берёт карточку в повторную попытку,
     старый error_text сбрасывается, happy path → published."""
