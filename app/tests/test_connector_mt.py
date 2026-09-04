@@ -2,9 +2,11 @@ import base64
 import json
 from datetime import datetime, timedelta
 
+import httpx
 import pytest
 
 from mpmt.connector_mt import manager
+from mpmt.connector_mt.client import MtClient, MtHttpError
 from mpmt.journal import apply_event
 from mpmt.emitter.batch import withdraw_batch
 from mpmt.mt.models import MtDoc
@@ -126,3 +128,58 @@ def test_check_doc_rejected(db, sg):
     c.doc_status = "REJECTED"
     manager.check_doc(db, doc.id, c)
     assert db.get(MtDoc, doc.id).status == "error"
+
+
+# --- MtClient: реальные форматы прода markirovka.crpt.ru (live 2026-09-04) ---
+
+def _mt(transport):
+    return MtClient("https://v3.example", "https://v4.example",
+                    transport=transport, sleeper=lambda s: None)
+
+
+def test_create_doc_signed_bare_uuid_text_plain():
+    """Прод: 201 text/plain, тело = голый uuid без JSON."""
+    def handler(r):
+        return httpx.Response(201, text="465ea5bd-e64c-4d34-b8e8-030cfb4be03e",
+                              headers={"Content-Type": "text/plain;charset=UTF-8"})
+    assert _mt(httpx.MockTransport(handler)).create_doc_signed(
+        "T", "LK_RECEIPT", "QQ==", "SIG") == "465ea5bd-e64c-4d34-b8e8-030cfb4be03e"
+
+
+def test_create_doc_signed_json_uuid():
+    """Совместимость: 200 JSON {"uuid": ...} тоже работает."""
+    def handler(r):
+        return httpx.Response(200, json={"uuid": "ext-1"})
+    assert _mt(httpx.MockTransport(handler)).create_doc_signed(
+        "T", "LK_RECEIPT", "QQ==", "SIG") == "ext-1"
+
+
+def test_create_doc_signed_no_uuid_raises():
+    def handler(r):
+        return httpx.Response(201, text="создан",
+                              headers={"Content-Type": "text/plain;charset=UTF-8"})
+    with pytest.raises(MtHttpError):
+        _mt(httpx.MockTransport(handler)).create_doc_signed("T", "LK_RECEIPT", "QQ==", "SIG")
+
+
+def test_doc_info_array_unwraps_first():
+    """Прод: /doc/{uuid}/info отдаёт JSON-массив — берём первый элемент."""
+    def handler(r):
+        return httpx.Response(200, json=[{"status": "CHECKED_OK",
+                                          "uuid": "465ea5bd-e64c-4d34-b8e8-030cfb4be03e"}])
+    assert _mt(httpx.MockTransport(handler)).doc_info(
+        "T", "465ea5bd-e64c-4d34-b8e8-030cfb4be03e") == \
+        {"status": "CHECKED_OK", "uuid": "465ea5bd-e64c-4d34-b8e8-030cfb4be03e"}
+
+
+def test_doc_info_empty_array_gives_empty_dict():
+    def handler(r):
+        return httpx.Response(200, json=[])
+    assert _mt(httpx.MockTransport(handler)).doc_info("T", "u") == {}
+
+
+def test_doc_info_dict_as_is():
+    """dict-ответ (моки/часть методов) проходит без изменений."""
+    def handler(r):
+        return httpx.Response(200, json={"status": "REJECTED"})
+    assert _mt(httpx.MockTransport(handler)).doc_info("T", "u") == {"status": "REJECTED"}

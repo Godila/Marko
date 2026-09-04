@@ -7,11 +7,16 @@
 import base64
 import json
 import logging
+import re
 import time
 
 import httpx
 
 log = logging.getLogger("mpmt.mt")
+
+_UUID_RE = re.compile(
+    r"^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-"
+    r"[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$")
 
 
 class MtHttpError(Exception):
@@ -65,11 +70,27 @@ class MtClient:
                             "product_document": product_document_b64,
                             "type": doc_type,
                             "signature": signature_b64})
-        return r.json()["uuid"]
+        # Прод (markirovka.crpt.ru) отдаёт 201 text/plain с ГОЛЫМ uuid без JSON
+        # (live 2026-09-04); для совместимости принимаем и JSON {"uuid": ...}.
+        try:
+            data = r.json()
+            if isinstance(data, dict) and data.get("uuid"):
+                return data["uuid"]
+        except ValueError:
+            pass
+        text = r.text.strip()
+        if len(text) == 36 and _UUID_RE.fullmatch(text):
+            return text
+        raise MtHttpError(r.status_code, f"no uuid in response: {r.text[:200]!r}")
 
     def doc_info(self, token: str, doc_uuid: str) -> dict:
         r = self._req("GET", f"{self.v4}/doc/{doc_uuid}/info",
                       params={"pg": self.pg},
                       headers={"Accept": "application/json",
                                "Authorization": f"Bearer {token}"})
-        return r.json()
+        # Прод отдаёт JSON-МАССИВ с объектом документа (live 2026-09-04);
+        # dict — прежний формат песочницы/моков.
+        data = r.json()
+        if isinstance(data, list):
+            return data[0] if data else {}
+        return data
