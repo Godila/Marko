@@ -43,3 +43,23 @@ def test_5xx_retries_then_ok():
         return httpx.Response(200, json={"apiversion": 3, "result": []})
     c = make_client(h)
     assert c.categories("T", "6109100000") == [] and calls["n"] == 3
+
+
+def test_feed_product_document_unwraps_list_result():
+    """Дамп 85410-85414: result — array; пример 85586-85614 оборачивает
+    {xmls, errors} в список — клиент разворачивает в первый элемент."""
+    body = {"apiversion": 3, "result": [
+        {"xmls": [{"goodId": 501, "xml": "<x/>", "gtin": 4630520699980}],
+         "errors": [{"GTIN": "111", "message": "нет товара"}]}]}
+    c = make_client(lambda r: httpx.Response(200, json=body))
+    assert c.feed_product_document("T", ["4630520699980"]) == body["result"][0]
+    c2 = make_client(lambda r: httpx.Response(200, json={"apiversion": 3, "result": []}))
+    assert c2.feed_product_document("T", ["x"]) == {}  # пустой список → {}
+
+
+def test_feed_product_sign_pkcs_unwraps_list_result():
+    """Дамп типизирует result как number, но пример — {signed, errors};
+    list-обёртка разворачивается как в feed-product-document."""
+    c = make_client(lambda r: httpx.Response(200, json={
+        "apiversion": 3, "result": [{"signed": [501], "errors": []}]}))
+    assert c.feed_product_sign_pkcs("T", [{"goodId": 501}]) == {"signed": [501], "errors": []}

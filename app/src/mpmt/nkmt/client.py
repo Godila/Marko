@@ -76,8 +76,18 @@ class NkClient:
         return self._get("/nk/feed-status", token, {"feed_id": feed_id})["result"]
 
     def feed_product_document(self, token: str, gtins: list[str]) -> dict:
-        return self._post_json("/nk/feed-product-document", token,
-                               {"gtins": gtins, "publicationAgreement": False})["result"]
+        # дамп trueapi: result задан как array (85410-85414), пример
+        # 85586-85614 — "result":[ {xmls, errors} ]: разворачиваем список
+        res = self._post_json("/nk/feed-product-document", token,
+                              {"gtins": gtins, "publicationAgreement": False}).get("result")
+        if isinstance(res, list):
+            res = res[0] if res else {}
+        return res or {}
 
     def feed_product_sign_pkcs(self, token: str, items: list[dict]) -> dict:
-        return self._post_json("/nk/feed-product-sign-pkcs", token, items)["result"]
+        # дамп типизирует result как number, но пример — объект {signed,
+        # errors}; list-обёртку разворачиваем как в feed-product-document
+        res = self._post_json("/nk/feed-product-sign-pkcs", token, items).get("result")
+        if isinstance(res, list):
+            res = res[0] if res else {}
+        return res or {}

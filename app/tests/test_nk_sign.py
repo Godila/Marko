@@ -11,9 +11,10 @@ error/errors не мешают), иначе остаётся signing.
 """
 import base64
 
+import httpx
 import pytest
 
-from mpmt.nkmt.client import NkHttpError
+from mpmt.nkmt.client import NkClient, NkHttpError
 from mpmt.nkmt.models import Batch, Card
 from mpmt.nkmt.service import sign_batch
 from tests.test_api_nkmt_dicts import AUTH, client  # noqa: F401  (фикстура client)
@@ -21,21 +22,26 @@ from tests.test_api_nkmt_dicts import AUTH, client  # noqa: F401  (фиксту�
 
 class FakeNk:
     """Документ: xmls c gtin на обе карточки (+ опциональные errors); sign_pkcs —
-    {"signed", "errors"} (пер-item отклонения), либо NkHttpError."""
+    {"signed", "errors"} (пер-item отклонения), либо NkHttpError. doc_json —
+    СЫРОЙ дамп-ответ /nk/feed-product-document (result — список, 85410-85614):
+    отдаётся через РЕАЛЬНЫЙ NkClient (MockTransport) — list-нормализация
+    клиента проверяется вместе с сервисом."""
 
     GTIN_A, GTIN_B = "4630520699980", "4630520699981"
 
-    def __init__(self, sign_error=None, doc=None, sign_errors=None):
+    def __init__(self, sign_error=None, doc_json=None, sign_errors=None):
         self.sign_error = sign_error
-        self.doc = doc  # подменный ответ feed_product_document (подмножество/порядок)
+        self.doc_json = doc_json  # сырой ответ feed_product_document (подмножество/порядок)
         self.sign_errors = sign_errors or []
         self.gtins = []
         self.items = []
 
     def feed_product_document(self, token, gtins):
         self.gtins.append(list(gtins))
-        if self.doc is not None:
-            return self.doc
+        if self.doc_json is not None:
+            nk = NkClient("https://nk.example", transport=httpx.MockTransport(
+                lambda r: httpx.Response(200, json=self.doc_json)))
+            return nk.feed_product_document(token, gtins)
         return {"xmls": [{"goodId": 501, "gtin": self.GTIN_A, "xml": "<x1/>"},
                          {"goodId": 502, "gtin": self.GTIN_B, "xml": "<x2/>"}]}
 
@@ -116,12 +122,16 @@ def test_sign_pkcs_item_errors_200(db, seeds, signer):
 
 def test_sign_document_subset_reorder(db, seeds, signer):
     """xmls только по одному gtin (порядок произволен, есть чужой gtin) +
-    errors[] документа по GTIN: спарилась своя карта со своим good_id,
-    непарная — error_sign с message документа, батч не published."""
-    doc = {"xmls": [{"goodId": 999, "gtin": "1111111111111", "xml": "<xf/>"},  # чужой
-                    {"goodId": 502, "gtin": FakeNk.GTIN_B, "xml": "<x2/>"}],   # только B
-           "errors": [{"GTIN": FakeNk.GTIN_A, "message": "Не удалось получить товар по GTIN"}]}
-    fake = FakeNk(doc=doc)
+    errors[] документа по GTIN; ответ — дамп-вербатим: result СПИСОК с одним
+    объектом (85410-85614), идёт через реальный NkClient (клиент разворачивает
+    список). Спарилась своя карта со своим good_id, непарная — error_sign
+    с message документа, батч не published."""
+    doc_json = {"apiversion": 3, "result": [{
+        "xmls": [{"goodId": 999, "gtin": "1111111111111", "xml": "<xf/>"},  # чужой
+                 {"goodId": 502, "gtin": FakeNk.GTIN_B, "xml": "<x2/>"}],   # только B
+        "errors": [{"GTIN": FakeNk.GTIN_A,
+                    "message": "Не удалось получить товар по GTIN"}]}]}
+    fake = FakeNk(doc_json=doc_json)
     out = sign_batch(db, seeds.id, fake, "T")
     assert out == {"signed": 1, "failed": 1}
     cs = cards(db, seeds.id)
