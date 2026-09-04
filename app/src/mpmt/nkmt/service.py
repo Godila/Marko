@@ -8,14 +8,18 @@ good_id/непустой gtin сохраняются (пустой gtin карт
 другой карточкой (другой артикул, включая уже записанные в этом батче), —
 ошибка строки «gtin занят», отклонённый gtin в карточку не записывается.
 """
+import base64
 import json
 
+from mpmt.connector_mt.manager import _sign_via_gateway
+from mpmt.nkmt.client import NkHttpError
 from mpmt.nkmt.dicts import get_defaults
 from mpmt.nkmt.models import Batch, Card
 from mpmt.nkmt.parse import apply_defaults, parse_xlsx
 from mpmt.nkmt.validate import GTIN_RE, validate_rows
 
 FEED_CHUNK = 500  # /nk/feed: не более 500 карточек за запрос
+SIGN_CHUNK = 10  # /nk/feed-product-document|sign-pkcs: не более 10 товаров за запрос
 
 
 def import_batch(db, filename: str, data: bytes, client, token) -> int:
@@ -203,3 +207,58 @@ def refresh_batch(db, batch_id: int, client, token) -> dict:
         return {"feed_status": st, "batch_status": batch.status}  # ничего не меняем
     db.commit()
     return {"feed_status": st, "batch_status": batch.status}
+
+
+def sign_batch(db, batch_id: int, client, token) -> dict:
+    """Подписание notsigned-карточек боевым signer-агентом → published.
+
+    Батч должен существовать и иметь notsigned-карточки (иначе ValueError →
+    409); сразу → signing (коммит). Чанки по ≤10: /nk/feed-product-document
+    отдаёт xmls [{goodId, xml}] (позиционно по gtin чанка); каждый xml
+    подписывается doc_sign-задачей шлюза (CAdES PKCS#7 detached, base64 —
+    data_b64 = base64(xml)), items {goodId, base64Xml, signature} уходят
+    одним запросом /nk/feed-product-sign-pkcs. Успех чанка → карточки
+    published; NkHttpError → error_sign + error_text, остальные чанки
+    продолжаются (не рейзим). Батч → published, когда не осталось
+    notsigned/signing и есть хоть одна published, иначе остаётся signing.
+    """
+    batch = db.get(Batch, batch_id)
+    if batch is None:
+        raise ValueError(f"batch {batch_id} not found")
+    cards = db.query(Card).filter(Card.batch_id == batch_id,
+                                  Card.status == "notsigned").order_by(Card.id).all()
+    if not cards:
+        raise ValueError(f"batch {batch_id} has no notsigned cards")
+    batch.status = "signing"
+    db.commit()
+
+    n_signed = n_failed = 0
+    for i in range(0, len(cards), SIGN_CHUNK):
+        chunk = cards[i:i + SIGN_CHUNK]
+        doc = client.feed_product_document(token, [c.gtin for c in chunk]) or {}
+        items = []
+        for card, entry in zip(chunk, doc.get("xmls") or []):
+            data_b64 = base64.b64encode(entry["xml"].encode("utf-8")).decode("ascii")
+            sig = _sign_via_gateway(db, "doc_sign", {"data_b64": data_b64})
+            items.append({"goodId": entry["goodId"], "base64Xml": data_b64,
+                          "signature": sig})
+            card.good_id = str(entry["goodId"])
+            card.status = "signing"
+        try:
+            client.feed_product_sign_pkcs(token, items)
+        except NkHttpError as e:
+            for card in chunk:
+                card.status = "error_sign"
+                card.error_text = str(e)
+                n_failed += 1
+            continue
+        for card in chunk:
+            card.status = "published"
+            n_signed += 1
+
+    left = db.query(Card).filter(Card.batch_id == batch_id,
+                                 Card.status.in_(("notsigned", "signing"))).count()
+    if left == 0 and n_signed:
+        batch.status = "published"
+    db.commit()
+    return {"signed": n_signed, "failed": n_failed}
