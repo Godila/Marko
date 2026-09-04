@@ -1,9 +1,13 @@
 """Sign: подписание карточек через signer-шлюз (/nk/feed-product-sign-pkcs).
 
-Чанк ≤10 карточек: /nk/feed-product-document отдаёт xmls [{goodId, xml}],
-каждый xml подписывается doc_sign-задачей (CAdES PKCS#7 detached, base64);
-items уходят одним запросом. Успех чанка → published, NkHttpError →
-error_sign + error_text, батч published только когда подписаны все.
+Чанк ≤10 карточек: /nk/feed-product-document отдаёт xmls [{goodId, gtin, xml}]
+— карточки спариваются ПО GTIN (ответ может быть подмножеством и в любом
+порядке, дамп 85502-85519); каждый xml подписывается doc_sign-задачей (CAdES
+PKCS#7 detached, base64); items уходят одним запросом. Но и 200 несёт
+errors[{goodId, message}] по отдельным товарам (дамп 85193-85203) —
+отклонённый goodId → error_sign + message, прочие → published. Батч
+published только когда нет notsigned/signing/error_sign (импортные
+error/errors не мешают), иначе остаётся signing.
 """
 import base64
 
@@ -16,23 +20,30 @@ from tests.test_api_nkmt_dicts import AUTH, client  # noqa: F401  (фиксту�
 
 
 class FakeNk:
-    """feed_product_document → xmls на 2 gtin; sign_pkcs — ok или NkHttpError."""
+    """Документ: xmls c gtin на обе карточки (+ опциональные errors); sign_pkcs —
+    {"signed", "errors"} (пер-item отклонения), либо NkHttpError."""
 
-    def __init__(self, sign_error=None):
+    GTIN_A, GTIN_B = "4630520699980", "4630520699981"
+
+    def __init__(self, sign_error=None, doc=None, sign_errors=None):
         self.sign_error = sign_error
+        self.doc = doc  # подменный ответ feed_product_document (подмножество/порядок)
+        self.sign_errors = sign_errors or []
         self.gtins = []
         self.items = []
 
     def feed_product_document(self, token, gtins):
         self.gtins.append(list(gtins))
-        return {"xmls": [{"goodId": 501, "xml": "<x1/>"},
-                         {"goodId": 502, "xml": "<x2/>"}]}
+        if self.doc is not None:
+            return self.doc
+        return {"xmls": [{"goodId": 501, "gtin": self.GTIN_A, "xml": "<x1/>"},
+                         {"goodId": 502, "gtin": self.GTIN_B, "xml": "<x2/>"}]}
 
     def feed_product_sign_pkcs(self, token, items):
         if self.sign_error:
             raise self.sign_error
         self.items = items
-        return {}
+        return {"signed": [i["goodId"] for i in items], "errors": self.sign_errors}
 
 
 @pytest.fixture
@@ -90,6 +101,61 @@ def test_sign_failure_marks_error_sign(db, seeds, signer):
                for c in cs.values())
 
 
+def test_sign_pkcs_item_errors_200(db, seeds, signer):
+    """200 c errors по одному goodId (дамп 85193-85203): карта → error_sign
+    с message, соседка published, батч не published."""
+    fake = FakeNk(sign_errors=[{"goodId": 501, "message": "Товар не готов к подписанию"}])
+    out = sign_batch(db, seeds.id, fake, "T")
+    assert out == {"signed": 1, "failed": 1}
+    cs = cards(db, seeds.id)
+    assert cs["A"].status == "error_sign"
+    assert "не готов к подписанию" in cs["A"].error_text
+    assert (cs["B"].status, cs["B"].good_id) == ("published", "502")
+    assert db.get(Batch, seeds.id).status == "signing"  # error_sign блокирует published
+
+
+def test_sign_document_subset_reorder(db, seeds, signer):
+    """xmls только по одному gtin (порядок произволен, есть чужой gtin) +
+    errors[] документа по GTIN: спарилась своя карта со своим good_id,
+    непарная — error_sign с message документа, батч не published."""
+    doc = {"xmls": [{"goodId": 999, "gtin": "1111111111111", "xml": "<xf/>"},  # чужой
+                    {"goodId": 502, "gtin": FakeNk.GTIN_B, "xml": "<x2/>"}],   # только B
+           "errors": [{"GTIN": FakeNk.GTIN_A, "message": "Не удалось получить товар по GTIN"}]}
+    fake = FakeNk(doc=doc)
+    out = sign_batch(db, seeds.id, fake, "T")
+    assert out == {"signed": 1, "failed": 1}
+    cs = cards(db, seeds.id)
+    assert (cs["B"].status, cs["B"].good_id) == ("published", "502")
+    assert cs["A"].status == "error_sign"  # не published вслепую и не чужой good_id
+    assert "Не удалось получить товар" in cs["A"].error_text
+    assert db.get(Batch, seeds.id).status == "signing"
+    # в подписание ушла только спаренная карточка
+    assert [i["goodId"] for i in fake.items] == [502]
+    assert [base64.b64decode(p["data_b64"]) for _, p in signer] == [b"<x2/>"]
+
+
+def test_sign_batch_published_strict(db, seeds, signer):
+    """Finding 3: батч → published только без error_sign; импортные
+    error-карточки частичной выгрузки published не блокируют (как в refresh)."""
+    db.add(Card(article="C", gtin="", batch_id=seeds.id, status="error",
+                tnved="6109100000", name="Футболка C", error_text="битая строка"))
+    db.commit()
+    assert sign_batch(db, seeds.id, FakeNk(), "T") == {"signed": 2, "failed": 0}
+    assert db.get(Batch, seeds.id).status == "published"  # error не мешает
+
+    b2 = Batch(source_filename="mix.xlsx", status="signing")  # микс: half-fail
+    db.add(b2); db.flush()
+    for art, gtin in (("M1", FakeNk.GTIN_A), ("M2", FakeNk.GTIN_B)):
+        db.add(Card(article=art, gtin=gtin, batch_id=b2.id, status="notsigned",
+                    tnved="6109100000", name=f"Футболка {art}"))
+    db.commit()
+    sign_batch(db, b2.id, FakeNk(
+        sign_errors=[{"goodId": 501, "message": "не готов"}]), "T")
+    cs = cards(db, b2.id)
+    assert (cs["M1"].status, cs["M2"].status) == ("error_sign", "published")
+    assert db.get(Batch, b2.id).status == "signing"  # error_sign → батч не published
+
+
 def test_sign_guards(db, seeds):
     for c in db.query(Card).filter(Card.batch_id == seeds.id).all():
         c.status = "published"
@@ -115,8 +181,8 @@ def test_sign_chunks_by_ten(db, monkeypatch):
     class ChunkNk:
         def feed_product_document(self, token, gtins):
             seen.append(list(gtins))
-            return {"xmls": [{"goodId": 1000 + g, "xml": f"<x{g}/>"}
-                             for g in range(len(gtins))]}
+            return {"xmls": [{"goodId": 1000 + i, "gtin": g, "xml": f"<x{g}/>"}
+                             for i, g in enumerate(gtins)]}
 
         def feed_product_sign_pkcs(self, token, items):
             return {}

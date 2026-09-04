@@ -214,13 +214,20 @@ def sign_batch(db, batch_id: int, client, token) -> dict:
 
     Батч должен существовать и иметь notsigned-карточки (иначе ValueError →
     409); сразу → signing (коммит). Чанки по ≤10: /nk/feed-product-document
-    отдаёт xmls [{goodId, xml}] (позиционно по gtin чанка); каждый xml
-    подписывается doc_sign-задачей шлюза (CAdES PKCS#7 detached, base64 —
-    data_b64 = base64(xml)), items {goodId, base64Xml, signature} уходят
-    одним запросом /nk/feed-product-sign-pkcs. Успех чанка → карточки
-    published; NkHttpError → error_sign + error_text, остальные чанки
-    продолжаются (не рейзим). Батч → published, когда не осталось
-    notsigned/signing и есть хоть одна published, иначе остаётся signing.
+    отдаёт xmls [{goodId, gtin, xml}] — карточки спариваются с xml ПО GTIN:
+    порядок и полнота ответа не гарантируются (дамп: xmls — возможное
+    подмножество + собственный errors[] по товарам). Карточка без своего
+    xml → error_sign («не получен xml карточки», либо message из errors[]
+    ответа, если он по gtin) и никогда не уходит в подписание. Каждый xml
+    спаренной карточки подписывается doc_sign-задачей шлюза (CAdES PKCS#7
+    detached, base64 — data_b64 = base64(xml)), items {goodId, base64Xml,
+    signature} уходят одним запросом /nk/feed-product-sign-pkcs. NkHttpError
+    чанка → его карточки error_sign + error_text, остальные чанки
+    продолжаются (не рейзим). Но и 200 может нести errors[{goodId, message}]
+    по отдельным товарам (дамп 85193-85203): rejected goodId → error_sign с
+    message, остальные карточки чанка → published. Батч → published только
+    когда нет notsigned/signing И нет error_sign (импортные error/errors
+    не мешают — как в refresh_batch), иначе остаётся signing.
     """
     batch = db.get(Batch, batch_id)
     if batch is None:
@@ -236,29 +243,67 @@ def sign_batch(db, batch_id: int, client, token) -> dict:
     for i in range(0, len(cards), SIGN_CHUNK):
         chunk = cards[i:i + SIGN_CHUNK]
         doc = client.feed_product_document(token, [c.gtin for c in chunk]) or {}
+        # errors[] документа по gtin (дамп: ключи gtin/GTIN + message) — сообщение для карточек без xml
+        doc_errors = {}
+        for err in doc.get("errors") or []:
+            if not isinstance(err, dict):
+                continue
+            gtin = str(err.get("gtin") or err.get("GTIN") or "")
+            if gtin:
+                doc_errors[gtin] = str(err.get("message") or "ошибка получения xml товара")
+        by_gtin = {c.gtin: c for c in chunk}
+        paired, paired_ids = [], set()
+        for entry in doc.get("xmls") or []:
+            # битая запись (не dict / без xml / чужой или дубль gtin) не спаривается
+            if not isinstance(entry, dict) or not entry.get("xml"):
+                continue
+            card = by_gtin.get(str(entry.get("gtin") or ""))
+            if card is None or id(card) in paired_ids:
+                continue
+            paired_ids.add(id(card))
+            paired.append((card, entry))
+        for card in chunk:
+            if id(card) not in paired_ids:  # без своего xml не подписываем никогда
+                card.status = "error_sign"
+                card.error_text = doc_errors.get(card.gtin, "не получен xml карточки")
+                n_failed += 1
         items = []
-        for card, entry in zip(chunk, doc.get("xmls") or []):
+        for card, entry in paired:
             data_b64 = base64.b64encode(entry["xml"].encode("utf-8")).decode("ascii")
             sig = _sign_via_gateway(db, "doc_sign", {"data_b64": data_b64})
             items.append({"goodId": entry["goodId"], "base64Xml": data_b64,
                           "signature": sig})
             card.good_id = str(entry["goodId"])
             card.status = "signing"
+        if not items:
+            continue  # спарить нечего — весь чанк уже в error_sign
         try:
-            client.feed_product_sign_pkcs(token, items)
+            resp = client.feed_product_sign_pkcs(token, items) or {}
         except NkHttpError as e:
-            for card in chunk:
+            for card, _ in paired:
                 card.status = "error_sign"
                 card.error_text = str(e)
                 n_failed += 1
             continue
-        for card in chunk:
-            card.status = "published"
-            n_signed += 1
+        # 200 может отклонить отдельные товары: errors[{goodId, message}] → error_sign
+        sign_errors = {}
+        for err in resp.get("errors") or []:
+            if isinstance(err, dict) and err.get("goodId") is not None:
+                sign_errors[str(err["goodId"])] = str(
+                    err.get("message") or "товар не подписан")
+        for card, _ in paired:  # good_id записан до вызова — ищем ошибки по нему
+            if card.good_id in sign_errors:
+                card.status = "error_sign"
+                card.error_text = sign_errors[card.good_id]
+                n_failed += 1
+            else:
+                card.status = "published"
+                n_signed += 1
 
-    left = db.query(Card).filter(Card.batch_id == batch_id,
-                                 Card.status.in_(("notsigned", "signing"))).count()
-    if left == 0 and n_signed:
+    stuck = db.query(Card).filter(Card.batch_id == batch_id,
+                                  Card.status.in_(("notsigned", "signing",
+                                                   "error_sign"))).count()
+    if stuck == 0 and n_signed:
         batch.status = "published"
     db.commit()
     return {"signed": n_signed, "failed": n_failed}
