@@ -11,7 +11,7 @@ good_id/непустой gtin сохраняются (пустой gtin карт
 from mpmt.nkmt.dicts import get_defaults
 from mpmt.nkmt.models import Batch, Card
 from mpmt.nkmt.parse import apply_defaults, parse_xlsx
-from mpmt.nkmt.validate import validate_rows
+from mpmt.nkmt.validate import GTIN_RE, validate_rows
 
 
 def import_batch(db, filename: str, data: bytes, client, token) -> int:
@@ -31,6 +31,8 @@ def import_batch(db, filename: str, data: bytes, client, token) -> int:
         seen.add(article)
         status, error = ("ok", "") if v["ok"] else ("error", v["error"])
         gtin = v["gtin"]
+        if gtin and not GTIN_RE.fullmatch(gtin):
+            gtin = ""  # битый формат gtin не храним (ошибка уже в error строки)
         if gtin:
             clash = db.query(Card).filter(Card.gtin == gtin,
                                           Card.article != article).first()
