@@ -73,14 +73,38 @@ def test_feed_generates_gtins_and_builds_entries(db, seeds):
     ids = [a["attr_id"] for a in ga]
     assert 2504 not in ids  # бренд уехал в entry.brand, не в good_attrs
     assert all(isinstance(a["attr_id"], int) for a in ga)
-    assert all(set(a) == {"attr_id", "attr_value"} for a in ga)
+    assert all(set(a) <= {"attr_id", "attr_value", "attr_value_type"} for a in ga)
     flat = [a for a in ga if a["attr_id"] == 23557]  # декларация → "номер:::дата"
     assert flat == [{"attr_id": 23557, "attr_value": "ЕАЭС №RU Д-1:::2025-12-01"}]
     per_item = [a for a in ga if a["attr_id"] == 13836]  # список → по записи на элемент
     assert per_item == [{"attr_id": 13836, "attr_value": "хб"},
                         {"attr_id": 13836, "attr_value": "шерсть"}]
-    a35 = next(a for a in ga if a["attr_id"] == 35)  # dict-значения остаются dict
-    assert a35["attr_value"] == {"type": "пол", "value": "жен"}
+    # live: квалифицированные атрибуты — строка attr_value + attr_value_type (не dict)
+    a35 = next(a for a in ga if a["attr_id"] == 35)
+    assert a35 == {"attr_id": 35, "attr_value": "жен", "attr_value_type": "пол"}
+    a13914 = next(a for a in ga if a["attr_id"] == 13914)
+    assert a13914 == {"attr_id": 13914, "attr_value": "белый", "attr_value_type": "цв"}
+
+
+def test_feed_generated_gtin_zfilled_to_14(db, seeds):
+    """live: generate-gtins отдаёт 13-значный gtin — карточке и entry нужен 14-значный."""
+    class FakeDraft13:
+        def __init__(self):
+            self.fed: list[list[dict]] = []
+
+        def generate_gtins(self, token, quantity):
+            assert quantity == 1
+            return {"drafts": [{"gtin": "4630562322348"}], "monthly-limit": {}}
+
+        def feed(self, token, entries):
+            self.fed.append(entries)
+            return {"feed_id": 42}
+
+    fake = FakeDraft13()
+    assert feed_batch(db, seeds.id, fake, "T") == {"feed_id": 42, "feed_ids": [42]}
+    card = db.query(Card).filter_by(article="NOGTIN").one()
+    assert card.gtin == "04630562322348"  # zfill(14) сохранён в карточке
+    assert "04630562322348" in {e["gtin"] for e in fake.fed[0]}  # и в entry фида
 
 
 def test_feed_guards(db, seeds):

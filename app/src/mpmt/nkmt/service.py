@@ -71,8 +71,9 @@ def _feed_entry(card: Card) -> dict:
     moderation — ПОЛЕ ENTRY (дамп trueapi: таблица «Параметры тела запроса»
     метода /nk/feed между brand и set_gtins; в JSON-примерах внутри каждого
     элемента массива): 1 — сразу на модерацию, без него НК оставляет черновик.
-    Флаттенинг значений: dict остаётся dict, КРОМЕ 23557 → "номер:::дата";
-    список 13836 → по записи на элемент; бренд 2504 уезжает в entry.brand.
+    Флаттенинг значений: dict {type,value} (35, 13914) → строка attr_value +
+    поле attr_value_type (live); 23557 → "номер:::дата"; список 13836 → по
+    записи на элемент; бренд 2504 уезжает в entry.brand.
     """
     attrs = card.attributes or {}
     good_attrs = []
@@ -84,6 +85,11 @@ def _feed_entry(card: Card) -> dict:
         elif k == "23557" and isinstance(v, dict):
             good_attrs.append(
                 {"attr_id": 23557, "attr_value": f"{v.get('number', '')}:::{v.get('date', '')}"})
+        elif isinstance(v, dict) and set(v) == {"type", "value"}:
+            # live: квалифицированное значение (35, 13914) — НК требует строку
+            # attr_value + поле attr_value_type, вложенный dict → 400
+            good_attrs.append({"attr_id": int(k), "attr_value": v["value"],
+                               "attr_value_type": v["type"]})
         else:
             good_attrs.append({"attr_id": int(k), "attr_value": v})
     return {"gtin": card.gtin, "good_name": card.name, "tnved": card.tnved,
@@ -97,6 +103,8 @@ def feed_batch(db, batch_id: int, client, token) -> dict:
     Батч должен существовать и быть new|partial с хотя бы одной ok-карточкой
     (иначе ValueError → 409 в REST). Если generate-gtins вернул меньше drafts,
     чем нужно (месячный лимит), — RuntimeError; лимит сохраняется в stats.
+    Draft-gtin нормализуется zfill(14) (live: НК отдаёт 13 цифр, feed требует
+    14); draft, не приводимый к 14 цифрам, — RuntimeError.
     """
     batch = db.get(Batch, batch_id)
     if batch is None:
@@ -119,7 +127,12 @@ def feed_batch(db, batch_id: int, client, token) -> dict:
             raise RuntimeError(
                 f"generate-gtins monthly limit: got {len(drafts)} of {len(need)} gtins")
         for card, draft in zip(need, drafts):
-            card.gtin = draft["gtin"]
+            # live: generate-gtins отдаёт 13-значный gtin, /nk/feed требует 14
+            gtin = str(draft["gtin"]).zfill(14)
+            if not GTIN_RE.fullmatch(gtin):
+                raise RuntimeError(
+                    f"generate-gtins: draft gtin {draft['gtin']!r} is not 14 digits")
+            card.gtin = gtin
 
     entries = [_feed_entry(c) for c in cards]
     feed_ids = []
