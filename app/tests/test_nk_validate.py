@@ -8,7 +8,7 @@ BASE = {"article": "T-1", "tnved": "6109100000", "name": "Футболка те�
         "color": "БЕЛЫЙ", "composition": "100% хлопок", "size": "M", "model": "Tee",
         "brand": "YCPB", "target_gender": "ЖЕНСКИЙ", "size_system": "РОССИЯ",
         "techreg": 'ТР ТС 017/2011 "О безопасности продукции легкой промышленности"',
-        "country": "РОССИЯ", "producer": "ИП", "declaration_number": "Д-1", "declaration_date": "2026-01-01",
+        "country": "RU", "producer": "ИП", "declaration_number": "Д-1", "declaration_date": "2026-01-01",
         "gtin": "", "category_hint": ""}
 
 

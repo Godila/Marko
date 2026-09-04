@@ -20,7 +20,8 @@ TTL = 24 * 3600
 DEFAULTS_KEY = "nk_defaults"
 DEFAULTS = {"brand": "YCPB", "techreg": 'ТР ТС 017/2011 "О безопасности продукции легкой промышленности"',
             "target_gender": "ЖЕНСКИЙ", "size_system": "МЕЖДУНАРОДНЫЙ",
-            "country": "РОССИЯ", "producer": "", "declaration_number": "", "declaration_date": ""}
+            # live: attr 2630 — справочник ISOCountries, нужен код («RU»), не русское имя
+            "country": "RU", "producer": "", "declaration_number": "", "declaration_date": ""}
 
 
 class UnknownBrand(Exception):

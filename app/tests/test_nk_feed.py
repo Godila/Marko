@@ -107,6 +107,22 @@ def test_feed_generated_gtin_zfilled_to_14(db, seeds):
     assert "04630562322348" in {e["gtin"] for e in fake.fed[0]}  # и в entry фида
 
 
+def test_feed_entry_omits_empty_attr_values():
+    """live-отклонение: «attr_id 2503 можно использовать только с attr_value» —
+    пустые значения (None, "", пустой список, value="" у dict) в good_attrs
+    не попадают вовсе, а не уходят как {"attr_id": ..., "attr_value": ""}."""
+    from mpmt.nkmt.service import _feed_entry
+    card = Card(article="E-1", gtin="4630520699970", tnved="6109100000",
+                name="Футболка тест", cat_id="214943", status="ok",
+                attributes={"2504": "YCPB", "2503": "",  # producer по умолчанию ""
+                            "2478": "Футболка тест", "13836": [],
+                            "35": {"type": "пол", "value": ""}})
+    e = _feed_entry(card)
+    ids = [a["attr_id"] for a in e["good_attrs"]]
+    assert 2503 not in ids and 35 not in ids and 13836 not in ids
+    assert ids == [2478]  # остались только непустые
+
+
 def test_feed_guards(db, seeds):
     db.get(Batch, seeds.id).status = "moderation"; db.commit()
     with pytest.raises(ValueError):

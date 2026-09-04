@@ -33,8 +33,8 @@ def test_parse_and_defaults():
     out = apply_defaults(rows, {"brand": "YCPB", "target_gender": "ЖЕНСКИЙ",
                                 "size_system": "МЕЖДУНАРОДНЫЙ", "declaration_number": "Д-1",
                                 "declaration_date": "2026-01-01",
-                                "techreg": 'ТР ТС 017/2011 "..."', "country": "РОССИЯ",
+                                "techreg": 'ТР ТС 017/2011 "..."', "country": "RU",
                                 "producer": "ИП Байкулов"})
     r = out[0]
     assert r["brand"] == "YCPB" and r["target_gender"] == "ЖЕНСКИЙ" and r["techreg"].startswith("ТР ТС 017")
-    assert r["country"] == "РОССИЯ" and r["declaration_number"] == "Д-1"
+    assert r["country"] == "RU" and r["declaration_number"] == "Д-1"

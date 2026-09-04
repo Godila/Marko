@@ -74,20 +74,30 @@ def _feed_entry(card: Card) -> dict:
     Флаттенинг значений: dict {type,value} (35, 13914) → строка attr_value +
     поле attr_value_type (live); 23557 → "номер:::дата"; список 13836 → по
     записи на элемент; бренд 2504 уезжает в entry.brand.
+    Пустые значения (None, "", пустой список, value="" у dict) не отправляются
+    вовсе — live: «attr_id можно использовать только с attr_value» (producer
+    по умолчанию "" не должен попадать в фид как {"attr_id": 2503, ""}).
     """
     attrs = card.attributes or {}
     good_attrs = []
     for k, v in attrs.items():
         if k == "2504":
             continue
+        if v is None or v == "" or v == []:
+            continue
         if k == "13836" and isinstance(v, list):
-            good_attrs.extend({"attr_id": 13836, "attr_value": item} for item in v)
+            good_attrs.extend({"attr_id": 13836, "attr_value": item}
+                              for item in v if item not in (None, ""))
         elif k == "23557" and isinstance(v, dict):
+            if not v.get("number"):
+                continue
             good_attrs.append(
                 {"attr_id": 23557, "attr_value": f"{v.get('number', '')}:::{v.get('date', '')}"})
         elif isinstance(v, dict) and set(v) == {"type", "value"}:
             # live: квалифицированное значение (35, 13914) — НК требует строку
             # attr_value + поле attr_value_type, вложенный dict → 400
+            if v["value"] is None or v["value"] == "":
+                continue
             good_attrs.append({"attr_id": int(k), "attr_value": v["value"],
                                "attr_value_type": v["type"]})
         else:

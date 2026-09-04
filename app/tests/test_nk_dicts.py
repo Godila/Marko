@@ -53,5 +53,7 @@ def test_category_prefetched_cats_skip_client():
 
 def test_defaults_kv(db):
     assert get_defaults(db)["brand"] == "YCPB"
+    # live: attr 2630 — справочник ISOCountries, дефолт страны = ISO-код
+    assert get_defaults(db)["country"] == "RU"
     set_defaults(db, {**get_defaults(db), "brand": "ADEL"})
     assert get_defaults(db)["brand"] == "ADEL"
