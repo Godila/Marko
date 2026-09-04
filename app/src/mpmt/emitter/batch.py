@@ -8,8 +8,17 @@ from sqlalchemy.orm import Session, attributes
 from mpmt.journal import log_action
 from mpmt.journal.models import Item
 from mpmt.mt.models import MtDoc
+from mpmt.platform.models import PlatformKV
 
 log = logging.getLogger("mpmt.emitter")
+
+# прод (live 04.09): document_type=OTHER без primary_document_custom_name → CHECKED_NOT_OK
+FALLBACK_CUSTOM_NAME = "Чек дистанционной продажи Wildberries (FBS)"
+
+
+def _emitter_defaults(db: Session) -> dict:
+    kv = db.get(PlatformKV, "emitter_defaults")
+    return kv.value if kv else {}
 
 
 def _payload_json(doc: MtDoc) -> None:
@@ -23,6 +32,8 @@ def withdraw_batch(db: Session, inn: str, limit: int = 100) -> int:
 
     Возвращает id первого созданного документа (0 — нечего выводить).
     """
+    defaults = _emitter_defaults(db)
+    fias = defaults.get("fias_id") or ""
     items = db.query(Item).filter_by(state="PENDING_WITHDRAW").limit(limit).all()
     if not items:
         return 0
@@ -44,6 +55,11 @@ def withdraw_batch(db: Session, inn: str, limit: int = 100) -> int:
                           "product_cost": int((it.last_event or {}).get("price") or 0) * 100}
                          for it in grp],
         }
+        if fias:
+            payload["fias_id"] = fias   # МОД места отгрузки: прод отклоняет DISTANCE без него (live 04.09)
+        if not has_fiscal:
+            payload["primary_document_custom_name"] = (
+                defaults.get("primary_custom_name") or FALLBACK_CUSTOM_NAME)
         doc = MtDoc(type="LK_RECEIPT", status="draft", payload=payload)
         db.add(doc)
         db.flush()

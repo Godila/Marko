@@ -22,6 +22,37 @@ def test_withdraw_batch(db):
     from mpmt.journal.models import Item
     assert db.get(Item, "0104630520676025215DDDDDDD").state == "WITHDRAWN"
 
+def test_withdraw_fias_and_custom_name(db):
+    """kv emitter_defaults: fias_id в payload (задан — всегда), custom_name — только при OTHER."""
+    from mpmt.platform.models import PlatformKV
+    db.add(PlatformKV(key="emitter_defaults", value={
+        "fias_id": "b944722c-3080-4a72-b9a5-57e11533083c",
+        "primary_custom_name": "Чек дистанционной продажи Wildberries"}))
+    db.commit()
+    _sale(db, "0104630520676025215FISC0001")            # фискальная → RECEIPT
+    d1 = withdraw_batch(db, INN)
+    p1 = db.get(MtDoc, d1).payload
+    assert p1["fias_id"] == "b944722c-3080-4a72-b9a5-57e11533083c"
+    assert "primary_document_custom_name" not in p1     # при RECEIPT поле строго отсутствует
+    apply_event(db, source="wb_excise", source_event_id="nf2:1", kind="sale",
+                km="0104630520676025215NOFI0002", srid="nf2", payload={"price": 100})
+    d2 = withdraw_batch(db, INN)
+    p2 = db.get(MtDoc, d2).payload
+    assert p2["document_type"] == "OTHER"
+    assert p2["fias_id"] == "b944722c-3080-4a72-b9a5-57e11533083c"
+    assert p2["primary_document_custom_name"] == "Чек дистанционной продажи Wildberries"
+
+
+def test_withdraw_without_kv_defaults(db):
+    """Без kv: fias_id не подставляется; при OTHER custom_name — непустой фолбэк."""
+    apply_event(db, source="wb_excise", source_event_id="nf3:1", kind="sale",
+                km="0104630520676025215NOFI0003", srid="nf3", payload={"price": 100})
+    d = withdraw_batch(db, INN)
+    p = db.get(MtDoc, d).payload
+    assert "fias_id" not in p
+    assert p["primary_document_custom_name"]            # прод требует непустое при OTHER
+
+
 def test_return_batch_blocked_without_receipt(db):
     km = "0104630520676025215EEEEEEE"
     apply_event(db, source="wb_excise", source_event_id="x:1", kind="sale", km=km, srid="y1",
