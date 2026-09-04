@@ -1,12 +1,16 @@
-"""REST НК: декларации (справочник), дефолты карточек, атрибутные модели по ТН ВЭД, импорт выгрузки, подача фида.
+"""REST НК: декларации (справочник), дефолты карточек, атрибутные модели по ТН ВЭД, импорт выгрузки, подача фида,
+выгрузной артефакт для 1С (xlsx/csv по published-карточкам батча).
 
 Чтение — scope read, запись — nkmt:import, все мутации через audit().
 dicts/attributes: сначала дешёвая валидация 10 цифр (400), и только потом
 токен ЧЗ + NkClient — кривой tnved отсекается до какой-либо сети.
 """
+import csv
+import io
 import re
 
-from fastapi import APIRouter, Depends, File, HTTPException, Query, UploadFile
+import openpyxl
+from fastapi import APIRouter, Depends, File, HTTPException, Query, Response, UploadFile
 from pydantic import BaseModel
 from sqlalchemy.orm import Session
 
@@ -242,3 +246,47 @@ def batch_detail(
              for c in q.order_by(Card.id).all()]
     return {"id": b.id, "status": b.status, "source_filename": b.source_filename,
             "stats": b.stats, "created_at": b.created_at, "cards": cards}
+
+
+XLSX_MIME = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+
+
+@router.get("/batches/{batch_id}/report")
+def batch_report(
+    batch_id: int,
+    format: str = "xlsx",
+    tok: PlatformToken = Depends(require_scope("read")),
+    db: Session = Depends(get_db),
+):
+    """Выгрузной артефакт для 1С: published-карточки батча, сортировка по article.
+
+    xlsx (по умолчанию) — openpyxl, лист «GTIN», шапка GTIN|Наименование;
+    csv — gtin;name в UTF-8 с BOM (Excel). Пустой батч — отчёт из одной шапки.
+    """
+    if not db.get(Batch, batch_id):
+        raise HTTPException(404, "batch not found")
+    if format not in ("xlsx", "csv"):
+        raise HTTPException(400, "format must be xlsx or csv")
+    cards = (db.query(Card)
+             .filter(Card.batch_id == batch_id, Card.status == "published")
+             .order_by(Card.article).all())
+    if format == "csv":
+        buf = io.StringIO()
+        w = csv.writer(buf, delimiter=";")
+        w.writerow(["GTIN", "Наименование"])
+        for c in cards:
+            w.writerow([c.gtin, c.name])
+        return Response(buf.getvalue().encode("utf-8-sig"), media_type="text/csv",
+                        headers={"Content-Disposition":
+                                 f'attachment; filename="nkmt-batch-{batch_id}.csv"'})
+    wb = openpyxl.Workbook()
+    ws = wb.active
+    ws.title = "GTIN"
+    ws.append(["GTIN", "Наименование"])
+    for c in cards:
+        ws.append([c.gtin, c.name])
+    buf = io.BytesIO()
+    wb.save(buf)
+    return Response(buf.getvalue(), media_type=XLSX_MIME,
+                    headers={"Content-Disposition":
+                             f'attachment; filename="nkmt-batch-{batch_id}.xlsx"'})
