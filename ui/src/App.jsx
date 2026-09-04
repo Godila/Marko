@@ -1,4 +1,4 @@
-import React, { useEffect, useState } from 'react'
+import React, { useEffect, useRef, useState } from 'react'
 
 const api = async (path, token, opts = {}) => {
   const r = await fetch(path, { ...opts, headers: { 'Authorization': `Bearer ${token.trim()}`,
@@ -6,6 +6,31 @@ const api = async (path, token, opts = {}) => {
   if (!r.ok) throw new Error(`${r.status}`)
   return r.headers.get('content-type')?.includes('json') ? r.json() : r.text()
 }
+
+// НКМТ: как api(), но FormData идёт без Content-Type, а в ошибке виден {detail} (409/502)
+const nkmtErr = async (r) => {
+  let m = `${r.status}`
+  try { const j = await r.json(); if (j && j.detail != null) m += ': ' + (typeof j.detail === 'string' ? j.detail : JSON.stringify(j.detail)) } catch {}
+  return m
+}
+const nkmt = async (path, token, opts = {}) => {
+  const json = opts.body != null && !(opts.body instanceof FormData)
+  const r = await fetch(path, { ...opts, headers: { 'Authorization': `Bearer ${token.trim()}`,
+    ...(json ? { 'Content-Type': 'application/json' } : {}), ...(opts.headers || {}) } })
+  if (!r.ok) throw new Error(await nkmtErr(r))
+  return r.headers.get('content-type')?.includes('json') ? r.json() : r.text()
+}
+const nkmtBlob = async (path, token) => {  // отчёты: токен в заголовке, не в URL
+  const r = await fetch(path, { headers: { 'Authorization': `Bearer ${token.trim()}` } })
+  if (!r.ok) throw new Error(await nkmtErr(r))
+  return r.blob()
+}
+
+const CARD_STATUSES = ['ok', 'error', 'fed', 'moderation', 'notsigned', 'signing', 'published', 'errors', 'error_sign']
+const DEF_FIELDS = [
+  ['brand', 'Бренд'], ['techreg', 'Техрегламент'], ['target_gender', 'Пол'],
+  ['size_system', 'Система размеров'], ['country', 'Страна'], ['producer', 'Производитель'],
+  ['declaration_number', 'Номер декларации'], ['declaration_date', 'Дата декларации']]
 
 export default function App() {
   const [token, setToken] = useState(localStorage.getItem('tok') || '')
@@ -15,6 +40,12 @@ export default function App() {
   const [inn, setInn] = useState('090201471350'); const [msg, setMsg] = useState('')
   const [pre, setPre] = useState('')
   const [stateFilter, setStateFilter] = useState('')
+  // Каталог (НКМТ)
+  const [nb, setNb] = useState([]); const [nbOpen, setNbOpen] = useState(null); const [nbCards, setNbCards] = useState([])
+  const [cardFilter, setCardFilter] = useState(''); const [impFile, setImpFile] = useState(null)
+  const fileRef = useRef(null)
+  const [decls, setDecls] = useState([]); const [dnum, setDnum] = useState(''); const [ddate, setDdate] = useState('')
+  const [defs, setDefs] = useState(null)
 
   const load = async () => {
     if (!token) return
@@ -26,6 +57,68 @@ export default function App() {
     } catch (e) { setMsg('ошибка: ' + e.message) }
   }
   useEffect(() => { localStorage.setItem('tok', token); load() }, [token, stateFilter])
+
+  const loadNb = async () => {
+    try { setNb(await nkmt('/v1/nkmt/batches', token)) } catch (e) { setMsg('ошибка: ' + e.message) } }
+  const loadDecls = async () => {
+    try { setDecls(await nkmt('/v1/nkmt/declarations', token)) } catch (e) { setMsg('ошибка: ' + e.message) } }
+  useEffect(() => {
+    if (!token || tab !== 'catalog') return
+    loadNb(); loadDecls()
+    nkmt('/v1/nkmt/defaults', token).then(setDefs).catch(e => setMsg('ошибка: ' + e.message))
+  }, [token, tab])
+
+  const loadCards = async (id) => {
+    try {
+      const q = cardFilter ? `?card_status=${encodeURIComponent(cardFilter)}` : ''
+      setNbCards((await nkmt(`/v1/nkmt/batches/${id}${q}`, token)).cards || [])
+    } catch (e) { setMsg('ошибка: ' + e.message) }
+  }
+  const openNb = (id) => {
+    if (nbOpen === id) { setNbOpen(null); return }
+    setNbOpen(id); loadCards(id)
+  }
+  useEffect(() => { if (token && nbOpen != null) loadCards(nbOpen) }, [cardFilter])
+
+  const doImport = async () => {
+    if (!impFile) { setMsg('выберите файл'); return }
+    try {
+      const fd = new FormData(); fd.append('file', impFile)
+      const r = await nkmt('/v1/nkmt/import', token, { method: 'POST', body: fd })
+      setMsg(''); setPre(`импорт: batch ${r.batch_id}\n${JSON.stringify(r.stats, null, 2)}`)
+      setImpFile(null); if (fileRef.current) fileRef.current.value = ''
+      loadNb()
+    } catch (e) { setMsg('ошибка: ' + e.message) }
+  }
+  const nbAction = async (id, action) => {
+    try {
+      const r = await nkmt(`/v1/nkmt/batches/${id}/${action}`, token, { method: 'POST' })
+      setMsg(''); setPre(`${action} batch ${id}:\n${JSON.stringify(r, null, 2)}`)
+      loadNb(); if (nbOpen === id) loadCards(id)
+    } catch (e) { setMsg('ошибка: ' + e.message) }
+  }
+  const nbReport = async (id, fmt) => {
+    try {
+      const blob = await nkmtBlob(`/v1/nkmt/batches/${id}/report?format=${fmt}`, token)
+      const url = URL.createObjectURL(blob)
+      const a = document.createElement('a'); a.href = url; a.download = `nkmt-batch-${id}.${fmt}`; a.click()
+      URL.revokeObjectURL(url); setMsg('')
+    } catch (e) { setMsg('ошибка: ' + e.message) }
+  }
+  const addDecl = async () => {
+    if (!dnum || !ddate) { setMsg('введите номер и дату'); return }
+    try {
+      await nkmt('/v1/nkmt/declarations', token, { method: 'POST', body: JSON.stringify({ doc_number: dnum, doc_date: ddate }) })
+      setDnum(''); setDdate(''); setMsg(''); loadDecls()
+    } catch (e) { setMsg('ошибка: ' + e.message) }
+  }
+  const delDecl = async (id) => {
+    try { await nkmt(`/v1/nkmt/declarations/${id}`, token, { method: 'DELETE' }); loadDecls() } catch (e) { setMsg('ошибка: ' + e.message) }
+  }
+  const saveDefs = async () => {
+    if (defs == null) return
+    try { await nkmt('/v1/nkmt/defaults', token, { method: 'PUT', body: JSON.stringify(defs) }); setMsg('дефолты сохранены') } catch (e) { setMsg('ошибка: ' + e.message) }
+  }
 
   const mkBatch = async (kind) => {
     try {
@@ -50,9 +143,9 @@ export default function App() {
     <div style={{ fontFamily: 'sans-serif', margin: '0 auto', maxWidth: 1100 }}>
       <h2>MP-GIS_MT</h2>
       <input value={token} onChange={e => setToken(e.target.value)} placeholder="API token" size={40} />
-      {['journal', 'batches'].map(t => (
+      {['journal', 'batches', 'catalog'].map(t => (
         <button key={t} onClick={() => setTab(t)} style={{ marginLeft: 8, fontWeight: tab === t ? 'bold' : 'normal' }}>
-          {t === 'journal' ? 'Журнал' : 'Батчи'}</button>))}
+          {t === 'journal' ? 'Журнал' : t === 'batches' ? 'Батчи' : 'Каталог'}</button>))}
       <select value={stateFilter} onChange={e => setStateFilter(e.target.value)} style={{ marginLeft: 12 }}>
         <option value="">все состояния</option>
         {Object.keys(stats || {}).map(s => <option key={s} value={s}>{s} ({stats[s]})</option>)}
@@ -83,6 +176,73 @@ export default function App() {
                 <td>{d.status === 'draft' && <button onClick={() => mtAction(d.id, 'submit')}>Подать</button>}
                     {(d.status === 'submitted' || d.status === 'error') && <button onClick={() => mtAction(d.id, 'check')}>Проверить</button>}</td></tr>))}</tbody>
           </table></div>)}
+      {tab === 'catalog' && (
+        <div style={{ marginTop: 12 }}>
+          <h3>Импорт</h3>
+          <input ref={fileRef} type="file" accept=".xlsx" onChange={e => setImpFile(e.target.files[0] || null)} />
+          <button onClick={doImport} style={{ marginLeft: 8 }} disabled={!impFile}>Импорт</button>
+
+          <h3>Батчи</h3>
+          <table border="1" cellPadding="4" style={{ borderCollapse: 'collapse', width: '100%' }}>
+            <thead><tr><th>id</th><th>файл</th><th>статус</th><th>ok/err</th><th>создан</th><th>действия</th></tr></thead>
+            <tbody>{nb.map(b => (
+              <React.Fragment key={b.id}>
+                <tr>
+                  <td>{b.id}</td><td>{b.source_filename}</td><td>{b.status}</td>
+                  <td>{b.stats ? `${b.stats.ok}/${b.stats.error}` : '—'}</td>
+                  <td>{b.created_at}</td>
+                  <td>
+                    <button onClick={() => openNb(b.id)}>{nbOpen === b.id ? 'Скрыть карточки' : 'Карточки'}</button>
+                    <button onClick={() => nbAction(b.id, 'feed')} style={{ marginLeft: 4 }}>Подать</button>
+                    <button onClick={() => nbAction(b.id, 'refresh')} style={{ marginLeft: 4 }}>Обновить</button>
+                    <button onClick={() => nbAction(b.id, 'sign')} style={{ marginLeft: 4 }}>Подписать</button>
+                    <button onClick={() => nbReport(b.id, 'xlsx')} style={{ marginLeft: 4 }}>Отчёт xlsx</button>
+                    <button onClick={() => nbReport(b.id, 'csv')} style={{ marginLeft: 4 }}>csv</button>
+                  </td>
+                </tr>
+                {nbOpen === b.id && (
+                  <tr><td colSpan={6}>
+                    <select value={cardFilter} onChange={e => setCardFilter(e.target.value)}>
+                      <option value="">все статусы карточек</option>
+                      {CARD_STATUSES.map(s => <option key={s} value={s}>{s}</option>)}
+                    </select>
+                    <table border="1" cellPadding="4" style={{ borderCollapse: 'collapse', marginTop: 8, width: '100%' }}>
+                      <thead><tr><th>артикул</th><th>gtin</th><th>наименование</th><th>статус</th><th>ошибка</th></tr></thead>
+                      <tbody>{nbCards.map(c => (
+                        <tr key={c.id}>
+                          <td>{c.article}</td>
+                          <td style={{ fontFamily: 'monospace' }}>{c.gtin || '—'}</td>
+                          <td>{c.name}</td>
+                          <td>{c.status}</td>
+                          <td style={{ color: 'red' }}>{c.error_text || ''}</td>
+                        </tr>))}</tbody>
+                    </table>
+                  </td></tr>)}
+              </React.Fragment>))}</tbody>
+          </table>
+
+          <h3>Декларации</h3>
+          <input value={dnum} onChange={e => setDnum(e.target.value)} placeholder="номер" size={20} />
+          <input value={ddate} onChange={e => setDdate(e.target.value)} type="date" style={{ marginLeft: 4 }} />
+          <button onClick={addDecl} style={{ marginLeft: 4 }}>Добавить</button>
+          <table border="1" cellPadding="4" style={{ borderCollapse: 'collapse', marginTop: 8, width: '100%' }}>
+            <thead><tr><th>id</th><th>номер</th><th>дата</th><th>тип</th><th></th></tr></thead>
+            <tbody>{decls.map(d => (
+              <tr key={d.id}>
+                <td>{d.id}</td><td>{d.doc_number}</td><td>{d.doc_date}</td><td>{d.doc_type}</td>
+                <td>[<a href="#" onClick={e => { e.preventDefault(); delDecl(d.id) }}>удалить</a>]</td>
+              </tr>))}</tbody>
+          </table>
+
+          <h3>Дефолты</h3>
+          {DEF_FIELDS.map(([k, label]) => (
+            <div key={k} style={{ marginBottom: 4 }}>
+              <span style={{ display: 'inline-block', width: 180 }}>{label}:</span>
+              <input value={(defs || {})[k] || ''} onChange={e => setDefs({ ...(defs || {}), [k]: e.target.value })}
+                type={k === 'declaration_date' ? 'date' : 'text'} size={k === 'techreg' ? 60 : 40} />
+            </div>))}
+          <button onClick={saveDefs}>Сохранить</button>
+        </div>)}
       <pre style={{ background: '#f4f4f4', padding: 8, marginTop: 12, maxHeight: 300, overflow: 'auto' }}>{pre || msg}</pre>
     </div>
   )
