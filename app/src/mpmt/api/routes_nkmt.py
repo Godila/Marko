@@ -1,4 +1,4 @@
-"""REST НК: декларации (справочник), дефолты карточек, атрибутные модели по ТН ВЭД, импорт выгрузки.
+"""REST НК: декларации (справочник), дефолты карточек, атрибутные модели по ТН ВЭД, импорт выгрузки, подача фида.
 
 Чтение — scope read, запись — nkmt:import, все мутации через audit().
 dicts/attributes: сначала дешёвая валидация 10 цифр (400), и только потом
@@ -132,6 +132,31 @@ def nkmt_import(
     audit(db, tok.principal_id, "nkmt.import",
           {"batch_id": batch_id, "filename": file.filename, "stats": b.stats})
     return {"batch_id": batch_id, "stats": b.stats}
+
+
+@router.post("/batches/{batch_id}/feed")
+def nkmt_feed(
+    batch_id: int,
+    tok: PlatformToken = Depends(require_scope("nkmt:import")),
+    db: Session = Depends(get_db),
+):
+    from mpmt.connector_mt import manager
+    from mpmt.nkmt.client import NkClient, NkHttpError
+    from mpmt.nkmt.service import feed_batch
+    from mpmt.settings import settings
+    if not db.get(Batch, batch_id):
+        raise HTTPException(404, "batch not found")
+    try:
+        token = manager.get_token(db)
+        client = NkClient(settings.mt_base_v3)
+        out = feed_batch(db, batch_id, client, token)
+    except (NkHttpError, RuntimeError) as e:
+        raise HTTPException(502, f"nk upstream error: {e}")
+    except ValueError as e:
+        raise HTTPException(409, str(e))
+    audit(db, tok.principal_id, "nkmt.feed",
+          {"batch_id": batch_id, "feed_id": out["feed_id"], "feed_ids": out["feed_ids"]})
+    return out
 
 
 @router.get("/batches")
