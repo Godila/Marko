@@ -16,7 +16,7 @@ def test_ok_row(model):
     out = validate.validate_rows(db := None, None, None, [_row()])[0]   # db/client не нужны при патчах
     assert out["ok"] and out["cat_id"] == "214943"
     a = out["attributes"]
-    assert a["2504"] == 2102811 and a["35"] == {"type": "РОССИЯ", "value": "M"}
+    assert a["2504"] == "YCPB" and a["35"] == {"type": "РОССИЯ", "value": "M"}
     assert a["13836"] == [BASE["techreg"]] and a["13914"]["type"] == "Модель"
 
 

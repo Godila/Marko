@@ -109,10 +109,11 @@ def _validate_row(db, client, token: str, row: dict, errors: list, models: dict)
     # 5. цвет — нормализация к написанию preset
     color = _normalize_color(amap, str(row.get("color", "")))
 
-    # 6. бренд
-    brand_id = 0
+    # 6. бренд: имя должно существовать в НК (resolve_brand кэширует имя→id в brand_cache);
+    #    в атрибут идёт имя ТМ строкой — 2504 «Торговая марка товара» (дамп /nk/feed)
+    brand = str(row.get("brand", ""))
     try:
-        brand_id = int(dicts.resolve_brand(db, client, token, str(row.get("brand", ""))))
+        dicts.resolve_brand(db, client, token, brand)
     except dicts.UnknownBrand as e:
         errors.append(f"бренд не найден: {e.args[0]}")
     except Exception as e:
@@ -153,7 +154,7 @@ def _validate_row(db, client, token: str, row: dict, errors: list, models: dict)
         "35": {"type": size_system, "value": str(row.get("size", ""))},
         "13914": {"type": "Модель", "value": str(row.get("model") or row.get("article") or "")},
         "13836": [str(row.get("techreg", ""))],      # списочный атрибут
-        "2504": brand_id,                            # Товарный знак
+        "2504": brand,                              # Товарный знак — имя ТМ строкой (дамп /nk/feed)
         "2630": str(row.get("country", "")),         # Страна производства
         "2503": str(row.get("producer", "")),        # Производитель
         "23557": {"number": declaration_number, "date": declaration_date},

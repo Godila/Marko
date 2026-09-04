@@ -12,7 +12,7 @@ from tests.test_api_nkmt_dicts import AUTH, client  # noqa: F401  (фиксту�
 # формат attributes из Task 6: ключи — str(attr_id)
 ATTRS = {
     "2478": "Футболка тест", "12": "футболка", "36": "БЕЛЫЙ",
-    "2483": "100% хлопок", "14013": "M", "2504": 2102811,
+    "2483": "100% хлопок", "14013": "M", "2504": "YCPB",
     "35": {"type": "пол", "value": "жен"}, "13914": {"type": "цв", "value": "белый"},
     "13836": ["хб", "шерсть"], "2630": "RU", "2503": "ООО Ромашка",
     "23557": {"number": "ЕАЭС №RU Д-1", "date": "2025-12-01"},
@@ -67,7 +67,7 @@ def test_feed_generates_gtins_and_builds_entries(db, seeds):
     assert set(by_gtin) == {"4630520699970", gen}
     e = by_gtin["4630520699970"]
     assert e["good_name"] == "Футболка тест" and e["tnved"] == "6109100000"
-    assert e["brand"] == 2102811 and e["categories"] == [214943]
+    assert e["brand"] == "YCPB" and e["categories"] == [214943]
     assert e["moderation"] == 1  # поле entry (дамп): модерация сразу после feed
     ga = e["good_attrs"]
     ids = [a["attr_id"] for a in ga]
