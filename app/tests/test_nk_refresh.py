@@ -11,15 +11,17 @@ from tests.test_api_nkmt_dicts import AUTH, client  # noqa: F401  (фиксту�
 
 
 class FakeNk:
-    """feed_status отдаёт заданный статус; для Rejected — ещё и позиционную ошибку."""
+    """feed_status отдаёт заданный статус (str) или по словарю feed_id→статус
+    (мультичанковый батч); для Rejected — ещё и позиционную ошибку чанка."""
 
-    def __init__(self, status: str):
+    def __init__(self, status):
         self.status = status
 
     def feed_status(self, token, feed_id):
-        out = {"status": self.status}
-        if self.status == "Rejected":
-            out["errors"] = [{"row": 1, "error": "плохой цвет"}]
+        st = self.status[feed_id] if isinstance(self.status, dict) else self.status
+        out = {"status": st}
+        if st == "Rejected":
+            out["errors"] = [{"row": 1, "error": f"плохой цвет {feed_id}"}]
         return out
 
 
@@ -77,6 +79,41 @@ def test_refresh_rejected_without_payload(db, seeds):
     refresh_batch(db, seeds.id, Bare("Rejected"), "T")
     cs = cards(db, seeds.id)
     assert all(cs[a].status == "errors" and cs[a].error_text for a in CARDS)
+
+
+@pytest.fixture
+def chunked(db):
+    """Мультичанковый батч: stats.feed_ids хранит все чанки, feed_id — последний."""
+    b = Batch(source_filename="big.xlsx", status="moderation", feed_id="42",
+              stats={"feed_ids": ["41", "42"]})
+    db.add(b); db.flush()
+    for art, gtin in (("A", "4630520699980"), ("B", "4630520699981")):
+        db.add(Card(article=art, gtin=gtin, batch_id=b.id,
+                    tnved="6109100000", name=f"Футболка {art}", status="fed"))
+    db.commit()
+    return b
+
+
+def test_refresh_multichunk_rejected_chunk(db, chunked):
+    out = refresh_batch(db, chunked.id, FakeNk({"41": "Rejected", "42": "Signed"}), "T")
+    assert out == {"feed_status": "Rejected", "batch_status": "error"}
+    assert db.get(Batch, chunked.id).status == "error"
+    cs = cards(db, chunked.id)
+    assert all(c.status == "errors" and "плохой цвет 41" in c.error_text
+               for c in cs.values())  # ошибка первого отклонённого чанка
+
+
+def test_refresh_multichunk_all_signed(db, chunked):
+    out = refresh_batch(db, chunked.id, FakeNk({"41": "Signed", "42": "Signed"}), "T")
+    assert out == {"feed_status": "Signed", "batch_status": "published"}
+    assert db.get(Batch, chunked.id).status == "published"
+    assert all(c.status == "published" for c in cards(db, chunked.id).values())
+
+
+def test_refresh_multichunk_mixed_inflight(db, chunked):
+    out = refresh_batch(db, chunked.id, FakeNk({"41": "Signed", "42": "Processing"}), "T")
+    assert out == {"feed_status": "Processing", "batch_status": "moderation"}
+    assert all(c.status == "fed" for c in cards(db, chunked.id).values())  # ничего не меняем
 
 
 def test_refresh_guards(db, seeds):

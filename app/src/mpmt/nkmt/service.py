@@ -147,13 +147,20 @@ def _rejected_error(raw: dict) -> str:
     return "фид отклонён"
 
 
+KNOWN_FEED_STATUSES = ("Received", "Processing", "Moderated", "Signed", "Rejected")
+
+
 def refresh_batch(db, batch_id: int, client, token) -> dict:
     """Статус фида → статусы карточек/батча (опрос /nk/feed-status).
 
     Применим к батчам moderation|signing с feed_id (иначе ValueError → 409).
-    Received/Processing — в полёте, ничего не меняем; Moderated — карточки
-    (кроме error*) готовы к подписи → notsigned; Signed → published;
-    Rejected → errors + текст ошибки фида. Возвращает статусы фида и батча.
+    Опрашиваются ВСЕ чанки фида (stats.feed_ids; feed_id — только последний
+    чанк). Агрегат: любой Rejected → карточки (кроме error*) → errors с
+    текстом ошибки первого отклонённого чанка, батч → error; все Signed →
+    published; все Moderated → notsigned + батч → signing; микс с
+    Received/Processing — в полёте, ничего не меняем (ярлык «Processing»).
+    Незнакомый статус любого чанка — RuntimeError. Возвращает агрегатный
+    статус фида и статус батча.
     """
     batch = db.get(Batch, batch_id)
     if batch is None:
@@ -161,28 +168,38 @@ def refresh_batch(db, batch_id: int, client, token) -> dict:
     if batch.status not in ("moderation", "signing") or not batch.feed_id:
         raise ValueError(f"batch status '{batch.status}' is not refreshable")
 
-    raw = client.feed_status(token, batch.feed_id) or {}
-    st = raw.get("status", "")
+    ids = (batch.stats or {}).get("feed_ids") or [batch.feed_id]
+    polls = []
+    for fid in ids:
+        raw = client.feed_status(token, fid) or {}
+        st = raw.get("status", "")
+        if st not in KNOWN_FEED_STATUSES:
+            raise RuntimeError(f"unexpected feed status '{st}'")
+        polls.append((st, raw))
+
+    statuses = [st for st, _ in polls]
     cards = db.query(Card).filter(
         Card.batch_id == batch_id, Card.status.notin_(
             ("error", "errors", "error_sign"))).all()
-    if st in ("Received", "Processing"):
-        return {"feed_status": st, "batch_status": batch.status}  # в полёте — ничего не меняем
-    if st == "Moderated":
-        for card in cards:
-            card.status = "notsigned"
-        batch.status = "signing"
-    elif st == "Signed":
-        for card in cards:
-            card.status = "published"
-        batch.status = "published"
-    elif st == "Rejected":
+    if "Rejected" in statuses:  # любой отклонённый чанк топит весь батч
+        st, raw = polls[statuses.index("Rejected")]
         text = _rejected_error(raw)
         for card in cards:
             card.status = "errors"
             card.error_text = text
         batch.status = "error"
-    else:
-        raise RuntimeError(f"unexpected feed status '{st}'")
+    elif all(s == "Signed" for s in statuses):
+        st = "Signed"
+        for card in cards:
+            card.status = "published"
+        batch.status = "published"
+    elif all(s == "Moderated" for s in statuses):
+        st = "Moderated"
+        for card in cards:
+            card.status = "notsigned"
+        batch.status = "signing"
+    else:  # Received/Processing или их микс с готовыми чанками — в полёте
+        st = statuses[0] if len(set(statuses)) == 1 else "Processing"
+        return {"feed_status": st, "batch_status": batch.status}  # ничего не меняем
     db.commit()
     return {"feed_status": st, "batch_status": batch.status}
