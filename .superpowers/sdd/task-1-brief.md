@@ -1,111 +1,53 @@
-# Task 1 brief
-
-## Global Constraints (binding)
-
-
-- Python 3.12; пакет `mpmt` (src-layout) в `app/`; версии фиксируются в `app/pyproject.toml`.
-- Секреты только в `secrets/` (git-ignored) и `.env` (git-ignored); в репо — `.env.example`.
-- Идемпотентность событий: уникальный ключ `(source, source_event_id)`; повторный поллинг не создаёт дублей.
-- excise-report на базовом токене: **максимум 2 запроса/24ч** (жёстко, 4XX съедает ×10) — расписание 2×/день, не чаще.
-- Ретраи HTTP: только 429/5xx, экспонента 1с/4с/16с, макс 3 попытки, `Retry-After` уважается; 4xx — без ретрая.
-- `product_cost` в документах ЧЗ — **в копейках** (`price_rub * 100`).
-- cis в LK_RECEIPT — короткий КМ из excise (`excise_short`, 31 символ, без криптохвоста).
-- Токен WB читается из файла `secrets/WBtoken.txt` (монтируется в контейнер), никогда не в env-репо и не в логи.
-- БД-тесты гоняются против Postgres из compose (`TEST_DATABASE_URL`), не sqlite (JSONB/upsert).
-- Домен: `gis.adel-factory.ru`. VM-креды: `secrets/VMsecrets.txt` (в чат/логи не выводить).
-- Каждый таск заканчивается коммитом; формат сообщений: `feat|fix|chore: ...`.
-
-
-## Task 1:
- Git-каркас репозитория
+### Task 1: Зависимость openpyxl + модели nkmt + миграция 0006
 
 **Files:**
-- Create: `.gitignore`, `app/pyproject.toml`, `app/src/mpmt/__init__.py`, `app/tests/__init__.py`, `app/tests/test_smoke.py`
-- Create: `deploy/.env.example` (позже наполнится)
+- Modify: `app/pyproject.toml` (dependencies += openpyxl)
+- Create: `app/src/mpmt/nkmt/__init__.py` (пустой), `app/src/mpmt/nkmt/models.py`
+- Modify: `app/tests/conftest.py` (+ импорт моделей nkmt)
+- Create: `app/src/mpmt/alembic/versions/0006_nkmt.py` (autogenerate по циклу из ledger: drop nkmt-схему + DELETE FROM alembic_version WHERE version_num='94526be42e46' → upgrade → autogenerate)
+- Test: `app/tests/test_nkmt_models.py`
 
-**Interfaces:**
-- Produces: python-пакет `mpmt` (пустой), pytest-инфраструктура.
+**Interfaces (Produces):**
+- `nkmt.models.Batch`: id, status(str: new|partial|feeding|moderation|signing|published|error), source_filename(str), feed_id(str), stats(JSON dict), created_at
+- `nkmt.models.Card`: id, batch_id(FK nkmt.batches.id), article(str, UNIQUE), gtin(str, default ""), good_id(str, default ""), tnved(str10), name(str), cat_id(str, default ""), attributes(JSON dict), status(str: ok|fed|moderation|notsigned|signing|published|error|errors|error_sign), error_text(str), created_at, updated_at
+- `nkmt.models.Declaration`: id, doc_number, doc_date, doc_type(declaration|certificate), title; UNIQUE(doc_number, doc_date)
+- `nkmt.models.BrandCache`: id, name(UNIQUE), brand_id(int), updated_at
 
-- [ ] **Step 1: Инициализировать git и .gitignore**
-
-```bash
-cd /c/Users/geor/Desktop/MP-GIS_MT
-git init -b main
-cat > .gitignore <<'EOF'
-__pycache__/
-*.pyc
-.pytest_cache/
-.venv/
-.env
-secrets/
-*.db
-node_modules/
-ui/dist/
-app/alembic/versions/*.pyc
-.playwright-mcp/
-.codegraph/
-EOF
-```
-
-- [ ] **Step 2: Создать pyproject (pytest + deps фазы 0/1)**
-
-`app/pyproject.toml`:
-
-```toml
-[project]
-name = "mpmt"
-version = "0.1.0"
-requires-python = ">=3.12"
-dependencies = [
-    "fastapi>=0.115",
-    "uvicorn[standard]>=0.30",
-    "sqlalchemy>=2.0",
-    "alembic>=1.13",
-    "psycopg[binary]>=3.2",
-    "pydantic-settings>=2.4",
-    "httpx>=0.27",
-]
-
-[project.optional-dependencies]
-dev = ["pytest>=8", "pytest-asyncio>=0.24"]
-
-[build-system]
-requires = ["setuptools>=68"]
-build-backend = "setuptools.build_meta"
-
-[tool.setuptools.packages.find]
-where = ["src"]
-
-[tool.pytest.ini_options]
-testpaths = ["tests"]
-asyncio_mode = "auto"
-```
-
-`app/src/mpmt/__init__.py` — пустой; `app/tests/__init__.py` — пустой.
-
-- [ ] **Step 3: Smoke-тест**
-
-`app/tests/test_smoke.py`:
+- [ ] **Step 1: failing test** (`test_nkmt_models.py`):
 
 ```python
-def test_import():
-    import mpmt
-    assert mpmt is not None
+from mpmt.nkmt.models import Batch, Card, Declaration, BrandCache
+
+
+def test_batch_card_persist(db):
+    b = Batch(status="new", source_filename="x.xlsx")
+    db.add(b); db.flush()
+    c = Card(batch_id=b.id, article="A-1", tnved="6109100000", name="Футболка",
+             attributes={"2478": "Футболка"})
+    db.add(c); db.commit()
+    assert db.query(Card).filter_by(article="A-1").one().batch_id == b.id
+
+
+def test_declaration_unique_pair(db):
+    from sqlalchemy.exc import IntegrityError
+    db.add(Declaration(doc_number="ЕАЭС №RU Д-RU.АБ12.В.12345", doc_date="2026-01-01"))
+    db.commit()
+    db.add(Declaration(doc_number="ЕАЭС №RU Д-RU.АБ12.В.12345", doc_date="2026-01-01"))
+    try:
+        db.commit(); assert False
+    except IntegrityError:
+        db.rollback()
+
+
+def test_brand_cache(db):
+    db.add(BrandCache(name="YCPB", brand_id=2102811)); db.commit()
+    assert db.query(BrandCache).filter_by(name="YCPB").one().brand_id == 2102811
 ```
 
-- [ ] **Step 4: Прогнать**
-
-```bash
-cd app && python -m venv .venv && . .venv/Scripts/activate  # Windows Git Bash
-pip install -e ".[dev]" && pytest -q
-```
-Expected: `1 passed`.
-
-- [ ] **Step 5: Commit**
-
-```bash
-git add -A && git commit -m "chore: repo skeleton, mpmt package, pytest"
-```
-
----
+- [ ] **Step 2:** `pytest tests/test_nkmt_models.py -v` → FAIL (no module nkmt)
+- [ ] **Step 3:** models.py по Interfaces (паттерн `MtDoc` из mt/models.py: `__table_args__={"schema":"nkmt"}`, JSON из sqlalchemy.dialects.postgresql, `created_at = mapped_column(DateTime, server_default=func.now())`, `updated_at` с `onupdate=func.now()`). В conftest добавить `import mpmt.nkmt.models  # noqa`. pyproject: строка `"openpyxl>=3.1",` в dependencies (по алфавиту после httpx).
+- [ ] **Step 4:** `pytest tests/test_nkmt_models.py -v` → PASS (3)
+- [ ] **Step 5:** миграция 0006 (цикл: drop schema nkmt + downgrade alembic_version → upgrade → autogenerate; проверить в файле op.create_table ×4 + uq-констрейнты article и (doc_number,doc_date))
+- [ ] **Step 6:** полный сьют `pytest -q` → все зелёные
+- [ ] **Step 7:** commit `feat(nkmt): models + migration 0006 (batches/cards/declarations/brand_cache)`
 
