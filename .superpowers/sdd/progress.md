@@ -76,3 +76,8 @@ Phase 3 execution (2026-09-02 fresh session, subagent-driven):
 - /root/*.py на VM: sed mpmt→marko (23 файла); backup.sh → префикс marko- (проверен живьём: marko-20260905-141438.sql.gz)
 - НЕ переименовано (осознанно): домен gis.adel-factory.ru, схемы БД (journal/mt/nkmt/wb/platform — доменные, не бренд), локальная папка воркспейса MP-GIS_MT (привязка сессий/памяти/codegraph), agentmemory-id mp-gis_mt, исторические доки/планы, github-репо уже Godila/Marko
 - шероховатость: DNS на самой VM отвалился на gis.adel-factory.ru (наружу 200, локальный --resolve 200; воркер ходит в интернет норм) — транзиент, наблюдать
+
+## 2026-09-05 (вечер) — домен marko.adel-factory.ru (1493b89)
+
+Юзер переключил DNS (старый gis.* удалён). Заменены Caddyfile/settings/.env, LE-серт с первого раза, healthz/UI 200.
+ВАЖНО: signer-агент (закрытая Windows-машина) ходил на старый домен → офлайн до правки его конфига на https://marko.adel-factory.ru + рестарта (руки юзера).
