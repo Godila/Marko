@@ -64,3 +64,15 @@ Phase 3 execution (2026-09-02 fresh session, subagent-driven):
   4) BLOCKER-ON-USER: prod LK_RECEIPT (DISTANCE) requires fias_id (МОД = место деятельности): «06: МОД по указанным ИНН ... ФИАС null не найдены». /mods/info API is beer-only — cannot fetch MOD list for lp programmatically. NEED from user: ФИАС GUID of their registered place of activity (ЛК ЧЗ -> Места деятельности) or the address (we can resolve GUID via public FIAS).
   Status: two duplicate draft LK_RECEIPT docs sit CHECKED_NOT_OK (harmless, KM still in circulation); circle resumes once fias provided: rerun prod_e2e_km.py with --fias.
 - PROD KM CIRCLE COMPLETE (2026-09-04 17:00 MSK): LK_RECEIPT CHECKED_OK (doc 2, uuid 0a9900e7) -> LP_RETURN CHECKED_OK (doc 3, uuid 48009df8). Code 010463056230827421521R*4(Fk(6IU withdrawn from circulation (DISTANCE sale, fias b944722c-...083c = user's production MOD) and RETURNED back into circulation. FULL PRODUCTION E2E via platform pipeline (mt.docs -> manager.submit_doc -> check_doc -> signer УКЭП -> ГИС МТ). Remaining KM: 3 usable in tk-km.txt (code#3 broken 30 chars). prod_e2e_km.py updated with 404-retry on poll (docs need seconds to index after create). MOD registered by user in ЛК ЧЗ with production address FIAS; фулфилмент later = second MOD + WB-warehouse->fias mapping (phase-4 backlog). KNOWN for phase 4: emitter must add fias_id + primary_document_custom_name to real-sale LK_RECEIPT payloads.
+
+## 2026-09-05 — РЕБРЕНДИНГ MP-GIS_MT/mpmt → МАРКО/marko (коммит 7ca7232, сьют 141)
+
+Прод переименован полностью, данные целы (journal=79, nkmt cards/batches, mt.docs=3):
+- код: пакет `mpmt` → `marko` (git mv), env `MPMT_` → `MARKO_`, pyproject/Dockerfile/worker-CMD
+- прод-стек: compose `name: marko` → контейнеры/образы **marko-{api,worker,ui,caddy,postgres,backup}-1**;
+  БД и роль postgres `mpmt`→`marko` (ALTER через temp-superuser: session user не ренеймится сам + обе команды в одном -c = одна транзакция, DROP-ошибка откатывает RENAME — разделять!)
+- volume: `docker volume rename` НЕ существует в этом Docker → копия tar'ом в marko_pgdata/marko_caddy_data (TLS Caddy сохранён), старые удалены
+- пути VM: `/opt/mpmt` → `/opt/marko` (repo+secrets); тест-контейнер `mpmt-pg` → `marko-pg`, БД `mpmt_test` → `marko_test`, роль тоже marko; local app/.env → marko@…/marko_test
+- /root/*.py на VM: sed mpmt→marko (23 файла); backup.sh → префикс marko- (проверен живьём: marko-20260905-141438.sql.gz)
+- НЕ переименовано (осознанно): домен gis.adel-factory.ru, схемы БД (journal/mt/nkmt/wb/platform — доменные, не бренд), локальная папка воркспейса MP-GIS_MT (привязка сессий/памяти/codegraph), agentmemory-id mp-gis_mt, исторические доки/планы, github-репо уже Godila/Marko
+- шероховатость: DNS на самой VM отвалился на gis.adel-factory.ru (наружу 200, локальный --resolve 200; воркер ходит в интернет норм) — транзиент, наблюдать
