@@ -5,7 +5,7 @@ class Settings(BaseSettings):
 
     database_url: str = "postgresql+psycopg://marko:marko@localhost:5432/marko"
     wb_token_file: str = "secrets/WBtoken.txt"
-    domain: str = "gis.adel-factory.ru"
+    domain: str = "marko.adel-factory.ru"
     mt_base_v3: str = "https://markirovka.crpt.ru/api/v3/true-api"
     mt_base_v4: str = "https://markirovka.crpt.ru/api/v4/true-api"
     mt_pg: str = "lp"
