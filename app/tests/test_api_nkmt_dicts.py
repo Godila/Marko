@@ -1,7 +1,7 @@
 import pytest
 from fastapi.testclient import TestClient
-from mpmt.api.app import create_app
-from mpmt.platform.models import PlatformPrincipal, PlatformToken, hash_token
+from marko.api.app import create_app
+from marko.platform.models import PlatformPrincipal, PlatformToken, hash_token
 
 AUTH = {"Authorization": "Bearer t1"}                 # read + nkmt:import + docs:submit
 AUTH_RO = {"Authorization": "Bearer t-ro"}            # read-only

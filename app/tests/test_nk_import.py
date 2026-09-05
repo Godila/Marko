@@ -1,5 +1,5 @@
 """Импорт выгрузки: POST /v1/nkmt/import + GET /batches (смешанные пакеты, upsert по артикулу)."""
-from mpmt.nkmt.models import Batch, Card, Declaration
+from marko.nkmt.models import Batch, Card, Declaration
 from tests.test_api_nkmt_dicts import AUTH, AUTH_RO, client  # noqa: F401  (фикстура client)
 from tests.test_nk_parse import HDR, make_xlsx
 
@@ -21,7 +21,7 @@ def _row_gtin(article: str, gtin: str) -> list:
 
 
 def test_import_mixed_and_reimport(db, client, monkeypatch, model):
-    monkeypatch.setattr("mpmt.connector_mt.manager.get_token", lambda _db: "T")
+    monkeypatch.setattr("marko.connector_mt.manager.get_token", lambda _db: "T")
     db.add(Declaration(doc_number="Д-1", doc_date="2025-12-01")); db.commit()
     files = {"file": ("import.xlsx", make_xlsx(HDR, [ROW_OK, ROW_BAD_TYPE, ROW_DUP]), XLSX_MIME)}
     r = client.post("/v1/nkmt/import", headers=AUTH, files=files)
@@ -53,7 +53,7 @@ def test_import_mixed_and_reimport(db, client, monkeypatch, model):
 
 def test_import_gtin_conflict_not_persisted(db, client, monkeypatch, model):
     GTIN = "46305206999701"
-    monkeypatch.setattr("mpmt.connector_mt.manager.get_token", lambda _db: "T")
+    monkeypatch.setattr("marko.connector_mt.manager.get_token", lambda _db: "T")
     db.add(Declaration(doc_number="Д-1", doc_date="2025-12-01"))
     b0 = Batch(source_filename="seed.xlsx"); db.add(b0); db.flush()
     db.add(Card(article="G-1", gtin=GTIN, batch_id=b0.id, tnved="6109100000",
@@ -76,7 +76,7 @@ def test_import_gtin_conflict_not_persisted(db, client, monkeypatch, model):
 
 
 def test_import_gtin_malformed_not_persisted_then_filled(db, client, monkeypatch, model):
-    monkeypatch.setattr("mpmt.connector_mt.manager.get_token", lambda _db: "T")
+    monkeypatch.setattr("marko.connector_mt.manager.get_token", lambda _db: "T")
     db.add(Declaration(doc_number="Д-1", doc_date="2025-12-01"))
     b0 = Batch(source_filename="seed.xlsx"); db.add(b0); db.flush()
     db.add(Card(article="F-1", gtin="", batch_id=b0.id, tnved="6109100000",

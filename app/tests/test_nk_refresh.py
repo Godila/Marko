@@ -5,8 +5,8 @@ Moderated — готов к подписи, Signed — опубликовано,
 """
 import pytest
 
-from mpmt.nkmt.models import Batch, Card
-from mpmt.nkmt.service import refresh_batch
+from marko.nkmt.models import Batch, Card
+from marko.nkmt.service import refresh_batch
 from tests.test_api_nkmt_dicts import AUTH, client  # noqa: F401  (фикстура client)
 
 
@@ -141,8 +141,8 @@ def test_refresh_guards(db, seeds):
 
 
 def test_refresh_endpoint(db, client, monkeypatch, seeds):
-    monkeypatch.setattr("mpmt.connector_mt.manager.get_token", lambda _db: "T")
-    monkeypatch.setattr("mpmt.nkmt.client.NkClient", lambda base: FakeNk("Moderated"))
+    monkeypatch.setattr("marko.connector_mt.manager.get_token", lambda _db: "T")
+    monkeypatch.setattr("marko.nkmt.client.NkClient", lambda base: FakeNk("Moderated"))
     r = client.post(f"/v1/nkmt/batches/{seeds.id}/refresh", headers=AUTH)
     assert r.status_code == 200 and r.json() == {"feed_status": "Moderated",
                                                 "batch_status": "signing"}

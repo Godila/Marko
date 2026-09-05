@@ -1,7 +1,7 @@
 from datetime import datetime, timedelta, timezone
 
-from mpmt.connector_wb.poll import run_once
-from mpmt.worker import seconds_until
+from marko.connector_wb.poll import run_once
+from marko.worker import seconds_until
 
 MSK = timezone(timedelta(hours=3))
 

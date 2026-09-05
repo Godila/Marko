@@ -5,13 +5,13 @@ from datetime import datetime, timedelta
 import httpx
 import pytest
 
-from mpmt.connector_mt import manager
-from mpmt.connector_mt.client import MtClient, MtHttpError
-from mpmt.journal import apply_event
-from mpmt.emitter.batch import withdraw_batch
-from mpmt.mt.models import MtDoc
-from mpmt.platform.models import PlatformKV
-from mpmt.sign import service as sign_service
+from marko.connector_mt import manager
+from marko.connector_mt.client import MtClient, MtHttpError
+from marko.journal import apply_event
+from marko.emitter.batch import withdraw_batch
+from marko.mt.models import MtDoc
+from marko.platform.models import PlatformKV
+from marko.sign import service as sign_service
 
 INN = "090201471350"
 

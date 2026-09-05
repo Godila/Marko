@@ -163,7 +163,7 @@ export default function App() {
 
   return (
     <div style={{ fontFamily: 'sans-serif', margin: '0 auto', maxWidth: 1100 }}>
-      <h2>MP-GIS_MT</h2>
+      <h2>МАРКО</h2>
       <input value={token} onChange={e => setToken(e.target.value)} placeholder="API token" size={40} />
       {['journal', 'batches', 'catalog', 'returns'].map(t => (
         <button key={t} onClick={() => setTab(t)} style={{ marginLeft: 8, fontWeight: tab === t ? 'bold' : 'normal' }}>

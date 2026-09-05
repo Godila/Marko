@@ -1,5 +1,5 @@
 import pytest
-from mpmt.journal.state import transition
+from marko.journal.state import transition
 
 
 @pytest.mark.parametrize("state,kind,expected", [
@@ -19,7 +19,7 @@ def test_transitions(state, kind, expected):
 
 
 def test_apply_event_idempotent(db):
-    from mpmt.journal import apply_event
+    from marko.journal import apply_event
     s1, c1 = apply_event(db, source="wb_excise", source_event_id="e1", kind="sale",
                          km="0104630520676025215UKsEhVmAtad", srid="r1", payload={"price": 1793})
     s2, c2 = apply_event(db, source="wb_excise", source_event_id="e1", kind="sale",

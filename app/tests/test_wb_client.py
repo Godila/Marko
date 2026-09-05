@@ -1,7 +1,7 @@
 import httpx
 import pytest
 
-from mpmt.connector_wb.client import WBClient, WbHttpError, WbLimitError
+from marko.connector_wb.client import WBClient, WbHttpError, WbLimitError
 
 
 def test_retry_on_429_then_ok():
@@ -31,7 +31,7 @@ def test_4xx_no_retry():
 
 
 def test_excise_limit_gate(db, monkeypatch):
-    import mpmt.connector_wb.client as wb_client
+    import marko.connector_wb.client as wb_client
 
     monkeypatch.setattr(wb_client.time, "time", lambda: 1_800_000_000.0)
 
@@ -62,7 +62,7 @@ def test_orders_pagination():
 
 
 def test_goods_return_limit_gate(db, monkeypatch):
-    import mpmt.connector_wb.client as wb_client
+    import marko.connector_wb.client as wb_client
 
     monkeypatch.setattr(wb_client.time, "time", lambda: 1_800_000_000.0)
 

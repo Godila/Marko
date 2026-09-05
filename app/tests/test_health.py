@@ -1,5 +1,5 @@
 from fastapi.testclient import TestClient
-from mpmt.api.app import create_app
+from marko.api.app import create_app
 
 def test_healthz():
     client = TestClient(create_app())
@@ -10,7 +10,7 @@ def test_healthz():
     assert "wb_last_poll" in body and "signer_last_seen" in body
 
 def test_healthz_db_down(monkeypatch):
-    import mpmt.db as dbmod
+    import marko.db as dbmod
 
     def boom(*args, **kwargs):
         raise RuntimeError("db down")

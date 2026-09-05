@@ -4,12 +4,12 @@ import logging
 import httpx
 import pytest
 
-from mpmt.notifier import send
+from marko.notifier import send
 
 
 @pytest.mark.asyncio
 async def test_send_without_tg_settings_logs_and_skips_api(monkeypatch, caplog):
-    from mpmt import notifier
+    from marko import notifier
 
     calls = []
 
@@ -21,7 +21,7 @@ async def test_send_without_tg_settings_logs_and_skips_api(monkeypatch, caplog):
     monkeypatch.setattr(notifier.settings, "tg_chat_id", "")
     monkeypatch.setattr(notifier, "_client", lambda: httpx.AsyncClient(transport=httpx.MockTransport(handler)))
 
-    with caplog.at_level(logging.WARNING, logger="mpmt.notifier"):
+    with caplog.at_level(logging.WARNING, logger="marko.notifier"):
         await send("привет")
 
     assert calls == []               # TG not configured -> API never called
@@ -30,7 +30,7 @@ async def test_send_without_tg_settings_logs_and_skips_api(monkeypatch, caplog):
 
 @pytest.mark.asyncio
 async def test_send_with_tg_settings_posts_once_and_never_raises(monkeypatch, caplog):
-    from mpmt import notifier
+    from marko import notifier
 
     calls = []
 
@@ -42,7 +42,7 @@ async def test_send_with_tg_settings_posts_once_and_never_raises(monkeypatch, ca
     monkeypatch.setattr(notifier.settings, "tg_chat_id", "42")
     monkeypatch.setattr(notifier, "_client", lambda: httpx.AsyncClient(transport=httpx.MockTransport(handler)))
 
-    with caplog.at_level(logging.ERROR, logger="mpmt.notifier"):
+    with caplog.at_level(logging.ERROR, logger="marko.notifier"):
         await send("алерт")
 
     assert len(calls) == 1
@@ -54,7 +54,7 @@ async def test_send_with_tg_settings_posts_once_and_never_raises(monkeypatch, ca
 
 @pytest.mark.asyncio
 async def test_send_tg_http_failure_logged_without_token_or_traceback(monkeypatch, caplog):
-    from mpmt import notifier
+    from marko import notifier
 
     calls = []
 
@@ -66,7 +66,7 @@ async def test_send_tg_http_failure_logged_without_token_or_traceback(monkeypatc
     monkeypatch.setattr(notifier.settings, "tg_chat_id", "42")
     monkeypatch.setattr(notifier, "_client", lambda: httpx.AsyncClient(transport=httpx.MockTransport(handler)))
 
-    with caplog.at_level(logging.ERROR, logger="mpmt.notifier"):
+    with caplog.at_level(logging.ERROR, logger="marko.notifier"):
         await send("алерт")   # must not raise
 
     assert len(calls) == 1

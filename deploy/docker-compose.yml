@@ -1,3 +1,5 @@
+name: marko
+
 x-logging: &logging
   logging:
     driver: json-file
@@ -7,9 +9,9 @@ services:
   postgres:
     <<: *logging
     image: postgres:16
-    environment: { POSTGRES_USER: mpmt, POSTGRES_PASSWORD: "${PG_PASSWORD}", POSTGRES_DB: mpmt }
+    environment: { POSTGRES_USER: marko, POSTGRES_PASSWORD: "${PG_PASSWORD}", POSTGRES_DB: marko }
     volumes: [pgdata:/var/lib/postgresql/data]
-    healthcheck: { test: ["CMD-SHELL", "pg_isready -U mpmt"], interval: 10s, retries: 5 }
+    healthcheck: { test: ["CMD-SHELL", "pg_isready -U marko"], interval: 10s, retries: 5 }
     restart: unless-stopped
 
   api:
@@ -27,7 +29,7 @@ services:
   worker:
     <<: *logging
     build: { context: ../app }
-    command: ["python", "-m", "mpmt.worker"]
+    command: ["python", "-m", "marko.worker"]
     env_file: .env
     volumes: ["../secrets:/srv/secrets:ro"]
     depends_on: { postgres: { condition: service_healthy } }
@@ -50,7 +52,7 @@ services:
     image: postgres:16
     volumes: ["../backups:/backups", "./backup.sh:/backup.sh:ro"]
     entrypoint: ["/bin/sh", "-c", "while true; do /backup.sh; sleep 86400; done"]
-    environment: { PGHOST: postgres, PGUSER: mpmt, PGDATABASE: mpmt, PGPASSWORD: "${PG_PASSWORD}" }
+    environment: { PGHOST: postgres, PGUSER: marko, PGDATABASE: marko, PGPASSWORD: "${PG_PASSWORD}" }
     depends_on: { postgres: { condition: service_healthy } }
     restart: unless-stopped
 

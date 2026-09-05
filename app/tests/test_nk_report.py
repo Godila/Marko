@@ -7,7 +7,7 @@ import io
 import openpyxl
 import pytest
 
-from mpmt.nkmt.models import Batch, Card
+from marko.nkmt.models import Batch, Card
 from tests.test_api_nkmt_dicts import AUTH_RO, client  # noqa: F401  (фикстура client)
 
 

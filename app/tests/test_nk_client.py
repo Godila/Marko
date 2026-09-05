@@ -1,6 +1,6 @@
 import httpx
 import pytest
-from mpmt.nkmt.client import NkClient, NkHttpError
+from marko.nkmt.client import NkClient, NkHttpError
 
 
 def make_client(handler):

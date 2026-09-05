@@ -1,7 +1,7 @@
 from datetime import datetime, timedelta
 
-from mpmt.connector_wb.models import WbReturn
-from mpmt.connector_wb.returns import alert_returns, ingest_returns, run_returns_once
+from marko.connector_wb.models import WbReturn
+from marko.connector_wb.returns import alert_returns, ingest_returns, run_returns_once
 
 
 def _row(srid="r1", order=100, status="В пути в пвз", expired=None, **over):

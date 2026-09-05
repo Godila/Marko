@@ -1,7 +1,7 @@
 import json
 from pathlib import Path
 
-from mpmt.nkmt import validate
+from marko.nkmt import validate
 
 # model-фикстура (патчи dicts на фикстуру модели 6109100000) — общая, в conftest.py
 BASE = {"article": "T-1", "tnved": "6109100000", "name": "Футболка тест", "product_type": "ФУТБОЛКА",
@@ -36,7 +36,7 @@ def test_unicode_filter(model):
 
 
 def test_declaration_must_be_in_registry(model, db):
-    from mpmt.nkmt.models import Declaration
+    from marko.nkmt.models import Declaration
     db.add(Declaration(doc_number="Д-1", doc_date="2025-12-01")); db.commit()
     out = validate.validate_rows(db, None, None, [_row(declaration_date="")])[0]
     assert out["ok"] and out["attributes"]["23557"]["date"] == "2025-12-01"
@@ -51,7 +51,7 @@ def test_categories_fetched_once_per_tnved(db, monkeypatch):
                      .read_text(encoding="utf-8"))
     monkeypatch.setattr(validate.dicts, "attrs_model", lambda *a, **k: fix)
     monkeypatch.setattr(validate.dicts, "resolve_brand", lambda *a, **k: 2102811)
-    from mpmt.nkmt.models import Declaration
+    from marko.nkmt.models import Declaration
     db.add(Declaration(doc_number="Д-1", doc_date="2025-12-01")); db.commit()
     calls = []
 

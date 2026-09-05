@@ -1,4 +1,4 @@
-from mpmt.nkmt.models import Batch, Card, Declaration, BrandCache
+from marko.nkmt.models import Batch, Card, Declaration, BrandCache
 
 
 def test_batch_card_persist(db):

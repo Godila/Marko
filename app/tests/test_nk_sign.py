@@ -14,9 +14,9 @@ import base64
 import httpx
 import pytest
 
-from mpmt.nkmt.client import NkClient, NkHttpError
-from mpmt.nkmt.models import Batch, Card
-from mpmt.nkmt.service import sign_batch
+from marko.nkmt.client import NkClient, NkHttpError
+from marko.nkmt.models import Batch, Card
+from marko.nkmt.service import sign_batch
 from tests.test_api_nkmt_dicts import AUTH, client  # noqa: F401  (фикстура client)
 
 
@@ -72,7 +72,7 @@ def cards(db, batch_id):
 def signer(monkeypatch):
     """Боевой signer-шлюз заменён заглушкой; фиксирует вызовы doc_sign."""
     calls = []
-    monkeypatch.setattr("mpmt.nkmt.service._sign_via_gateway",
+    monkeypatch.setattr("marko.nkmt.service._sign_via_gateway",
                         lambda db, type_, payload: (calls.append((type_, payload)), "SIG")[1])
     return calls
 
@@ -221,7 +221,7 @@ def test_sign_guards(db, seeds):
 
 def test_sign_chunks_by_ten(db, monkeypatch):
     """11 карточек → два документа: 10 + 1 (лимит /nk/feed-product-*)."""
-    monkeypatch.setattr("mpmt.nkmt.service._sign_via_gateway",
+    monkeypatch.setattr("marko.nkmt.service._sign_via_gateway",
                         lambda db, type_, payload: "SIG")
     b = Batch(source_filename="big.xlsx", status="signing")
     db.add(b); db.flush()
@@ -248,9 +248,9 @@ def test_sign_chunks_by_ten(db, monkeypatch):
 
 
 def test_sign_endpoint(db, client, monkeypatch, seeds, signer):
-    monkeypatch.setattr("mpmt.connector_mt.manager.get_token", lambda _db: "T")
+    monkeypatch.setattr("marko.connector_mt.manager.get_token", lambda _db: "T")
     fake = FakeNk()
-    monkeypatch.setattr("mpmt.nkmt.client.NkClient", lambda base: fake)
+    monkeypatch.setattr("marko.nkmt.client.NkClient", lambda base: fake)
     r = client.post(f"/v1/nkmt/batches/{seeds.id}/sign", headers=AUTH)
     assert r.status_code == 200 and r.json() == {"signed": 2, "failed": 0}
     db.expire_all()  # app-сессия закоммитила — сбрасываем кэш тестовой сессии

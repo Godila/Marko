@@ -1,6 +1,6 @@
 import time
 import pytest
-from mpmt.nkmt.dicts import (AmbiguousCategory, UnknownBrand, attrs_model,
+from marko.nkmt.dicts import (AmbiguousCategory, UnknownBrand, attrs_model,
                              get_defaults, resolve_brand, resolve_category, set_defaults)
 
 
@@ -24,7 +24,7 @@ def test_attrs_model_cached_24h(db):
 
 
 def test_brand_cache_hit_and_miss(db):
-    from mpmt.nkmt.models import BrandCache
+    from marko.nkmt.models import BrandCache
     db.add(BrandCache(name="ycpb", brand_id=2102811)); db.commit()
     assert resolve_brand(db, FakeNk(brands=[]), "T", "YCPB") == 2102811
     with pytest.raises(UnknownBrand):

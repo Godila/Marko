@@ -1,8 +1,8 @@
 import pytest
 from fastapi.testclient import TestClient
-from mpmt.api.app import create_app
-from mpmt.platform.models import PlatformPrincipal, PlatformToken, hash_token
-from mpmt.journal import apply_event
+from marko.api.app import create_app
+from marko.platform.models import PlatformPrincipal, PlatformToken, hash_token
+from marko.journal import apply_event
 
 KM = "0104630520676025215TEST123"
 INN = "090201471350"
@@ -89,7 +89,7 @@ def test_return_route(db, client):
     assert client.get("/v1/journal?state=RETURNED", headers=AUTH).json()[0]["km"] == KM
 
 def test_mutation_audit_rows_written(db, client):
-    from mpmt.platform.models import PlatformAudit
+    from marko.platform.models import PlatformAudit
     apply_event(db, source="wb_excise", source_event_id="a:1", kind="sale",
                 km="0104630520676025215AUDIT001", srid="a", payload={"price": 100})
     r = client.post("/v1/batches/withdraw", headers={"Authorization": "Bearer t1"},
@@ -109,13 +109,13 @@ def test_emitter_defaults_roundtrip(db, client):
                    json={"fias_id": "b944722c-3080-4a72-b9a5-57e11533083c",
                          "primary_custom_name": "Чек дистанционной продажи Wildberries"})
     assert r.status_code == 200
-    from mpmt.platform.models import PlatformKV
+    from marko.platform.models import PlatformKV
     kv = db.get(PlatformKV, "emitter_defaults")
     assert kv.value["fias_id"] == "b944722c-3080-4a72-b9a5-57e11533083c"
 
 
 def test_wb_returns_list_and_scopes(db, client):
-    from mpmt.connector_wb.returns import ingest_returns
+    from marko.connector_wb.returns import ingest_returns
     ingest_returns(db, [{"srid": "r1", "orderId": 7, "status": "Готов к выдаче",
                          "expiredDt": "2026-09-10T10:00:00", "reason": "Размер",
                          "subjectName": "Шапка", "isStatusActive": 1, "completedDt": None}])
@@ -131,8 +131,8 @@ def test_wb_returns_list_and_scopes(db, client):
 
 
 def test_wb_returns_poll_502_on_wb_error(db, client, monkeypatch):
-    from mpmt.api import routes_journal
-    from mpmt.connector_wb.client import WbHttpError
+    from marko.api import routes_journal
+    from marko.connector_wb.client import WbHttpError
 
     class Boom:
         def goods_return(self, a, b):

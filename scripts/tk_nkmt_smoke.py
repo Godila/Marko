@@ -12,12 +12,12 @@ GTIN передаются вручную: generate-gtins в ТК заблоки�
 без gtin шаги фида пропускаются с пометкой.
 
 Запуск на VM (скрипт целиком из файла, одной строкой):
-    cat /root/tk_nkmt_smoke.py | docker exec -i deploy-api-1 python - "gtin1,gtin2" [--dry]
+    cat /root/tk_nkmt_smoke.py | docker exec -i marko-api-1 python - "gtin1,gtin2" [--dry]
 
 Локальный офлайн-прогон (вне контейнера, canned-данные, без сети/БД/зависимостей):
     python scripts/tk_nkmt_smoke.py --dry
-(импорты mpmt ленивые — на --dry не нужны; живой запуск работает только внутри
-deploy-api-1, где /app/src добавлен в sys.path).
+(импорты marko ленивые — на --dry не нужны; живой запуск работает только внутри
+marko-api-1, где /app/src добавлен в sys.path).
 
 Скрипт не пишет в прод-БД ничего, кроме задач подписи (sign.tasks, безвредно).
 Токен ТК живёт в памяти процесса, kv не трогаем — manager.get_token здесь
@@ -43,16 +43,16 @@ POLL_ITERATIONS = 60          # ~10 минут на модерацию
 FINAL_STATUSES = ("Moderated", "Rejected", "Signed")
 DRY_GTINS = ["20000000000001", "20000000000002"]
 
-sys.path.insert(0, "/app/src")   # внутри deploy-api-1; локально пути нет — не мешает
+sys.path.insert(0, "/app/src")   # внутри marko-api-1; локально пути нет — не мешает
 
 
-def _mpmt():
-    """Ленивые импорты mpmt: живой путь исполняется только в контейнере."""
-    from mpmt.connector_mt.client import MtClient
-    from mpmt.connector_mt.manager import _sign_via_gateway
-    from mpmt.db import SessionLocal
-    from mpmt.nkmt.client import NkClient, NkHttpError
-    from mpmt.settings import settings
+def _marko():
+    """Ленивые импорты marko: живой путь исполняется только в контейнере."""
+    from marko.connector_mt.client import MtClient
+    from marko.connector_mt.manager import _sign_via_gateway
+    from marko.db import SessionLocal
+    from marko.nkmt.client import NkClient, NkHttpError
+    from marko.settings import settings
     return MtClient, _sign_via_gateway, SessionLocal, NkClient, NkHttpError, settings
 
 
@@ -137,7 +137,7 @@ def rejected_error(raw: dict) -> str:
 # --------------------------------------------------------------------- live
 
 def run_live(gtins: list[str], args) -> None:
-    MtClient, sign, SessionLocal, NkClient, NkHttpError, settings = _mpmt()
+    MtClient, sign, SessionLocal, NkClient, NkHttpError, settings = _marko()
     steps = Steps()
     with SessionLocal() as db:
         try:
@@ -248,7 +248,7 @@ def run_live(gtins: list[str], args) -> None:
 # ---------------------------------------------------------------------- dry
 
 def run_dry(gtins: list[str], args) -> None:
-    """Офлайн-прогон тех же шагов на canned-данных: без сети, БД и mpmt."""
+    """Офлайн-прогон тех же шагов на canned-данных: без сети, БД и marko."""
     steps = Steps()
     token = "DRY." + "t" * 59
     print(f"[auth] OK (dry), expire=2099-01-01T00:00:00, token_len={len(token)}")
@@ -305,7 +305,7 @@ def main() -> None:
                     help="gtin через запятую (по 14 цифр); без них шаги фида пропускаются "
                          "(--dry подставляет canned)")
     ap.add_argument("--dry", action="store_true",
-                    help="офлайн-прогон на canned-данных: без сети, БД и mpmt")
+                    help="офлайн-прогон на canned-данных: без сети, БД и marko")
     ap.add_argument("--poll-iterations", type=int, default=POLL_ITERATIONS,
                     help=f"итераций опроса feed-status (default {POLL_ITERATIONS})")
     ap.add_argument("--poll-interval", type=int, default=POLL_INTERVAL,

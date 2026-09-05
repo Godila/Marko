@@ -4,7 +4,7 @@ mt.docs draft -> manager.submit_doc (прод-signer doc_sign) -> CHECKED_OK ->
 LP_RETURN draft -> submit -> CHECKED_OK. Код возвращается в состояние «в обороте».
 
 Запуск на VM (КМ одной строкой):
-    cat /root/prod_e2e_km.py | docker exec -i deploy-api-1 python - "$(head -1 /root/tk-km.txt)"
+    cat /root/prod_e2e_km.py | docker exec -i marko-api-1 python - "$(head -1 /root/tk-km.txt)"
 
 Пишет в прод-БД только mt.docs (штатная таблица документов) и sign.tasks.
 """
@@ -16,11 +16,11 @@ from datetime import datetime
 
 sys.path.insert(0, "/app/src")
 
-from mpmt.connector_mt import manager
-from mpmt.connector_mt.client import MtClient
-from mpmt.db import SessionLocal
-from mpmt.mt.models import MtDoc
-from mpmt.settings import settings
+from marko.connector_mt import manager
+from marko.connector_mt.client import MtClient
+from marko.db import SessionLocal
+from marko.mt.models import MtDoc
+from marko.settings import settings
 
 POLL_SEC = 900
 POLL_INTERVAL = 10
@@ -46,7 +46,7 @@ def new_doc(db, doc_type: str, payload: dict) -> int:
 
 
 def wait_ok(db, doc_id: int, label: str) -> dict:
-    from mpmt.connector_mt.client import MtHttpError
+    from marko.connector_mt.client import MtHttpError
     deadline = time.monotonic() + POLL_SEC
     last = None
     while time.monotonic() < deadline:

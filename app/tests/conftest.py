@@ -4,16 +4,16 @@ from pathlib import Path
 import pytest
 from sqlalchemy import text
 
-import mpmt.journal.models  # noqa: F401  (регистрация journal-моделей в Base.metadata)
-import mpmt.connector_wb.models  # noqa: F401  (wb.returns)
-import mpmt.mt.models
-import mpmt.nkmt.models  # noqa: F401  (регистрация nkmt-моделей в Base.metadata)
-import mpmt.sign.models  # noqa  # noqa
+import marko.journal.models  # noqa: F401  (регистрация journal-моделей в Base.metadata)
+import marko.connector_wb.models  # noqa: F401  (wb.returns)
+import marko.mt.models
+import marko.nkmt.models  # noqa: F401  (регистрация nkmt-моделей в Base.metadata)
+import marko.sign.models  # noqa  # noqa
 
 
 @pytest.fixture
 def db():
-    from mpmt.db import Base, engine, SessionLocal
+    from marko.db import Base, engine, SessionLocal
 
     schemas = {t.schema for t in Base.metadata.tables.values() if t.schema}
     with engine.begin() as conn:
@@ -32,7 +32,7 @@ def db():
 def model(monkeypatch):
     """Справочники НК без сети: атрибутная модель — фикстура 6109100000,
     бренд/категория — константы (как в test_nk_validate)."""
-    from mpmt.nkmt import validate
+    from marko.nkmt import validate
     fix = json.loads((Path(__file__).parent / "fixtures" / "nk_attrs_6109100000.json")
                      .read_text(encoding="utf-8"))
     monkeypatch.setattr(validate.dicts, "attrs_model", lambda *a, **k: fix)

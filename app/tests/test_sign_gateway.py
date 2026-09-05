@@ -1,8 +1,8 @@
 import pytest
 from fastapi.testclient import TestClient
-from mpmt.api.app import create_app
-from mpmt.platform.models import PlatformPrincipal, PlatformToken, hash_token
-from mpmt.sign.models import SignTask
+from marko.api.app import create_app
+from marko.platform.models import PlatformPrincipal, PlatformToken, hash_token
+from marko.sign.models import SignTask
 
 
 @pytest.fixture

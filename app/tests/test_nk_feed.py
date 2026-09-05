@@ -5,8 +5,8 @@ moderation — ПОЛЕ ENTRY (дамп trueapi, /nk/feed, «Параметры 
 """
 import pytest
 
-from mpmt.nkmt.models import Batch, Card
-from mpmt.nkmt.service import feed_batch
+from marko.nkmt.models import Batch, Card
+from marko.nkmt.service import feed_batch
 from tests.test_api_nkmt_dicts import AUTH, client  # noqa: F401  (фикстура client)
 
 # формат attributes из Task 6: ключи — str(attr_id)
@@ -111,7 +111,7 @@ def test_feed_entry_omits_empty_attr_values():
     """live-отклонение: «attr_id 2503 можно использовать только с attr_value» —
     пустые значения (None, "", пустой список, value="" у dict) в good_attrs
     не попадают вовсе, а не уходят как {"attr_id": ..., "attr_value": ""}."""
-    from mpmt.nkmt.service import _feed_entry
+    from marko.nkmt.service import _feed_entry
     card = Card(article="E-1", gtin="4630520699970", tnved="6109100000",
                 name="Футболка тест", cat_id="214943", status="ok",
                 attributes={"2504": "YCPB", "2503": "",  # producer по умолчанию ""
@@ -141,8 +141,8 @@ def test_feed_gtin_limit_shortfall(db, seeds):
 
 
 def test_feed_endpoint(db, client, monkeypatch, seeds):
-    monkeypatch.setattr("mpmt.connector_mt.manager.get_token", lambda _db: "T")
-    monkeypatch.setattr("mpmt.nkmt.client.NkClient", lambda base: FakeFeedNk())
+    monkeypatch.setattr("marko.connector_mt.manager.get_token", lambda _db: "T")
+    monkeypatch.setattr("marko.nkmt.client.NkClient", lambda base: FakeFeedNk())
     r = client.post(f"/v1/nkmt/batches/{seeds.id}/feed", headers=AUTH)
     assert r.status_code == 200 and r.json() == {"feed_id": 42, "feed_ids": [42]}
     assert client.post(f"/v1/nkmt/batches/{seeds.id}/feed",

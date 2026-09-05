@@ -1,3 +1,3 @@
 def test_import():
-    import mpmt
-    assert mpmt is not None
+    import marko
+    assert marko is not None

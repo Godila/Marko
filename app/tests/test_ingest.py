@@ -1,7 +1,7 @@
 import json
 import pathlib
 
-from mpmt.connector_wb.ingest import excise_rows_to_events, fbs_rids, ingest_excise
+from marko.connector_wb.ingest import excise_rows_to_events, fbs_rids, ingest_excise
 
 FIXT = json.loads(
     (pathlib.Path(__file__).parent / "fixtures" / "excise-report.json").read_text("utf-8")

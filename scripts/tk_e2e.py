@@ -1,7 +1,7 @@
 """E2E в тест-контуре (песочнице) ЧЗ: auth -> LK_RECEIPT -> CHECKED_OK -> LP_RETURN -> CHECKED_OK.
 
 Запуск на VM (КМ целиком из файла, одной строкой):
-    cat /root/tk_e2e.py | docker exec -i deploy-api-1 python - "$(cat /root/tk-km.txt)" [--full] [--dry]
+    cat /root/tk_e2e.py | docker exec -i marko-api-1 python - "$(cat /root/tk-km.txt)" [--full] [--dry]
 
 - КМ из argv[1]: полный (01..\\x1d21..\\x1d91..\\x1d92..) или короткий (01+GTIN+21+serial);
   по умолчанию в документ идёт КОРОТКИЙ cis (31 симв, как из WB excise-report) —
@@ -18,10 +18,10 @@ from datetime import datetime
 
 sys.path.insert(0, "/app/src")
 
-from mpmt.connector_mt.client import MtClient
-from mpmt.connector_mt.manager import _sign_via_gateway
-from mpmt.db import SessionLocal
-from mpmt.settings import settings
+from marko.connector_mt.client import MtClient
+from marko.connector_mt.manager import _sign_via_gateway
+from marko.db import SessionLocal
+from marko.settings import settings
 
 TK3 = "https://markirovka.sandbox.crptech.ru/api/v3/true-api"
 TK4 = "https://markirovka.sandbox.crptech.ru/api/v4/true-api"

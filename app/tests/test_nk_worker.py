@@ -1,12 +1,12 @@
 """Воркер-цикл НКМТ: moderation → refresh, signing с notsigned-карточками → sign.
 
-nkmt_cycle строит клиент/токен сам — в тестах патчим mpmt.worker.NkClient и
+nkmt_cycle строит клиент/токен сам — в тестах патчим marko.worker.NkClient и
 manager.get_token; service-функции подменяем записью id в список.
 """
 import inspect
 
-import mpmt.worker as worker
-from mpmt.nkmt.models import Batch, Card
+import marko.worker as worker
+from marko.nkmt.models import Batch, Card
 
 
 def seed_batches(db):
@@ -29,7 +29,7 @@ def seed_batches(db):
 def patch_service(monkeypatch, refresh=None, sign=None):
     """Заглушки клиента/токена; refresh/sign пишут id в списки (или рейзят)."""
     monkeypatch.setattr(worker, "NkClient", lambda base: object())
-    monkeypatch.setattr("mpmt.connector_mt.manager.get_token", lambda _db: "T")
+    monkeypatch.setattr("marko.connector_mt.manager.get_token", lambda _db: "T")
     calls = {"refresh": [], "sign": []}
     monkeypatch.setattr(worker, "refresh_batch",
                         refresh or (lambda db, bid, client, token:

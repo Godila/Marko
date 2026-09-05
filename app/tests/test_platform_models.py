@@ -1,6 +1,6 @@
 from sqlalchemy import text
 from sqlalchemy.orm import Session
-from mpmt.platform.models import PlatformPrincipal, PlatformToken, hash_token
+from marko.platform.models import PlatformPrincipal, PlatformToken, hash_token
 
 
 def test_token_hash_stable():
