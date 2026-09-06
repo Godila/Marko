@@ -41,6 +41,19 @@ def test_wb_withdraw_guard_fires(db):
     assert it.withdrawn_by == "wb" and it.state == "WITHDRAWN"
 
 
+def test_wb_withdraw_guard_skips_returned(db):
+    """Гонка «возврат подан до гварда»: RETURNED-позиции гвард не переписывает."""
+    km = "0104630520676025215WBRETRN"
+    _sale(db, km)
+    doc_id = withdraw_batch(db, INN)
+    it = db.get(Item, km)
+    it.state = "RETURNED"      # успели собрать возврат до опроса ЧЗ
+    db.get(MtDoc, doc_id).status = "error"
+    db.commit()
+    assert wb_withdraw_guard(db, doc_id, {"status": "REJECTED", "reason": "код уже выбыл"})
+    assert it.withdrawn_by == "us" and it.state == "RETURNED"
+
+
 def test_wb_withdraw_guard_negative(db):
     """Иной отказ или не-error/не-LK_RECEIPT → гвард молчит."""
     km = "0104630520676025215GRDNEG01"

@@ -54,7 +54,8 @@ def withdraw_batch(db: Session, inn: str, limit: int = 100) -> int:
             "inn": inn, "action": "DISTANCE",
             "action_date": ev.get("fiscal_dt") or today,
             "document_type": "RECEIPT" if has_fiscal else "OTHER",
-            "document_number": ev.get("fiscal_doc_number") or "",   # WB-<id> подставим после flush
+            # WB отдаёт fiscal_doc_number числом — ЧЗ ждёт строку
+            "document_number": str(ev.get("fiscal_doc_number") or ""),
             "document_date": ev.get("fiscal_dt") or today,
             "products": [{"cis": it.km,
                           "product_cost": int((it.last_event or {}).get("price") or 0) * 100}
@@ -73,11 +74,13 @@ def withdraw_batch(db: Session, inn: str, limit: int = 100) -> int:
             attributes.flag_modified(doc, "payload")   # JSON-колонка не видит in-place мутацию
         _payload_json(doc)
         for it in grp:
+            # state ДО log_action: каждый commit внутри log_action оставляет
+            # консистентный снапшот (ревью 06.09 — иначе сбой mid-loop дублит draft)
+            it.state = "WITHDRAWN"   # ponytail: фаза 1 — ручная подача; фаза 2 = после CHECKED_OK
+            it.withdrawn_by = "us"
             log_action(db, source="emitter",
                        source_event_id=f"withdraw:{doc.id}:{it.km}",
                        kind="withdraw", km=it.km, srid="", payload={"doc_id": doc.id})
-            it.state = "WITHDRAWN"   # ponytail: фаза 1 — ручная подача; фаза 2 = после CHECKED_OK
-            it.withdrawn_by = "us"
         if not first_doc_id:
             first_doc_id = doc.id
     if len(groups) > 1:
@@ -99,8 +102,8 @@ def wb_withdraw_guard(db: Session, doc_id: int, info: dict) -> bool:
         return False
     for pr in doc.payload.get("products", []):
         it = db.get(Item, pr["cis"])
-        if it is None:
-            continue
+        if it is None or it.state == "RETURNED":
+            continue   # журнал закрытых позиций не переписываем (ревью 06.09)
         it.withdrawn_by = "wb"
         log_action(db, source="guard",
                    source_event_id=f"wb_withdraw:{doc_id}:{pr['cis']}",
@@ -170,11 +173,12 @@ def return_batch(db: Session, inn: str, limit: int = 100) -> tuple[int, int]:
         db.flush()
         _payload_json(doc)
         for it in grp:
+            # state ДО log_action: см. withdraw_batch (ревью 06.09)
+            it.state = "RETURNED"   # ponytail: фаза 1 — ручная подача; фаза 2 = после CHECKED_OK
             log_action(db, source="emitter",
                        source_event_id=f"return:{doc.id}:{it.km}",
                        kind="return_apply", km=it.km, srid="",
                        payload={"doc_id": doc.id, "return_type": payload["return_type"]})
-            it.state = "RETURNED"   # ponytail: фаза 1 — ручная подача; фаза 2 = после CHECKED_OK
         created += 1
     if blocked:
         log.warning("return_batch: %d КМ без первички остались PENDING_RETURN", blocked)
