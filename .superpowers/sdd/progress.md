@@ -100,3 +100,10 @@ Phase 3 execution (2026-09-02 fresh session, subagent-driven):
 - check_doc: CHECKED_NOT_OK теперь терминален → error (иначе гвард не увидел бы отказ)
 - тесты: +6 (гвард огонь/нет, RETAIL, blocked-без-фискальных, mixed 2 дока, CHECKED_NOT_OK)
 - /v1/journal отдаёт withdrawn_by (UI не трогали — там WIP параллельной сессии)
+КОДРЕВЬЮ агентом (06.09, после 2ac691b): 2 high-находки исправлены (16851ad):
+(1) гвард не переписывает withdrawn_by у RETURNED-позиций (гонка «возврат подан до опроса ЧЗ»);
+(2) state ДО log_action в withdraw/return_batch — каждый commit оставляет консистентный снапшот,
+    сбой mid-loop больше не дублит draft. Плюс document_number нормализован строкой (WB шлёт int).
+Мелкие замечания ревьюа приняты как KnownUnknown (negations/per-product reasons ЧЗ — до первого
+живого случая; receipts из draft-LK_RECEIPT — осознанный ponytail фазы 1). Сьют 149.
+Редеплой 16851ad: api+worker, healthz ok, воркер без traceback'ов.
