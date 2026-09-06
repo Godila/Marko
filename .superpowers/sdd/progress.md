@@ -107,3 +107,23 @@ Phase 3 execution (2026-09-02 fresh session, subagent-driven):
 Мелкие замечания ревьюа приняты как KnownUnknown (negations/per-product reasons ЧЗ — до первого
 живого случая; receipts из draft-LK_RECEIPT — осознанный ponytail фазы 1). Сьют 149.
 Редеплой 16851ad: api+worker, healthz ok, воркер без traceback'ов.
+
+## 2026-09-06 (вечер) — НацКаталог: правила РД + превью импорта + шаблон (57ebef7, /feature-dev)
+
+Юзер: (1) дефолты привязаны к одному бренду/декларации — нужны условные правила РД; (2) нет спеки xlsx;
+(3) предпросмотр с апрувом перед загрузкой. Семантика (вопросы юзер пропустил — решено рекомендациями):
+условие бренд(casefold)×вид товара(точно, ≥1 непустого), значения declaration_id(FK RESTRICT)+producer,
+приоритет файл > правило > глоб.дефолт, из подошедших — больше условий затем больший id; дата берётся
+из записи правила (пара номер-дата консистентна).
+Архитектура: nkmt/resolve.py (sources/match_rule/apply_rules/resolve_rows — единый конвейер), service.py
+распилен на plan_batch (read-only решения, incl gtin_status new|update|conflict) + _persist_batch;
+preview/import гоняют один resolve+plan → превью не может разойтись. parse.py: ColumnSpec SPEC — единый
+источник COLUMNS/REQUIRED/DEFAULTED + шаблон. template.py: xlsx «Выгрузка»+«Инструкция».
+REST: GET/POST/DELETE /v1/nkmt/rules (400 без условия, 404 декларация, 409 дубль условия casefold),
+guard 409 в DELETE /declarations/{id} (правило ссылается), GET /import/template, POST /import/preview
+(multipart dry-run, построчно подстановки+gtin+ошибки), BAD_XLSX(+ET.ParseError) → 400.
+UI: выбор файла → preview-drawer (таблица с provenance файл/правило/дефолт, апрув → повторный POST
+/import), кнопка «Шаблон», карточка «Правила РД» в Справочниках. closeDrawer в ctx.
+Ревью 3 агентов: блокер openDrawer не деструктурирован в Catalog (фикс), conflict никогда не ставился
+(оживлён), ParseError 500→400, casefold-дубль правил, даты из записи правила, мёртвые импорты/ключ rows.
+Сьют 159 (+10). Деплой: api+worker+ui, миграция 0009, смоук /rules [] + template 200 + healthz ok.
