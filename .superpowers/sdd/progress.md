@@ -81,3 +81,10 @@ Phase 3 execution (2026-09-02 fresh session, subagent-driven):
 
 Юзер переключил DNS (старый gis.* удалён). Заменены Caddyfile/settings/.env, LE-серт с первого раза, healthz/UI 200.
 ВАЖНО: signer-агент (закрытая Windows-машина) ходил на старый домен → офлайн до правки его конфига на https://marko.adel-factory.ru + рестарта (руки юзера).
+
+## PRE-COMPACT CHECKPOINT 2026-09-06
+
+Состояние: origin/main=eec8dc1 (всё запушено); прод marko.adel-factory.ru жив, сьют 142.
+Растяжка 04–06.09 закрыла: возвраты «контроль+кнопка» (монитор goods-return + UI + эмиттер fias_id/custom_name, seed kv на проде, живой полл 200 OK), ребрендинг marko (пакет/контейнеры/БД/объёмы/пути), домен marko.adel-factory.ru (LE-серт auto), UI-консоль 6 разделов (ad5c91c, параллельная сессия), разбор памятки WB 04.09 (раздел 8 дискавери).
+ЖДЁТ: (1) юзер чинит signer-агент (URL → marko.adel-factory.ru, рестарт; контроль signer_last_seen); (2) WIP параллельной сессии НЕ коммитить: ui/src/App.jsx (M) + ui/logo-marko.html (??) — лого «Матрица-М» ждёт вставки в консоль по слову юзера; (3) гэпы возвратов из памятки WB: гвард двойного вывода (WB-ККТ повторной продажи) + RETAIL_RETURN в return_batch — по команде юзера; (4) гейты phase-4: первый FBS-возврат (op=2?), S3-бэкап, TG-creds.
+Точка входа новой сессии: agentmemory «PRE-COMPACT CHECKPOINT 2026-09-06» + файловая память (архитектура — блок-переопределение в конце файла).
