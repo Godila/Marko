@@ -41,3 +41,27 @@ def test_defaults_get_put(db, client):
 def test_dicts_attributes_validates_tnved(db, client, monkeypatch):
     r = client.get("/v1/nkmt/dicts/attributes?tnved=6109", headers=AUTH_RO)
     assert r.status_code == 400
+
+
+def test_rules_crud_and_declaration_guard(db, client):
+    d = client.post("/v1/nkmt/declarations", headers=AUTH, json=DECL).json()["id"]
+    r = client.post("/v1/nkmt/rules", headers=AUTH,
+                    json={"brand": "YCPB", "product_type": "", "declaration_id": d,
+                          "producer": "ИП Байкулов"})
+    assert r.status_code == 200 and r.json()["id"]
+    lst = client.get("/v1/nkmt/rules", headers=AUTH_RO).json()
+    assert lst == [{"id": r.json()["id"], "brand": "YCPB", "product_type": "",
+                    "declaration_id": d, "declaration_number": DECL["doc_number"],
+                    "declaration_date": DECL["doc_date"], "producer": "ИП Байкулов"}]
+    # правило без условия — 400; неизвестная декларация — 404; точный дубль условия — 409
+    assert client.post("/v1/nkmt/rules", headers=AUTH,
+                       json={"declaration_id": d}).status_code == 400
+    assert client.post("/v1/nkmt/rules", headers=AUTH,
+                       json={"brand": "X", "declaration_id": 99999}).status_code == 404
+    assert client.post("/v1/nkmt/rules", headers=AUTH,
+                       json={"brand": "YCPB", "declaration_id": d}).status_code == 409
+    # декларация под правилом не удаляется; после удаления правила — удаляется
+    assert client.delete(f"/v1/nkmt/declarations/{d}", headers=AUTH).status_code == 409
+    assert client.delete(f"/v1/nkmt/rules/{r.json()['id']}", headers=AUTH).json() == {"ok": True}
+    assert client.delete(f"/v1/nkmt/declarations/{d}", headers=AUTH).json() == {"ok": True}
+    assert client.delete("/v1/nkmt/rules/99999", headers=AUTH).status_code == 404

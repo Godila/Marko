@@ -8,20 +8,27 @@ dicts/attributes: сначала дешёвая валидация 10 цифр (
 import csv
 import io
 import re
+import xml.etree.ElementTree as ET
+import zipfile
 
 import openpyxl
 from fastapi import APIRouter, Depends, File, HTTPException, Query, Response, UploadFile
 from pydantic import BaseModel
+from sqlalchemy import func
 from sqlalchemy.orm import Session
 
 from marko.api.deps import audit, get_db, require_scope
-from marko.nkmt.dicts import attrs_model, get_defaults, set_defaults
-from marko.nkmt.models import Batch, Card, Declaration
+from marko.nkmt.dicts import attrs_model, get_defaults, get_rules, set_defaults
+from marko.nkmt.models import Batch, Card, Declaration, Rule
 from marko.platform.models import PlatformToken
 
 router = APIRouter(prefix="/v1/nkmt")
 
 TNVED_10 = re.compile(r"[0-9]{10}")  # [0-9], не \d: \d ловит не-ASCII цифры
+
+XLSX_MIME = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+# битый контейнер (BadZipFile), не-xlsx (InvalidFileException), битый внутренний XML
+BAD_XLSX = (zipfile.BadZipFile, openpyxl.utils.exceptions.InvalidFileException, ET.ParseError)
 
 
 class DeclarationBody(BaseModel):
@@ -29,6 +36,13 @@ class DeclarationBody(BaseModel):
     doc_date: str
     doc_type: str = "declaration"   # declaration|certificate
     title: str = ""
+
+
+class RuleBody(BaseModel):
+    brand: str = ""
+    product_type: str = ""
+    declaration_id: int
+    producer: str = ""
 
 
 @router.get("/declarations")
@@ -72,9 +86,64 @@ def declarations_delete(
     d = db.get(Declaration, decl_id)
     if not d:
         raise HTTPException(404, "declaration not found")
+    if db.query(Rule).filter(Rule.declaration_id == decl_id).first():
+        raise HTTPException(409, "правило РД использует эту декларацию — удалите правило")
     db.delete(d)
     db.commit()
     audit(db, tok.principal_id, "nkmt.declaration.delete", {"id": decl_id})
+    return {"ok": True}
+
+
+# --- правила РД: бренд × вид товара → декларация/производитель ---
+
+@router.get("/rules")
+def rules_list(
+    tok: PlatformToken = Depends(require_scope("read")),
+    db: Session = Depends(get_db),
+):
+    return get_rules(db)
+
+
+@router.post("/rules")
+def rules_create(
+    body: RuleBody,
+    tok: PlatformToken = Depends(require_scope("nkmt:import")),
+    db: Session = Depends(get_db),
+):
+    brand, ptype = body.brand.strip(), body.product_type.strip()
+    if not brand and not ptype:
+        raise HTTPException(400, "укажите бренд или вид товара — правило без условия матчит все строки")
+    if db.get(Declaration, body.declaration_id) is None:
+        raise HTTPException(404, "declaration not found")
+    # дубль условия — как матчит match_rule: бренд casefold, вид товара точно
+    dup = db.query(Rule).filter(func.lower(Rule.brand) == brand.casefold(),
+                                Rule.product_type == ptype).first()
+    if dup:
+        raise HTTPException(409, "правило с таким условием уже существует")
+    r = Rule(brand=brand, product_type=ptype,
+             declaration_id=body.declaration_id, producer=body.producer.strip())
+    db.add(r)
+    db.commit()
+    db.refresh(r)
+    audit(db, tok.principal_id, "nkmt.rule.create",
+          {"id": r.id, "brand": brand, "product_type": ptype,
+           "declaration_id": body.declaration_id, "producer": r.producer})
+    return {"id": r.id}
+
+
+@router.delete("/rules/{rule_id}")
+def rules_delete(
+    rule_id: int,
+    tok: PlatformToken = Depends(require_scope("nkmt:import")),
+    db: Session = Depends(get_db),
+):
+    r = db.get(Rule, rule_id)
+    if not r:
+        raise HTTPException(404, "rule not found")
+    db.delete(r)
+    db.commit()
+    audit(db, tok.principal_id, "nkmt.rule.delete",
+          {"id": rule_id, "brand": r.brand, "product_type": r.product_type})
     return {"ok": True}
 
 
@@ -132,10 +201,43 @@ def nkmt_import(
         batch_id = import_batch(db, file.filename, file.file.read(), client, token)
     except NkHttpError as e:
         raise HTTPException(502, f"nk upstream error: {e}")
+    except BAD_XLSX:
+        raise HTTPException(400, "не удалось прочитать файл как xlsx")
     b = db.get(Batch, batch_id)
     audit(db, tok.principal_id, "nkmt.import",
           {"batch_id": batch_id, "filename": file.filename, "stats": b.stats})
     return {"batch_id": batch_id, "stats": b.stats}
+
+
+@router.get("/import/template")
+def import_template(tok: PlatformToken = Depends(require_scope("read"))):
+    """Шаблон выгрузки: шапка+пример и лист «Инструкция» — из parse.SPEC."""
+    from marko.nkmt.template import build_template
+    return Response(build_template(), media_type=XLSX_MIME,
+                    headers={"Content-Disposition":
+                             'attachment; filename="nkmt-import-template.xlsx"'})
+
+
+@router.post("/import/preview")
+def nkmt_import_preview(
+    file: UploadFile = File(...),
+    tok: PlatformToken = Depends(require_scope("nkmt:import")),
+    db: Session = Depends(get_db),
+):
+    """Dry-run импорта: resolve+plan БЕЗ записи — предпросмотр с подстановками
+    (файл/правило/дефолт), судьбой gtin и ошибками валидации построчно."""
+    from marko.connector_mt import manager
+    from marko.nkmt.client import NkClient, NkHttpError
+    from marko.nkmt.service import preview_batch
+    from marko.settings import settings
+    try:
+        token = manager.get_token(db)
+        client = NkClient(settings.mt_base_v3)
+        return preview_batch(db, file.file.read(), client, token)
+    except NkHttpError as e:
+        raise HTTPException(502, f"nk upstream error: {e}")
+    except BAD_XLSX:
+        raise HTTPException(400, "не удалось прочитать файл как xlsx")
 
 
 @router.post("/batches/{batch_id}/feed")
@@ -246,9 +348,6 @@ def batch_detail(
              for c in q.order_by(Card.id).all()]
     return {"id": b.id, "status": b.status, "source_filename": b.source_filename,
             "stats": b.stats, "created_at": b.created_at, "cards": cards}
-
-
-XLSX_MIME = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
 
 
 @router.get("/batches/{batch_id}/report")

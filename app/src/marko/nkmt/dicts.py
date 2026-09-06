@@ -13,7 +13,7 @@ from sqlalchemy import func, select
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.orm import Session
 
-from marko.nkmt.models import BrandCache
+from marko.nkmt.models import BrandCache, Declaration, Rule
 from marko.platform.models import PlatformKV
 
 TTL = 24 * 3600
@@ -100,3 +100,15 @@ def get_defaults(db: Session) -> dict:
 
 def set_defaults(db: Session, value: dict) -> None:
     _kv_put(db, DEFAULTS_KEY, value)
+
+
+def get_rules(db: Session) -> list[dict]:
+    """Активные правила РД с реквизитами декларации (join; FK RESTRICT гарантирует
+    существование) — чистые dict'ы для resolve.match_rule, id по возрастанию."""
+    rows = db.execute(select(Rule, Declaration.doc_number, Declaration.doc_date)
+                      .join(Declaration, Rule.declaration_id == Declaration.id)
+                      .order_by(Rule.id)).all()
+    return [{"id": r.id, "brand": r.brand, "product_type": r.product_type,
+             "declaration_id": r.declaration_id, "declaration_number": doc_number,
+             "declaration_date": doc_date, "producer": r.producer}
+            for r, doc_number, doc_date in rows]

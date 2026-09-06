@@ -1,4 +1,4 @@
-"""Сервис импорта выгрузки НК: parse → defaults → validate → upsert карточек.
+"""Сервис импорта выгрузки НК: resolve → plan → persist карточек.
 
 Семантика пакета: повторный артикул ВНУТРИ файла — ошибка строки (первое
 вхождение выигрывает, дубль идёт только в stats — article в cards UNIQUE);
@@ -7,62 +7,133 @@ good_id/непустой gtin сохраняются (пустой gtin карт
 валидным gtin строки), карточка переезжает в новый батч; gtin, занятый
 другой карточкой (другой артикул, включая уже записанные в этом батче), —
 ошибка строки «gtin занят», отклонённый gtin в карточку не записывается.
+plan_batch (решения, read-only) отделён от _persist_batch (запись) —
+preview_batch и import_batch прогоняют один и тот же план, превью не может
+разойтись с импортом.
 """
 import base64
 import json
 
 from marko.connector_mt.manager import _sign_via_gateway
+from marko.nkmt import resolve as _resolve
 from marko.nkmt.client import NkHttpError
-from marko.nkmt.dicts import get_defaults
 from marko.nkmt.models import Batch, Card
-from marko.nkmt.parse import apply_defaults, parse_xlsx
-from marko.nkmt.validate import GTIN_RE, validate_rows
+from marko.nkmt.validate import GTIN_RE
 
 FEED_CHUNK = 500  # /nk/feed: не более 500 карточек за запрос
 SIGN_CHUNK = 10  # /nk/feed-product-document|sign-pkcs: не более 10 товаров за запрос
 
 
-def import_batch(db, filename: str, data: bytes, client, token) -> int:
-    """Выгрузка xlsx → батч + карточки; возвращает batch_id."""
-    rows = apply_defaults(parse_xlsx(data), get_defaults(db))
-    validated = validate_rows(db, client, token, rows)
+def plan_batch(db, validated: list[dict]) -> list[dict]:
+    """Решения импорта без записи: к каждой ValidatedRow — ошибка строки, итоговый
+    gtin (битый формат или занятый → ""), gtin_status (new|update|conflict;
+    конфликт — gtin чужой карточки или другой строки этого файла) и флаг дубля
+    артикула. Валидный gtin, назначенный другой строке, — «gtin занят» (первое
+    вхождение выигрывает, как последовательный upsert).
+    """
+    articles = [v["article"] for v in validated if v["article"]]
+    by_article = {c.article: c for c in
+                  db.query(Card).filter(Card.article.in_(articles or [""])).all()}
+    gtins = [v["gtin"] for v in validated if GTIN_RE.fullmatch(v["gtin"])]
+    by_gtin = {c.gtin: c for c in
+               db.query(Card).filter(Card.gtin.in_(gtins or [""])).all()}
+    planned, seen_article, seen_gtin = [], set(), set()
+    for v in validated:
+        p = dict(v)
+        art = v["article"]
+        if art in seen_article:
+            p.update(dup=True, gtin_final="", gtin_status="",
+                     error=(v["error"] + "; " if v["error"] else "")
+                     + "дубль артикула в файле")
+            planned.append(p)
+            continue
+        seen_article.add(art)
+        existing = by_article.get(art)
+        error = v["error"]
+        gtin, gstatus = "", ""
+        if GTIN_RE.fullmatch(v["gtin"]):
+            owner = by_gtin.get(v["gtin"])
+            if (owner and owner.article != art) or v["gtin"] in seen_gtin:
+                error = (error + "; " if error else "") + "gtin занят"
+                gstatus = "conflict"
+            elif existing is not None and existing.gtin:
+                gtin, gstatus = existing.gtin, "update"  # непустой gtin карточки сильнее строки
+            else:
+                seen_gtin.add(v["gtin"])
+                gtin, gstatus = v["gtin"], "new"
+        p.update(dup=False, gtin_final=gtin, gtin_status=gstatus, error=error)
+        planned.append(p)
+    return planned
+
+
+def _persist_batch(db, filename: str, planned: list[dict]) -> int:
+    """План → батч + upsert карточек (единственная пишущая стадия);
+    error-строки сохраняются карточками со статусом error (видны в UI),
+    дубли артикула — только в stats."""
     batch = Batch(source_filename=filename)
     db.add(batch)
     db.flush()  # id нужен карточкам для FK
     stats = {"ok": 0, "error": 0}
-    seen: set[str] = set()
-    for v in validated:
-        article = v["article"]
-        if article in seen:
-            stats["error"] += 1  # дубль артикула в файле: карточка первого вхождения уже есть
+    for p in planned:
+        if p["dup"]:
+            stats["error"] += 1
             continue
-        seen.add(article)
-        status, error = ("ok", "") if v["ok"] else ("error", v["error"])
-        gtin = v["gtin"]
-        if gtin and not GTIN_RE.fullmatch(gtin):
-            gtin = ""  # битый формат gtin не храним (ошибка уже в error строки)
-        if gtin:
-            clash = db.query(Card).filter(Card.gtin == gtin,
-                                          Card.article != article).first()
-            if clash:
-                status = "error"
-                error = f"{error}; gtin занят" if error else "gtin занят"
-                gtin = ""  # отклонённый gtin не сохраняем
-        card = db.query(Card).filter_by(article=article).first()
+        card = db.query(Card).filter_by(article=p["article"]).first()
         if card is None:
-            card = Card(article=article, gtin=gtin, batch_id=batch.id)
+            card = Card(article=p["article"], gtin=p["gtin_final"], batch_id=batch.id)
             db.add(card)
-        elif gtin and not card.gtin:
-            card.gtin = gtin  # дозаполняем только пустой gtin; непустой сохраняем
+        elif p["gtin_final"] and not card.gtin:
+            card.gtin = p["gtin_final"]  # дозаполняем только пустой; непустой сохраняем
         card.batch_id = batch.id
-        card.tnved, card.name, card.cat_id = v["tnved"], v["name"], v["cat_id"]
-        card.attributes = v["attributes"]
-        card.status, card.error_text = status, error
-        stats["ok" if status == "ok" else "error"] += 1
+        card.tnved, card.name, card.cat_id = p["tnved"], p["name"], p["cat_id"]
+        card.attributes = p["attributes"]
+        card.status = "ok" if p["error"] == "" else "error"
+        card.error_text = p["error"]
+        stats["ok" if card.status == "ok" else "error"] += 1
     batch.status = "new" if stats["error"] == 0 else "partial"
     batch.stats = stats
     db.commit()
     return batch.id
+
+
+def import_batch(db, filename: str, data: bytes, client, token) -> int:
+    """Выгрузка xlsx → батч + карточки; возвращает batch_id."""
+    res = _resolve.resolve_rows(db, client, token, data)
+    return _persist_batch(db, filename, plan_batch(db, res["validated"]))
+
+
+def preview_batch(db, data: bytes, client, token) -> dict:
+    """Dry-run импорта: тот же resolve → plan, ничего не пишется.
+
+    Возвращает {"rows": [...], "stats": {"ok","error","new","update","conflict"}}.
+    В строке — итоговые подстановки и их источник (src: file|rule|default),
+    сработавшее правило (rule_id) и судьба gtin (gtin_status). Дубль артикула
+    в файле — ошибка строки, карточки не будет (как в импорте).
+    """
+    res = _resolve.resolve_rows(db, client, token, data)
+    planned = plan_batch(db, res["validated"])
+    rows = []
+    for p, s, rule_id in zip(planned, res["src"], res["matched"]):
+        attrs = p["attributes"]   # итоговые значения: дата декларации уже из реестра
+        decl = attrs.get("23557") or {}
+        rows.append({
+            "article": p["article"], "name": p["name"], "tnved": p["tnved"],
+            "gtin": p["gtin_final"], "gtin_status": p["gtin_status"],
+            "brand": attrs.get("2504", ""), "product_type": attrs.get("12", ""),
+            "declaration_number": decl.get("number", ""),
+            "declaration_date": decl.get("date", ""),
+            "producer": attrs.get("2503", ""), "cat_id": p["cat_id"],
+            "ok": p["dup"] is False and p["error"] == "",
+            "error": p["error"], "dup": p["dup"],
+            "rule_id": rule_id, "src": {k: s[k] for k in
+                                        ("declaration_number", "producer", "brand")},
+        })
+    stats = {"ok": sum(1 for r in rows if r["ok"]),
+             "error": sum(1 for r in rows if not r["ok"]),
+             "new": sum(1 for r in rows if r["gtin_status"] == "new"),
+             "update": sum(1 for r in rows if r["gtin_status"] == "update"),
+             "conflict": sum(1 for r in rows if r["gtin_status"] == "conflict")}
+    return {"rows": rows, "stats": stats}
 
 
 def _feed_entry(card: Card) -> dict:

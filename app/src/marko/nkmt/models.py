@@ -1,4 +1,4 @@
-from sqlalchemy import DateTime, ForeignKey, Integer, String, UniqueConstraint, func
+from sqlalchemy import CheckConstraint, DateTime, ForeignKey, Integer, String, UniqueConstraint, func
 from sqlalchemy.dialects.postgresql import JSON
 from sqlalchemy.orm import Mapped, mapped_column
 from marko.db import Base
@@ -44,6 +44,28 @@ class Declaration(Base):
     doc_date: Mapped[str] = mapped_column(String(10))  # ISO 'YYYY-MM-DD'
     doc_type: Mapped[str] = mapped_column(String(16), default="declaration")  # declaration|certificate
     title: Mapped[str] = mapped_column(String, default="")
+
+
+class Rule(Base):
+    """Правило РД: подстановка декларации/производителя при импорте выгрузки.
+
+    Условие — точный бренд и/или вид товара (хотя бы одно непустое, CHECK);
+    пустое поле условия = «любой». Из подошедших правил выигрывает то, у кого
+    больше непустых условий, при равенстве — больший id (resolve.match_rule).
+    Приоритет значений: файл > правило > глоб. дефолт.
+    """
+    __tablename__ = "rules"
+    __table_args__ = (
+        CheckConstraint("btrim(brand) <> '' OR btrim(product_type) <> ''",
+                        name="ck_rules_condition"),
+        {"schema": "nkmt"},
+    )
+    id: Mapped[int] = mapped_column(primary_key=True)
+    brand: Mapped[str] = mapped_column(String, default="")            # "" = любой бренд
+    product_type: Mapped[str] = mapped_column(String, default="")     # "" = любой вид товара
+    declaration_id: Mapped[int] = mapped_column(
+        ForeignKey("nkmt.declarations.id", ondelete="RESTRICT"))
+    producer: Mapped[str] = mapped_column(String, default="")
 
 
 class BrandCache(Base):

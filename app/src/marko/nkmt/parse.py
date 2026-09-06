@@ -7,22 +7,57 @@ DATE_RE валидатора). apply_defaults подставляет платф�
 пустые ключи (techreg — всегда) и возвращает новые dict'ы, не мутируя вход.
 """
 import io
+from dataclasses import dataclass
 from datetime import date, datetime
 
 import openpyxl
 
-COLUMNS = {  # RU-заголовок (casefold, strip) → ключ строки
-    "тнвэд": "tnved", "наименование": "name", "вид товара": "product_type",
-    "цвет": "color", "состав": "composition", "размер": "size",
-    "модель/артикул": "model", "артикул": "article", "бренд": "brand",
-    "пол": "target_gender", "размерная система": "size_system",
-    "декларация": "declaration_number", "категория": "category_hint", "gtin": "gtin",
-    "дата декларации": "declaration_date",
-}
-REQUIRED_ROW_KEYS = ["article", "tnved", "name", "product_type", "color", "composition", "size"]
 
-DEFAULTED_KEYS = ["brand", "target_gender", "size_system", "declaration_number",
-                  "declaration_date", "producer", "country"]
+@dataclass(frozen=True)
+class ColumnSpec:
+    """Колонка выгрузки: единый источник для parse_xlsx, шаблона и «Инструкции».
+
+    title "" — колонки в файле нет (значение приходит только из дефолтов/правил).
+    Порядок SPEC = порядок колонок в шаблоне (как в тестовой HDR-фикстуре).
+    """
+    title: str
+    key: str
+    required: bool = False
+    defaultable: bool = False   # участвует в подстановках (дефолты/правила)
+    hint: str = ""
+
+
+SPEC: list[ColumnSpec] = [
+    ColumnSpec("Артикул", "article", required=True,
+               hint="уникальный ключ; повторный импорт обновляет карточку"),
+    ColumnSpec("ТНВЭД", "tnved", required=True, hint="ровно 10 цифр"),
+    ColumnSpec("Наименование", "name", required=True),
+    ColumnSpec("Вид товара", "product_type", required=True,
+               hint="точное значение из справочника НК (участвует в правилах РД)"),
+    ColumnSpec("Цвет", "color", required=True),
+    ColumnSpec("Состав", "composition", required=True),
+    ColumnSpec("Размер", "size", required=True, hint="например «M», «one size»"),
+    ColumnSpec("Модель/артикул", "model", hint="пусто — подставится артикул"),
+    ColumnSpec("Бренд", "brand", defaultable=True,
+               hint="точное имя ТМ из НК; иначе правило РД, затем дефолт"),
+    ColumnSpec("Пол", "target_gender", defaultable=True),
+    ColumnSpec("Размерная система", "size_system", defaultable=True),
+    ColumnSpec("Декларация", "declaration_number", defaultable=True,
+               hint="номер из реестра деклараций; иначе правило РД, затем дефолт"),
+    ColumnSpec("Дата декларации", "declaration_date", defaultable=True,
+               hint="ГГГГ-ММ-ДД; пустая — дата из реестра"),
+    ColumnSpec("Категория", "category_hint",
+               hint="подсказка при неоднозначной категории НК"),
+    ColumnSpec("GTIN", "gtin", hint="14 цифр; пустой — сгенерируется при подаче фида"),
+    ColumnSpec("", "producer", defaultable=True,
+               hint="производитель: файл → правило РД → дефолт; колонки в файле нет"),
+    ColumnSpec("", "country", defaultable=True,
+               hint="код страны («RU»); колонки в файле нет"),
+]
+
+COLUMNS = {s.title.casefold(): s.key for s in SPEC if s.title}
+REQUIRED_ROW_KEYS = [s.key for s in SPEC if s.required]
+DEFAULTED_KEYS = [s.key for s in SPEC if s.defaultable]
 
 
 def _cell(value) -> str:
