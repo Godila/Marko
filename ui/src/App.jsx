@@ -94,11 +94,12 @@ const M_ROWS = ['X...X', 'XX.XX', 'X.X.X', 'X...X', 'X...X']
 const markSvg = (size, fg, accent) => {
   const pad = 0.5, total = 9 + pad * 2, u = size / total
   const px = (n) => ((pad + n) * u).toFixed(2)
-  const cell = ([c, r]) => `<rect x="${px(c)}" y="${px(r)}" width="${u.toFixed(2)}" height="${u.toFixed(2)}" fill="${accent}"/>`
+  const cell = ([c, r], fill) => `<rect x="${px(c)}" y="${px(r)}" width="${u.toFixed(2)}" height="${u.toFixed(2)}" fill="${fill}"/>`
   const finder = `<rect x="${px(0)}" y="${px(0)}" width="${u.toFixed(2)}" height="${(9 * u).toFixed(2)}" fill="${fg}"/>` +
     `<rect x="${px(0)}" y="${px(8)}" width="${(9 * u).toFixed(2)}" height="${u.toFixed(2)}" fill="${fg}"/>`
-  const m = M_ROWS.flatMap((row, i) => [...row].map((ch, j) => ch === 'X' ? [2 + j, 2 + i] : null).filter(Boolean)).map(cell).join('')
-  return `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 ${size} ${size}" width="${size}" height="${size}" aria-hidden="true">${finder}${m}</svg>`
+  const timing = [[2, 0], [4, 0], [6, 0], [8, 2], [8, 4], [8, 6]].map((cr) => cell(cr, fg)).join('')
+  const m = M_ROWS.flatMap((row, i) => [...row].map((ch, j) => ch === 'X' ? [2 + j, 2 + i] : null).filter(Boolean)).map((cr) => cell(cr, accent)).join('')
+  return `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 ${size} ${size}" width="${size}" height="${size}" aria-hidden="true">${finder}${timing}${m}</svg>`
 }
 const Mark = ({ size = 34, fg = 'var(--rail-ink)', accent = '#E42B47' }) => (
   <span className="seal" style={{ display: 'inline-flex', lineHeight: 0 }}
