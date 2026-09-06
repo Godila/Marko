@@ -137,6 +137,20 @@ def nkmt_cycle(db) -> None:
         except Exception:
             db.rollback()
             log.exception("nkmt cycle failed for batch %s", batch.id)
+    _loop_marker(db, "nkmt_loop_last")
+
+
+def _loop_marker(db, key: str) -> None:
+    """kv-метка живости цикла (пульс консоли): client/token упал — метки нет."""
+    from sqlalchemy.dialects.postgresql import insert as pg_insert
+
+    from marko.platform.models import PlatformKV
+    db.execute(pg_insert(PlatformKV).values(
+        key=key, value={"ts": time.time()},
+    ).on_conflict_do_update(
+        index_elements=[PlatformKV.key], set_={"value": {"ts": time.time()}},
+    ))
+    db.commit()
 
 
 def _nkmt_loop():

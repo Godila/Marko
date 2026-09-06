@@ -142,3 +142,29 @@ def test_wb_returns_poll_502_on_wb_error(db, client, monkeypatch):
     monkeypatch.setattr(routes_journal, "WBClient", lambda **kw: Boom())
     r = client.post("/v1/wb/returns/poll", headers=AUTH)
     assert r.status_code == 502
+
+
+def test_pulse_aggregate(db, client):
+    import time as _t
+    from sqlalchemy.dialects.postgresql import insert as pg_insert
+    from marko.connector_wb.models import WbReturn
+    from marko.platform.models import PlatformKV
+
+    _sale(db)
+    client.post("/v1/batches/withdraw", headers=AUTH, json={"inn": INN})
+    db.add(WbReturn(srid="r1", order_id=7, status="Готов к выдаче",
+                    expired_dt="2099-01-01T10:00:00", payload={"isStatusActive": True}))
+    db.execute(pg_insert(PlatformKV).values(
+        key="wb_goodsreturn_usage", value={"stamps": [_t.time() - 60]}))
+    db.commit()
+    r = client.get("/v1/pulse", headers=AUTH_RO)
+    assert r.status_code == 200
+    body = r.json()
+    assert body["stats"] == {"WITHDRAWN": 1}          # вывод сразу переводит КМ
+    assert body["docs"] == {"LK_RECEIPT:draft": 1}
+    assert body["returns"]["active"] == 1
+    assert body["returns"]["nearest_deadline"].startswith("2099-01-01")
+    assert body["returns"]["pending_return"] == 0
+    assert body["quota"] == {"goods_return_used": 1, "goods_return_limit": 2}
+    assert set(body["markers"]) == {"wb_last_poll", "signer_last_seen",
+                                    "nkmt_loop_last", "returns_loop_last"}

@@ -4,6 +4,7 @@
 каждый новый возврат и приближение дедлайна (≤48 ч) подсвечиваем TG-алертом.
 """
 import logging
+import time
 from datetime import date, datetime, timedelta
 
 from sqlalchemy.orm import Session
@@ -77,4 +78,18 @@ def run_returns_once(db: Session, client, days_back: int = 7) -> dict:
     alerts = alert_returns(db)
     if stats["new"] or alerts:
         log.info("returns poll: %s, alerts=%d", stats, len(alerts))
+    mark_loop(db)
     return {**stats, "alerts": alerts}
+
+
+def mark_loop(db: Session) -> None:
+    """kv-метка живости мониторинга возвратов — её показывает пульс консоли."""
+    from sqlalchemy.dialects.postgresql import insert as pg_insert
+
+    from marko.platform.models import PlatformKV
+    db.execute(pg_insert(PlatformKV).values(
+        key="returns_loop_last", value={"ts": time.time()},
+    ).on_conflict_do_update(
+        index_elements=[PlatformKV.key], set_={"value": {"ts": time.time()}},
+    ))
+    db.commit()

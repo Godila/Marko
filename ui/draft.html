@@ -1,0 +1,1245 @@
+<!doctype html>
+<html lang="ru">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>МАРКО — консоль оператора маркировки (драфт)</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Unbounded:wght@400;500;600&family=Golos+Text:wght@400;500;600&family=JetBrains+Mono:wght@400;500;600&display=swap" rel="stylesheet">
+<style>
+/* ============ токены ============ */
+:root{
+  --paper:#F1F4F3; --surface:#FFFFFF; --surface-2:#F7F9F8;
+  --ink:#17242B; --muted:#5E6B72; --faint:#93A0A6;
+  --line:#DDE3E2; --line-strong:#C4CDCC;
+  --stamp:#C81E36; --stamp-dark:#8F1526; --stamp-bg:#FBEDEF;
+  --go:#1E7A4C; --go-bg:#E9F4EE;
+  --wait:#9A5B00; --wait-bg:#FBF3E2;
+  --info:#2759B7; --info-bg:#EBF1FA;
+  --rail:#0E181E; --rail-2:#152430; --rail-ink:#E9EFEF; --rail-mut:#8DA0AA; --rail-line:#22333F;
+  --mono:'JetBrains Mono',ui-monospace,monospace;
+  --ui:'Golos Text',system-ui,sans-serif;
+  --disp:'Unbounded',var(--ui);
+  --r:10px; --r-s:6px;
+  --shadow:0 12px 40px rgba(14,24,30,.18);
+}
+*{box-sizing:border-box;margin:0;padding:0}
+html{height:100%}
+body{font:14px/1.5 var(--ui);color:var(--ink);background:var(--paper);min-height:100%}
+button{font:inherit;color:inherit;background:none;border:0;cursor:pointer}
+input,select,textarea{font:inherit;color:var(--ink)}
+a{color:var(--info)}
+:focus-visible{outline:2px solid var(--info);outline-offset:2px;border-radius:2px}
+@media (prefers-reduced-motion:reduce){
+  *,*::before,*::after{animation:none!important;transition:none!important}
+}
+.mono{font-family:var(--mono)}
+.mut{color:var(--muted)}
+.faint{color:var(--faint)}
+.nowrap{white-space:nowrap}
+
+/* ============ каркас ============ */
+#app{display:grid;grid-template-columns:232px 1fr;min-height:100vh}
+.rail{background:var(--rail);color:var(--rail-ink);display:flex;flex-direction:column;position:sticky;top:0;height:100vh}
+.brand{padding:20px 20px 16px;border-bottom:1px solid var(--rail-line);display:flex;gap:10px;align-items:center}
+.brand .seal{flex:0 0 auto}
+.brand b{font:600 15px/1.25 var(--disp);letter-spacing:.02em;display:block}
+.brand span{font-size:11px;color:var(--rail-mut);display:block;margin-top:2px}
+.nav{padding:10px;display:flex;flex-direction:column;gap:2px;flex:1;overflow:auto}
+.nav-item{display:flex;align-items:center;gap:10px;padding:9px 12px;border-radius:var(--r-s);color:var(--rail-mut);text-align:left;width:100%}
+.nav-item svg{flex:0 0 auto;opacity:.8}
+.nav-item:hover{background:var(--rail-2);color:var(--rail-ink)}
+.nav-item[aria-current="true"]{background:var(--rail-2);color:var(--rail-ink)}
+.nav-item[aria-current="true"] .nav-dot{background:var(--stamp)}
+.nav-item .lbl{flex:1}
+.nav-item .cnt{font:500 11px var(--mono);background:var(--rail-2);border:1px solid var(--rail-line);border-radius:99px;padding:1px 7px;color:var(--rail-ink)}
+.nav-item[aria-current="true"] .cnt{border-color:transparent;background:var(--stamp)}
+.rail-foot{padding:14px 20px;border-top:1px solid var(--rail-line);font-size:12px;color:var(--rail-mut);display:flex;flex-direction:column;gap:6px}
+.rail-foot .who{display:flex;align-items:center;gap:8px;color:var(--rail-ink)}
+.rail-foot .who i{width:8px;height:8px;border-radius:50%;background:var(--go);display:inline-block}
+.rail-foot button{color:var(--rail-mut);text-align:left;padding:0}
+.rail-foot button:hover{color:var(--rail-ink);text-decoration:underline}
+.content{padding:26px 34px 60px;max-width:1160px;width:100%}
+
+/* мобильная шапка */
+.topnav{display:none}
+
+/* ============ шапка раздела ============ */
+.view-head{display:flex;align-items:flex-end;justify-content:space-between;gap:16px;margin-bottom:20px;flex-wrap:wrap}
+.view-head h1{font:500 21px/1.2 var(--disp);letter-spacing:.01em}
+.view-head .sub{color:var(--muted);margin-top:6px;max-width:640px}
+.head-tools{display:flex;align-items:center;gap:10px}
+.sync{font:500 12px var(--mono);color:var(--muted)}
+
+/* ============ пульс ============ */
+.pulse{background:var(--rail);color:var(--rail-ink);border-radius:var(--r);overflow:hidden;margin-bottom:22px}
+.pulse-grid{display:grid;grid-template-columns:repeat(4,1fr)}
+.pulse-cell{padding:14px 18px 12px;border-right:1px solid var(--rail-line);min-width:0}
+.pulse-cell:last-child{border-right:0}
+.pulse-cell .t{font-size:11px;letter-spacing:.08em;text-transform:uppercase;color:var(--rail-mut)}
+.pulse-cell .v{display:flex;align-items:center;gap:8px;margin-top:6px;font:500 13px var(--mono);white-space:nowrap}
+.pulse-cell .d{font-size:11px;color:var(--rail-mut);margin-top:2px}
+.pdot{width:8px;height:8px;border-radius:50%;background:var(--go);position:relative;flex:0 0 auto}
+.pdot.warn{background:#D9A13B}
+.pdot::after{content:"";position:absolute;inset:-4px;border-radius:50%;border:1px solid currentColor;color:var(--go);opacity:0;animation:ring 2.6s ease-out infinite}
+.pdot.warn::after{color:#D9A13B}
+@keyframes ring{0%{transform:scale(.4);opacity:.7}70%{transform:scale(1.25);opacity:0}100%{opacity:0}}
+.ekg{height:26px;background:var(--rail-2);border-top:1px solid var(--rail-line);overflow:hidden;position:relative}
+.ekg svg{display:block;height:100%;width:200%;animation:ekg 7s linear infinite}
+.ekg path{fill:none;stroke:var(--stamp);stroke-width:1.6;stroke-linejoin:round;opacity:.9}
+@keyframes ekg{from{transform:translateX(0)}to{transform:translateX(-50%)}}
+
+/* ============ сетки/карточки ============ */
+.grid2{display:grid;grid-template-columns:1.25fr 1fr;gap:22px;align-items:start}
+.card{background:var(--surface);border:1px solid var(--line);border-radius:var(--r)}
+.card + .card{margin-top:22px}
+.card-h{display:flex;align-items:center;justify-content:space-between;gap:12px;padding:14px 18px;border-bottom:1px solid var(--line)}
+.card-h h2{font:600 14px var(--ui)}
+.card-h .hint{font-size:12px;color:var(--faint)}
+.card-b{padding:16px 18px}
+.card-b.tight{padding:0}
+
+/* ============ «требует решения» ============ */
+.act{display:flex;gap:14px;align-items:flex-start;padding:13px 18px;border-bottom:1px solid var(--line)}
+.act:last-child{border-bottom:0}
+.act .bar{width:3px;border-radius:2px;align-self:stretch;flex:0 0 3px;background:var(--line-strong)}
+.act.urg .bar{background:var(--stamp)}
+.act.warn .bar{background:#D9A13B}
+.act.info .bar{background:var(--info)}
+.act .tx{flex:1;min-width:0}
+.act .tx b{font-weight:600}
+.act .tx .sm{color:var(--muted);font-size:12.5px;margin-top:2px}
+
+/* ============ лента ============ */
+.feed{list-style:none}
+.feed li{display:flex;gap:14px;padding:10px 18px;border-bottom:1px solid var(--line);font-size:13px}
+.feed li:last-child{border-bottom:0}
+.feed time{font:500 11.5px var(--mono);color:var(--faint);flex:0 0 40px;padding-top:2px}
+.feed .dotsep{width:6px;height:6px;border-radius:50%;background:var(--line-strong);flex:0 0 6px;margin-top:7px}
+.feed li.st-amp .dotsep{background:#D9A13B}
+.feed li.st-ok .dotsep{background:var(--go)}
+.feed li.st-bad .dotsep{background:var(--stamp)}
+
+/* ============ автоматика ============ */
+.loops{list-style:none}
+.loops li{display:flex;justify-content:space-between;gap:12px;padding:10px 18px;border-bottom:1px solid var(--line);font-size:13px}
+.loops li:last-child{border-bottom:0}
+.loops .nm{display:flex;align-items:center;gap:8px}
+.loops .int{font:500 11.5px var(--mono);color:var(--muted);white-space:nowrap}
+.note{font-size:12.5px;color:var(--muted);background:var(--surface-2);border:1px solid var(--line);border-radius:var(--r-s);padding:10px 12px;margin-top:12px}
+.note b{color:var(--ink)}
+
+/* ============ кнопки ============ */
+.btn{display:inline-flex;align-items:center;gap:7px;border:1px solid var(--line-strong);background:var(--surface);border-radius:var(--r-s);padding:7px 13px;font-weight:500;font-size:13px;transition:background .12s,border-color .12s}
+.btn:hover{background:var(--paper);border-color:var(--faint)}
+.btn:disabled{opacity:.45;cursor:not-allowed}
+.btn.pri{background:var(--ink);border-color:var(--ink);color:#fff}
+.btn.pri:hover{background:#233641}
+.btn.stamp{background:var(--stamp);border-color:var(--stamp);color:#fff}
+.btn.stamp:hover{background:var(--stamp-dark)}
+.btn.sm{padding:4px 10px;font-size:12px}
+.btn.ghost{border-color:transparent;background:transparent;color:var(--info)}
+.btn.ghost:hover{background:var(--info-bg)}
+.btn svg{flex:0 0 auto}
+
+/* ============ бейджи/чипы ============ */
+.bdg{display:inline-flex;align-items:center;gap:6px;font-size:12px;font-weight:500;padding:2px 9px;border-radius:99px;white-space:nowrap}
+.bdg::before{content:"";width:6px;height:6px;border-radius:50%;background:currentColor}
+.bdg.grey{background:#EEF1F0;color:var(--muted)}
+.bdg.blue{background:var(--info-bg);color:var(--info)}
+.bdg.amber{background:var(--wait-bg);color:var(--wait)}
+.bdg.green{background:var(--go-bg);color:var(--go)}
+.bdg.red{background:var(--stamp-bg);color:var(--stamp)}
+.chiprow{display:flex;flex-wrap:wrap;gap:8px}
+.chip{border:1px solid var(--line-strong);border-radius:99px;padding:4px 12px;font-size:12.5px;background:var(--surface);color:var(--muted);display:inline-flex;gap:7px;align-items:center}
+.chip .n{font:500 11px var(--mono)}
+.chip[aria-pressed="true"]{background:var(--ink);border-color:var(--ink);color:#fff}
+.chip[aria-pressed="true"] .n{color:#fff}
+.chip.alert{border-color:var(--stamp);color:var(--stamp)}
+.chip.alert[aria-pressed="true"]{background:var(--stamp);color:#fff}
+
+/* ============ обратный отсчёт ============ */
+.cd{font:600 12px var(--mono);padding:2px 8px;border-radius:var(--r-s);white-space:nowrap}
+.cd.ok{background:var(--go-bg);color:var(--go)}
+.cd.warn{background:var(--wait-bg);color:var(--wait)}
+.cd.danger{background:var(--stamp-bg);color:var(--stamp)}
+.cd.over{background:var(--stamp);color:#fff}
+
+/* ============ таблицы ============ */
+.twrap{overflow-x:auto}
+table.t{width:100%;border-collapse:collapse;font-size:13px}
+table.t th{font-size:11px;letter-spacing:.06em;text-transform:uppercase;color:var(--faint);font-weight:500;text-align:left;padding:10px 14px;border-bottom:1px solid var(--line);white-space:nowrap}
+table.t td{padding:10px 14px;border-bottom:1px solid var(--line);vertical-align:top}
+table.t tr:last-child td{border-bottom:0}
+table.t tbody tr:hover{background:var(--surface-2)}
+table.t td.mono,table.t .mono{font-family:var(--mono);font-size:12px}
+table.t .num{font-family:var(--mono);font-variant-numeric:tabular-nums}
+tr.rowhot{background:var(--stamp-bg)}
+tr.rowhot:hover{background:var(--stamp-bg)}
+.km{font-family:var(--mono);font-size:12px;display:inline-flex;align-items:center;gap:6px}
+.km button{color:var(--faint);display:inline-flex;padding:2px;border-radius:4px}
+.km button:hover{color:var(--info);background:var(--info-bg)}
+td.actions{white-space:nowrap;text-align:right}
+td.actions .btn{margin-left:6px}
+
+/* ============ формы ============ */
+.field{display:flex;flex-direction:column;gap:5px;margin-bottom:12px}
+.field label{font-size:12px;color:var(--muted);font-weight:500}
+.field input,.field select,.field textarea{border:1px solid var(--line-strong);border-radius:var(--r-s);padding:7px 10px;background:var(--surface)}
+.field input:focus,.field select:focus{outline:2px solid var(--info);outline-offset:0;border-color:var(--info)}
+.frow{display:flex;gap:10px;align-items:flex-end;flex-wrap:wrap}
+.frow .field{margin-bottom:0}
+.formgrid{display:grid;grid-template-columns:1fr 1fr;gap:0 16px}
+.search{display:flex;align-items:center;gap:8px;border:1px solid var(--line-strong);border-radius:var(--r-s);background:var(--surface);padding:6px 10px;min-width:220px}
+.search input{border:0;outline:0;flex:1;background:transparent}
+.search svg{color:var(--faint)}
+
+/* ============ дропзона/импорт ============ */
+.drop{border:1.5px dashed var(--line-strong);border-radius:var(--r);padding:22px;text-align:center;color:var(--muted);background:var(--surface-2);cursor:pointer;transition:border-color .12s,background .12s}
+.drop:hover,.drop.on{border-color:var(--info);background:var(--info-bg)}
+.drop b{color:var(--ink);font-weight:600}
+.drop .file{margin-top:6px;font:500 12px var(--mono);color:var(--info)}
+
+/* ============ конвейер каталога ============ */
+.pipeline{display:flex;gap:0;border:1px solid var(--line);border-radius:var(--r);overflow:hidden;background:var(--surface)}
+.stage{flex:1;padding:12px 14px;border-right:1px solid var(--line);text-align:left;min-width:0}
+.stage:last-child{border-right:0}
+.stage:hover{background:var(--surface-2)}
+.stage[aria-pressed="true"]{background:var(--rail);color:var(--rail-ink)}
+.stage .n{font:600 20px var(--mono);font-variant-numeric:tabular-nums}
+.stage .l{font-size:11px;letter-spacing:.05em;text-transform:uppercase;color:var(--faint);margin-top:2px}
+.stage[aria-pressed="true"] .l{color:var(--rail-mut)}
+.stage.has .n{color:var(--info)}
+.stage.has[aria-pressed="true"] .n{color:#fff}
+.stage.alert .n{color:var(--stamp)}
+
+/* ============ пачки каталога ============ */
+.batch{border-bottom:1px solid var(--line)}
+.batch:last-child{border-bottom:0}
+.batch-h{display:flex;align-items:center;gap:14px;padding:13px 18px;flex-wrap:wrap}
+.batch-h .id{font:600 14px var(--mono)}
+.batch-h .fn{color:var(--muted);font-size:12.5px;max-width:220px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.batch-h .sp{flex:1}
+.batch-h .btns{display:flex;gap:6px;flex-wrap:wrap}
+.cards-wrap{background:var(--surface-2);border-top:1px solid var(--line);padding:14px 18px}
+.cards-wrap .tools{display:flex;gap:10px;align-items:center;margin-bottom:10px}
+table.t.small td,table.t.small th{padding:7px 10px;font-size:12.5px}
+.err-tx{color:var(--stamp);font-size:12.5px}
+
+/* ============ сводка-полоса ============ */
+.strip{display:flex;gap:0;border:1px solid var(--line);border-radius:var(--r);background:var(--surface);overflow:hidden;margin-bottom:22px;flex-wrap:wrap}
+.kpi{padding:12px 20px;border-right:1px solid var(--line);min-width:130px}
+.kpi:last-child{border-right:0}
+.kpi .n{font:600 20px var(--mono);font-variant-numeric:tabular-nums}
+.kpi .n.warn{color:var(--wait)} .kpi .n.bad{color:var(--stamp)} .kpi .n.good{color:var(--go)}
+.kpi .l{font-size:11px;letter-spacing:.05em;text-transform:uppercase;color:var(--faint);margin-top:1px}
+
+/* ============ баннер ============ */
+.banner{display:flex;gap:12px;align-items:flex-start;border:1px solid var(--stamp);background:var(--stamp-bg);border-radius:var(--r);padding:13px 16px;margin-bottom:22px}
+.banner .b-ic{color:var(--stamp);flex:0 0 auto;margin-top:1px}
+.banner .b-tx{flex:1;font-size:13.5px}
+.banner .b-tx b{font-weight:600}
+.banner .b-tx .sm{color:var(--muted);font-size:12.5px;margin-top:2px}
+.banner.info{border-color:var(--info);background:var(--info-bg)}
+.banner.info .b-ic{color:var(--info)}
+
+/* ============ пусто ============ */
+.empty{padding:34px 18px;text-align:center;color:var(--muted)}
+.empty b{display:block;color:var(--ink);font-weight:600;margin-bottom:4px}
+
+/* ============ тосты ============ */
+#toasts{position:fixed;right:18px;top:18px;z-index:90;display:flex;flex-direction:column;gap:8px;max-width:380px}
+.toast{background:var(--rail);color:var(--rail-ink);border-radius:var(--r-s);padding:11px 14px;font-size:13px;box-shadow:var(--shadow);display:flex;gap:10px;align-items:flex-start;animation:tin .18s ease-out}
+.toast i{width:8px;height:8px;border-radius:50%;background:var(--go);flex:0 0 auto;margin-top:5px}
+.toast.warn i{background:#D9A13B}
+.toast.bad i{background:var(--stamp)}
+.toast .tt{font-weight:600}
+@keyframes tin{from{transform:translateY(-6px);opacity:0}to{transform:none;opacity:1}}
+
+/* ============ модалка/дровер ============ */
+.veil{position:fixed;inset:0;background:rgba(14,24,30,.5);z-index:70;display:none;align-items:center;justify-content:center;padding:20px}
+.veil.on{display:flex}
+.modal{background:var(--surface);border-radius:var(--r);box-shadow:var(--shadow);max-width:460px;width:100%;padding:22px}
+.modal h3{font:600 16px var(--ui);margin-bottom:8px}
+.modal p{color:var(--muted);font-size:13.5px;margin-bottom:8px}
+.modal .mono-s{font:500 12px var(--mono);background:var(--surface-2);border:1px solid var(--line);border-radius:var(--r-s);padding:8px 10px;margin:10px 0;color:var(--ink)}
+.modal .row{display:flex;justify-content:flex-end;gap:8px;margin-top:16px}
+.drawer-veil{position:fixed;inset:0;background:rgba(14,24,30,.35);z-index:60;display:none}
+.drawer-veil.on{display:block}
+.drawer{position:fixed;top:0;right:0;bottom:0;width:min(520px,94vw);background:var(--surface);z-index:65;box-shadow:var(--shadow);transform:translateX(105%);transition:transform .18s ease-out;display:flex;flex-direction:column}
+.drawer.on{transform:none}
+.drawer-h{display:flex;align-items:center;justify-content:space-between;gap:10px;padding:14px 18px;border-bottom:1px solid var(--line)}
+.drawer-h h3{font:600 14px var(--ui)}
+.drawer-b{padding:16px 18px;overflow:auto;flex:1}
+.drawer-b pre{font:12px/1.55 var(--mono);background:var(--surface-2);border:1px solid var(--line);border-radius:var(--r-s);padding:12px;overflow:auto;white-space:pre-wrap;word-break:break-word}
+
+/* ============ auth ============ */
+#auth{position:fixed;inset:0;z-index:100;background:var(--rail);display:flex;align-items:center;justify-content:center;padding:20px}
+.auth-card{background:var(--surface);border-radius:14px;padding:34px 32px;width:400px;max-width:100%}
+.auth-card .brandline{display:flex;align-items:center;gap:12px;margin-bottom:8px}
+.auth-card h1{font:600 19px var(--disp)}
+.auth-card .sub{color:var(--muted);font-size:13px;margin-bottom:20px}
+.auth-err{color:var(--stamp);font-size:12.5px;min-height:18px;margin-top:8px}
+.auth-foot{margin-top:18px;font-size:11.5px;color:var(--faint);line-height:1.55}
+.foot-note{margin-top:26px;font-size:11.5px;color:var(--faint);text-align:center}
+
+/* ============ адаптив ============ */
+@media (max-width:960px){
+  #app{grid-template-columns:1fr}
+  .rail{display:none}
+  .topnav{display:block;position:sticky;top:0;z-index:50;background:var(--rail);color:var(--rail-ink)}
+  .topnav .tn-brand{display:flex;align-items:center;gap:10px;padding:12px 16px;border-bottom:1px solid var(--rail-line)}
+  .topnav .tn-scroll{display:flex;gap:4px;overflow-x:auto;padding:8px 10px}
+  .topnav .nav-item{width:auto;white-space:nowrap}
+  .content{padding:18px 14px 50px}
+  .pulse-grid{grid-template-columns:1fr 1fr}
+  .pulse-cell{border-bottom:1px solid var(--rail-line)}
+  .grid2{grid-template-columns:1fr}
+  .formgrid{grid-template-columns:1fr}
+}
+</style>
+</head>
+<body>
+
+<!-- ================= AUTH ================= -->
+<div id="auth" role="dialog" aria-label="Вход в консоль">
+  <div class="auth-card">
+    <div class="brandline">
+      <svg class="seal" width="40" height="40" viewBox="0 0 40 40" aria-hidden="true">
+        <circle cx="20" cy="20" r="18.5" fill="none" stroke="#C81E36" stroke-width="2"/>
+        <circle cx="20" cy="20" r="13" fill="none" stroke="#C81E36" stroke-width="1"/>
+        <path d="M20 8v4M20 28v4M8 20h4M28 20h4" stroke="#C81E36" stroke-width="1.4"/>
+        <path d="M14.5 20.5l3.6 3.6 7.4-8" fill="none" stroke="#C81E36" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"/>
+      </svg>
+      <div>
+        <h1>МАРКО</h1>
+        <div style="font-size:11px;color:var(--faint)">МАРкировка + КОды · консоль оператора</div>
+      </div>
+    </div>
+    <p class="sub">Введите токен доступа платформы. Он выдаётся администратором и хранится только в этом браузере.</p>
+    <div class="field">
+      <label for="tok">Токен доступа</label>
+      <input id="tok" type="password" autocomplete="off" placeholder="mpmt_…" class="mono">
+    </div>
+    <button class="btn pri" id="loginBtn" style="width:100%;justify-content:center;padding:9px">Войти</button>
+    <div class="auth-err" id="authErr"></div>
+    <p class="auth-foot">Драфт интерфейса: проверка токена отключена, любые данные синтетические. Прод: GET /v1/me → имя и права токена.</p>
+  </div>
+</div>
+
+<!-- ================= APP ================= -->
+<div id="app" hidden>
+
+  <!-- тёмный диспетчерский рельс -->
+  <aside class="rail">
+    <div class="brand">
+      <svg class="seal" width="34" height="34" viewBox="0 0 40 40" aria-hidden="true">
+        <circle cx="20" cy="20" r="18.5" fill="none" stroke="#C81E36" stroke-width="2"/>
+        <circle cx="20" cy="20" r="13" fill="none" stroke="#C81E36" stroke-width="1"/>
+        <path d="M20 8v4M20 28v4M8 20h4M28 20h4" stroke="#C81E36" stroke-width="1.4"/>
+        <path d="M14.5 20.5l3.6 3.6 7.4-8" fill="none" stroke="#C81E36" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"/>
+      </svg>
+      <div><b>МАРКО</b><span>Честный знак · нацкат · WB</span></div>
+    </div>
+    <nav class="nav" aria-label="Разделы">
+      <button class="nav-item" data-view="overview" aria-current="true">
+        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M2 12h4l2.5-6 4 12 2.5-6h7"/></svg>
+        <span class="lbl">Обзор</span>
+      </button>
+      <button class="nav-item" data-view="withdraw">
+        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 7h13l-3-3M20 17H7l3 3"/></svg>
+        <span class="lbl">Вывод из оборота</span><span class="cnt" id="cntWithdraw">3</span>
+      </button>
+      <button class="nav-item" data-view="returns">
+        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M9 14L4 9l5-5"/><path d="M4 9h10a6 6 0 0 1 0 12h-3"/></svg>
+        <span class="lbl">Возвраты</span><span class="cnt" id="cntReturns">2</span>
+      </button>
+      <button class="nav-item" data-view="catalog">
+        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linejoin="round"><rect x="3" y="3" width="7" height="7" rx="1"/><rect x="14" y="3" width="7" height="7" rx="1"/><rect x="3" y="14" width="7" height="7" rx="1"/><rect x="14" y="14" width="7" height="7" rx="1"/></svg>
+        <span class="lbl">Каталог НК</span><span class="cnt" id="cntCatalog">1</span>
+      </button>
+      <button class="nav-item" data-view="refs">
+        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 19.5A2.5 2.5 0 0 1 6.5 17H20"/><path d="M6.5 2H20v20H6.5A2.5 2.5 0 0 1 4 19.5v-15A2.5 2.5 0 0 1 6.5 2z"/></svg>
+        <span class="lbl">Справочники</span>
+      </button>
+      <button class="nav-item" data-view="journal">
+        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M8 6h13M8 12h13M8 18h13M3.5 6h.01M3.5 12h.01M3.5 18h.01"/></svg>
+        <span class="lbl">Журнал КМ</span><span class="cnt" id="cntAnom">1</span>
+      </button>
+    </nav>
+    <div class="rail-foot">
+      <span class="who"><i></i> оператор · read, docs:submit, nkmt:import</span>
+      <button id="logoutBtn">Выйти из консоли</button>
+      <span class="mono" style="font-size:10.5px">API: ок · БД: ок</span>
+    </div>
+  </aside>
+
+  <div>
+    <!-- мобильная шапка -->
+    <div class="topnav">
+      <div class="tn-brand">
+        <svg width="26" height="26" viewBox="0 0 40 40" aria-hidden="true">
+          <circle cx="20" cy="20" r="18.5" fill="none" stroke="#C81E36" stroke-width="2"/>
+          <path d="M14.5 20.5l3.6 3.6 7.4-8" fill="none" stroke="#C81E36" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"/>
+        </svg>
+        <b style="font:600 13px var(--disp)">МАРКО</b>
+      </div>
+      <div class="tn-scroll">
+        <button class="nav-item" data-view="overview" aria-current="true"><span class="lbl">Обзор</span></button>
+        <button class="nav-item" data-view="withdraw"><span class="lbl">Вывод</span></button>
+        <button class="nav-item" data-view="returns"><span class="lbl">Возвраты</span></button>
+        <button class="nav-item" data-view="catalog"><span class="lbl">Каталог</span></button>
+        <button class="nav-item" data-view="refs"><span class="lbl">Справочники</span></button>
+        <button class="nav-item" data-view="journal"><span class="lbl">Журнал</span></button>
+      </div>
+    </div>
+
+    <main class="content">
+
+      <!-- ========== ОБЗОР ========== -->
+      <section class="view" id="view-overview">
+        <div class="view-head">
+          <div>
+            <h1>Обзор</h1>
+            <div class="sub">Сводка платформы на <span class="mono nowrap" id="todayStr">05.09.2026</span>. Сначала то, что требует решения, потом — что происходит само.</div>
+          </div>
+          <div class="head-tools">
+            <span class="sync" id="syncStr">обновлено 0 с назад</span>
+            <button class="btn sm" id="refreshBtn" title="Обновить данные">
+              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 12a9 9 0 1 1-2.64-6.36M21 3v6h-6"/></svg>
+              Обновить
+            </button>
+          </div>
+        </div>
+
+        <!-- СИГНАТУРА: пульс платформы -->
+        <div class="pulse" aria-label="Пульс платформы">
+          <div class="pulse-grid">
+            <div class="pulse-cell">
+              <div class="t">WB-поллинг</div>
+              <div class="v"><span class="pdot"></span>06:30 МСК</div>
+              <div class="d">продажи/возвраты → журнал · след. 18:30</div>
+            </div>
+            <div class="pulse-cell">
+              <div class="t">Signer · УКЭП</div>
+              <div class="v"><span class="pdot"></span>4 мин назад</div>
+              <div class="d">подписи уходят, сторож молчания активен</div>
+            </div>
+            <div class="pulse-cell">
+              <div class="t">Цикл НКМТ</div>
+              <div class="v"><span class="pdot"></span>7 мин назад</div>
+              <div class="d">модерация и подписи карточек · каждые 10 мин</div>
+            </div>
+            <div class="pulse-cell">
+              <div class="t">Монитор возвратов</div>
+              <div class="v"><span class="pdot warn"></span>23 мин назад</div>
+              <div class="d">дедлайн забора: через 18 ч → алерт в Telegram</div>
+            </div>
+          </div>
+          <div class="ekg" aria-hidden="true">
+            <svg viewBox="0 0 480 26" preserveAspectRatio="none">
+              <path d="M0 13h56l6-1 5-9 6 17 6-9 4 2h44l6-1 5-9 6 17 6-9 4 2h44l6-1 5-9 6 17 6-9 4 2h44l6-1 5-9 6 17 6-9 4 2h44l6-1 5-9 6 17 6-9 4 2h44l6-1 5-9 6 17 6-9 4 2h56"/>
+            </svg>
+          </div>
+        </div>
+
+        <div class="grid2">
+          <div>
+            <!-- ТРЕБУЕТ РЕШЕНИЯ -->
+            <div class="card">
+              <div class="card-h"><h2>Требует решения</h2><span class="hint">4 пункта</span></div>
+              <div>
+                <div class="act urg">
+                  <div class="bar"></div>
+                  <div class="tx">
+                    <b>Дедлайн забора возврата: через <span data-cd="hot">18 ч</span></b>
+                    <div class="sm">Заказ 31284591 «Джинсы» · ПВЗ №12041, Москва, ул. Академика Королёва, 8 · до 06.09 21:00</div>
+                  </div>
+                  <button class="btn sm" data-goto="returns">Открыть возвраты</button>
+                </div>
+                <div class="act warn">
+                  <div class="bar"></div>
+                  <div class="tx">
+                    <b>3 КМ готовы к выводу из оборота</b>
+                    <div class="sm">Продажи WB от 04–05.09, все с фискальным чеком · суммарно 13&nbsp;070&nbsp;₽</div>
+                  </div>
+                  <button class="btn sm pri" id="mkWithdrawBtn">Собрать вывод</button>
+                </div>
+                <div class="act">
+                  <div class="bar"></div>
+                  <div class="tx">
+                    <b>Черновик №23 ждёт подачи в ЧЗ</b>
+                    <div class="sm">LK_RECEIPT, 3 позиции · создан 05.09 09:12</div>
+                  </div>
+                  <button class="btn sm" data-goto="withdraw">К документам</button>
+                </div>
+                <div class="act urg">
+                  <div class="bar"></div>
+                  <div class="tx">
+                    <b>Аномалия: перепродажа выведенного КМ</b>
+                    <div class="sm">ANOMALY_RESALE · повторная продажа после вывода · код 01:0460…ЛЮФ8</div>
+                  </div>
+                  <button class="btn sm" data-goto="journal" data-anom="1">Разобрать</button>
+                </div>
+              </div>
+            </div>
+
+            <!-- ЛЕНТА -->
+            <div class="card">
+              <div class="card-h"><h2>События за сутки</h2><span class="hint">те же, что уходят в Telegram</span></div>
+              <ul class="feed">
+                <li class="st-ok"><time>12:04</time><span class="dotsep"></span><span>ЧЗ: документ №22 (LK_RECEIPT) <b>принят</b> — 2 КМ выведены из оборота</span></li>
+                <li class="st-bad"><time>11:47</time><span class="dotsep"></span><span>Возврат 31284591: до дедлайна забора ≤48 ч — иначе товар уйдёт на склад WB</span></li>
+                <li class="st-amp"><time>10:15</time><span class="dotsep"></span><span>НКМТ: батч №8 на модерации — 30 ok / 2 error</span></li>
+                <li><time>09:41</time><span class="dotsep"></span><span>Импорт: батч №9 «vygruzka_sentyabr.xlsx», 30 карточек</span></li>
+                <li class="st-ok"><time>06:30</time><span class="dotsep"></span><span>WB-поллинг: продаж 3, возвратов 0, вне контура (FBW) 1</span></li>
+                <li><time>05:58</time><span class="dotsep"></span><span>Сторож: signer на связи, тишина 4 мин — норма</span></li>
+              </ul>
+            </div>
+          </div>
+
+          <div>
+            <!-- АВТОМАТИКА -->
+            <div class="card">
+              <div class="card-h"><h2>Автоматика</h2><span class="hint">воркер платформы</span></div>
+              <ul class="loops">
+                <li><span class="nm"><span class="pdot"></span>Экзайз-поллинг WB</span><span class="int">06:30 / 18:30 МСК</span></li>
+                <li><span class="nm"><span class="pdot"></span>Проверка документов ЧЗ</span><span class="int">каждые 10 мин</span></li>
+                <li><span class="nm"><span class="pdot"></span>НКМТ: модерация + подпись</span><span class="int">каждые 10 мин</span></li>
+                <li><span class="nm"><span class="pdot"></span>Монитор возвратов WB</span><span class="int">каждый час</span></li>
+                <li><span class="nm"><span class="pdot"></span>Сторож signer</span><span class="int">каждые 30 мин</span></li>
+              </ul>
+              <div class="card-b" style="border-top:1px solid var(--line)">
+                <p style="font-size:12.5px;color:var(--muted)">Критичное дублируется в Telegram: новые возвраты, дедлайны ≤48 ч, принятые и отклонённые документы, публикация батчей, молчание signer.</p>
+              </div>
+            </div>
+
+            <!-- КВОТЫ -->
+            <div class="card">
+              <div class="card-h"><h2>Квоты внешних API</h2></div>
+              <div class="card-b" style="font-size:13px">
+                <div style="display:flex;justify-content:space-between;margin-bottom:8px"><span>WB goods-return</span><b class="mono" style="color:var(--wait)">1 из 2 в час</b></div>
+                <div style="height:6px;background:var(--surface-2);border:1px solid var(--line);border-radius:99px;overflow:hidden"><div style="width:50%;height:100%;background:#D9A13B"></div></div>
+                <p style="font-size:12px;color:var(--muted);margin-top:8px">Ручной опрос возвратов расходует ту же квоту, что и часовой автоматический. Обычно кнопка не нужна.</p>
+              </div>
+            </div>
+          </div>
+        </div>
+        <div class="foot-note">Интерактивный драфт · 05.09.2026 · данные синтетические · карта экранов и привязка к API — в сопроводительном сообщении</div>
+      </section>
+
+      <!-- ========== ВЫВОД ИЗ ОБОРОТА ========== -->
+      <section class="view" id="view-withdraw" hidden>
+        <div class="view-head">
+          <div>
+            <h1>Вывод из оборота</h1>
+            <div class="sub">Продажи FBS становятся позициями журнала; из них собирается документ LK_RECEIPT (дистанционная продажа) и подаётся в «Честный знак».</div>
+          </div>
+          <div class="head-tools"><span class="sync" id="syncStrW">обновлено 0 с назад</span></div>
+        </div>
+
+        <div class="strip">
+          <div class="kpi"><div class="n warn" id="kpiPendW">3</div><div class="l">к выводу</div></div>
+          <div class="kpi"><div class="n" id="kpiDraft">1</div><div class="l">черновик</div></div>
+          <div class="kpi"><div class="n" id="kpiSubmitted">1</div><div class="l">подан</div></div>
+          <div class="kpi"><div class="n good">14</div><div class="l">принят ЧЗ</div></div>
+          <div class="kpi"><div class="n bad">0</div><div class="l">ошибок</div></div>
+        </div>
+
+        <div class="card">
+          <div class="card-h">
+            <h2>Готовы к выводу</h2>
+            <span class="hint">шт: <span class="mono" id="pendCount">3</span> · ИНН из «Справочников»</span>
+          </div>
+          <div class="twrap"><table class="t">
+            <thead><tr><th>Код маркировки</th><th>Продажа</th><th>Чек</th><th>Цена</th></tr></thead>
+            <tbody id="pendBody">
+          </table></div>
+          <div class="card-b" style="border-top:1px solid var(--line);display:flex;justify-content:space-between;align-items:center;gap:12px;flex-wrap:wrap">
+            <span style="font-size:12.5px;color:var(--muted)">Смешанных позиций нет: все три с фискальным чеком → один документ.</span>
+            <button class="btn pri" id="mkWithdrawBtn2">Собрать вывод</button>
+          </div>
+        </div>
+
+        <div class="card">
+          <div class="card-h"><h2>Документы LK_RECEIPT</h2><span class="hint">автопроверка статуса — каждые 10 мин</span></div>
+          <div class="twrap"><table class="t" id="docsW">
+            <thead><tr><th>№</th><th>Статус</th><th>uuid в ЧЗ</th><th>Позиций</th><th>Создан</th><th></th></tr></thead>
+            <tbody></tbody>
+          </table></div>
+          <div class="card-b note" style="margin:14px 16px;border-top:0">КМ получают статус «Выведен» в момент создания черновика; подача в ЧЗ — отдельный шаг. Позиции без фискального чека уходят отдельным документом с типом «Иное» и служебным наименованием первички.</div>
+        </div>
+      </section>
+
+      <!-- ========== ВОЗВРАТЫ ========== -->
+      <section class="view" id="view-returns" hidden>
+        <div class="view-head">
+          <div>
+            <h1>Возвраты</h1>
+            <div class="sub">Физическое движение: покупатель сдал товар на ПВЗ → забрать до дедлайна (WB хранит 7 дней) → КМ появляется в «к возврату» → собирается LP_RETURN.</div>
+          </div>
+          <div class="head-tools"><span class="sync" id="syncStrR">обновлено 0 с назад</span></div>
+        </div>
+
+        <div class="banner">
+          <svg class="b-ic" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 3"/></svg>
+          <div class="b-tx">
+            <b>Заказ 31284591: забрать с ПВЗ №12041 до 21:00 (через <span data-cd="hot">18 ч</span>)</b>
+            <div class="sm">Просрочите — товар вернут на склад WB, и вывод КМ придётся делать по другой схеме. Алерт уже ушёл в Telegram.</div>
+          </div>
+          <button class="btn sm" data-goto="journal">КМ заказа</button>
+        </div>
+
+        <div class="strip">
+          <div class="kpi"><div class="n" id="kpiPendR">2</div><div class="l">к возврату в ЧЗ</div></div>
+          <div class="kpi"><div class="n warn">2</div><div class="l">активных на ПВЗ</div></div>
+          <div class="kpi"><div class="n good">6</div><div class="l">возвращено</div></div>
+          <div class="kpi"><div class="n bad">0</div><div class="l">просрочено</div></div>
+        </div>
+
+        <div class="card">
+          <div class="card-h">
+            <h2>Возвраты на ПВЗ (WB goods-return)</h2>
+            <div style="display:flex;align-items:center;gap:10px">
+              <span class="hint">квота 2 запроса/час · последний опрос 13:05</span>
+              <button class="btn sm" id="pollWbBtn">Обновить WB</button>
+            </div>
+          </div>
+          <div class="twrap"><table class="t">
+            <thead><tr><th>Заказ</th><th>Предмет</th><th>Причина</th><th>Статус</th><th>Забрать до</th><th>Выдан</th><th>ПВЗ</th></tr></thead>
+            <tbody>
+              <tr class="rowhot">
+                <td class="num">31284591</td><td>Джинсы</td><td>не подошёл размер</td><td><span class="bdg amber">готов к выдаче</span></td>
+                <td><span class="cd danger" data-cd-el="hot">18 ч</span><div class="faint mono" style="font-size:11px;margin-top:2px">06.09 21:00</div></td>
+                <td class="faint">—</td><td>№12041 · Москва, ул. Ак. Королёва, 8</td>
+              </tr>
+              <tr>
+                <td class="num">31280177</td><td>Футболка</td><td>брак</td><td><span class="bdg amber">готов к выдаче</span></td>
+                <td><span class="cd ok" data-cd-el="mid">6 дн</span><div class="faint mono" style="font-size:11px;margin-top:2px">12.09 14:00</div></td>
+                <td class="faint">—</td><td>№08417 · Химки, ул. Горшина, 6</td>
+              </tr>
+              <tr>
+                <td class="num">31276430</td><td>Платье</td><td>не подошёл размер</td><td><span class="bdg green">возвращён продавцу</span></td>
+                <td class="faint">—</td><td>03.09 10:15</td><td>№30562 · Москва, Кутузовский пр-т, 30</td>
+              </tr>
+            </tbody>
+          </table></div>
+          <div class="card-b" style="border-top:1px solid var(--line);display:flex;justify-content:space-between;align-items:center;gap:12px;flex-wrap:wrap">
+            <span style="font-size:12.5px;color:var(--muted)">Товар, выданный продавцом, уже учтён в журнале: 2 КМ в статусе «К возврату».</span>
+            <button class="btn pri" id="mkReturnBtn">Собрать возврат</button>
+          </div>
+        </div>
+
+        <div class="card">
+          <div class="card-h"><h2>Документы LP_RETURN</h2><span class="hint">первичка — чек из последнего вывода КМ</span></div>
+          <div class="twrap"><table class="t" id="docsR">
+            <thead><tr><th>№</th><th>Статус</th><th>uuid в ЧЗ</th><th>Позиций</th><th>Создан</th><th></th></tr></thead>
+            <tbody></tbody>
+          </table></div>
+        </div>
+      </section>
+
+      <!-- ========== КАТАЛОГ НК ========== -->
+      <section class="view" id="view-catalog" hidden>
+        <div class="view-head">
+          <div>
+            <h1>Каталог НК</h1>
+            <div class="sub">Карточки Национального каталога: импорт выгрузки 1С → фид → модерация → подпись УКЭП → публикация → отчёт для 1С.</div>
+          </div>
+          <div class="head-tools"><span class="sync" id="syncStrC">обновлено 0 с назад</span></div>
+        </div>
+
+        <div class="pipeline" role="group" aria-label="Конвейер батчей">
+          <button class="stage has" data-stage=""><span class="n">3</span><div class="l">все батчи</div></button>
+          <button class="stage has" data-stage="new"><span class="n">1</span><div class="l">новый</div></button>
+          <button class="stage" data-stage="feeding"><span class="n">0</span><div class="l">подача</div></button>
+          <button class="stage alert" data-stage="moderation"><span class="n">1</span><div class="l">модерация</div></button>
+          <button class="stage" data-stage="signing"><span class="n">0</span><div class="l">подпись</div></button>
+          <button class="stage has" data-stage="published"><span class="n">1</span><div class="l">опубликован</div></button>
+          <button class="stage" data-stage="error"><span class="n">0</span><div class="l">ошибка</div></button>
+        </div>
+
+        <div class="card" style="margin-top:22px">
+          <div class="card-h"><h2>Импорт выгрузки</h2><span class="hint">.xlsx из 1С → карточки с дефолтами из «Справочников»</span></div>
+          <div class="card-b">
+            <div class="drop" id="drop" tabindex="0" role="button" aria-label="Выбрать файл выгрузки">
+              <b>Выберите или перетащите выгрузку .xlsx</b>
+              <div style="font-size:12.5px;margin-top:2px">атрибуты подтянутся по ТН ВЭД, декларация — из справочника</div>
+              <div class="file" id="dropFile"></div>
+            </div>
+            <div style="display:flex;justify-content:flex-end;margin-top:12px">
+              <button class="btn pri" id="importBtn" disabled>Импортировать</button>
+            </div>
+          </div>
+        </div>
+
+        <div class="card">
+          <div class="card-h"><h2>Батчи</h2><span class="hint">модерация и подпись прогоняются автоматически каждые 10 мин</span></div>
+          <div id="batchList"></div>
+        </div>
+      </section>
+
+      <!-- ========== СПРАВОЧНИКИ ========== -->
+      <section class="view" id="view-refs" hidden>
+        <div class="view-head">
+          <div>
+            <h1>Справочники</h1>
+            <div class="sub">Общие значения для карточек НК и документов: заполняются один раз, подставляются автоматически.</div>
+          </div>
+        </div>
+
+        <div class="grid2">
+          <div>
+            <div class="card">
+              <div class="card-h"><h2>Дефолты карточек НК</h2><span class="hint">подставляются при импорте</span></div>
+              <div class="card-b">
+                <div class="formgrid">
+                  <div class="field"><label>Бренд</label><input value="ADEL FACTORY"></div>
+                  <div class="field"><label>Технический регламент</label><input value="ТР ТС 017/2011"></div>
+                  <div class="field"><label>Пол</label><select><option>Мужской</option><option>Женский</option><option selected>Унисекс</option></select></div>
+                  <div class="field"><label>Система размеров</label><input value="RU"></div>
+                  <div class="field"><label>Страна (ISO)</label><input value="RU" style="max-width:110px"></div>
+                  <div class="field"><label>Номер декларации</label><input class="mono" style="font-size:12px" value="ЕАЭС N RU Д-RU.АБ87.В.12345/26"></div>
+                  <div class="field"><label>Дата декларации</label><input type="date" value="2026-03-14"></div>
+                </div>
+                <div class="field"><label>Производитель</label><input value="ООО «АДЕЛЬ-ТЕКСТИЛЬ», 649002, Респ. Алтай, г. Горно-Алтайск, ул. Чорос-Гуркина, 15"></div>
+                <div style="display:flex;justify-content:flex-end"><button class="btn pri" id="saveDefsBtn">Сохранить дефолты</button></div>
+              </div>
+            </div>
+
+            <div class="card">
+              <div class="card-h"><h2>Эмиттер документов</h2><span class="hint">реквизиты для LK_RECEIPT</span></div>
+              <div class="card-b">
+                <div class="field"><label>ИНН продавца</label><input class="mono" value="090201471350" style="max-width:220px"></div>
+                <div class="field"><label>ФИАС места отгрузки</label><input class="mono" style="font-size:12px" value="0c5b2444-70a0-4932-980c-b4dc0d3f02b5">
+                  <span style="font-size:12px;color:var(--muted)">Прод ЧЗ отклоняет DISTANCE без ФИАС — не оставляйте пустым.</span></div>
+                <div class="field"><label>Наименование первички для чеков без фискального знака</label><input value="Чек дистанционной продажи Wildberries (FBS)"></div>
+                <div style="display:flex;justify-content:flex-end"><button class="btn pri" id="saveEmitterBtn">Сохранить реквизиты</button></div>
+              </div>
+            </div>
+          </div>
+
+          <div>
+            <div class="card">
+              <div class="card-h"><h2>Декларации соответствия</h2><span class="hint">выбираются в карточках по совпадению номера</span></div>
+              <div class="card-b" style="border-bottom:1px solid var(--line)">
+                <div class="frow">
+                  <div class="field" style="flex:1;min-width:170px"><label>Номер</label><input id="declNum" placeholder="ЕАЭС N RU Д-…"></div>
+                  <div class="field"><label>Дата</label><input id="declDate" type="date"></div>
+                  <div class="field"><label>Тип</label><select id="declType"><option value="declaration">декларация</option><option value="certificate">сертификат</option></select></div>
+                  <button class="btn pri" id="addDeclBtn">Добавить</button>
+                </div>
+              </div>
+              <div class="twrap"><table class="t small" id="declTable">
+                <thead><tr><th>Номер</th><th>Дата</th><th>Тип</th><th></th></tr></thead>
+                <tbody></tbody>
+              </table></div>
+            </div>
+
+            <div class="card">
+              <div class="card-h"><h2>Доступ</h2></div>
+              <div class="card-b" style="font-size:13px;color:var(--muted)">
+                <p>Токен хранится в этом браузере и уходит только в API платформы. Права видны в левой панели под именем оператора; новые токены выпускает администратор платформы.</p>
+              </div>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <!-- ========== ЖУРНАЛ КМ ========== -->
+      <section class="view" id="view-journal" hidden>
+        <div class="view-head">
+          <div>
+            <h1>Журнал кодов маркировки</h1>
+            <div class="sub">Жизненный цикл каждого КМ: продажа → вывод из оборота → возврат. Аномалии требуют ручного разбора — автоматика их не трогает.</div>
+          </div>
+          <div class="head-tools"><span class="sync" id="syncStrJ">обновлено 0 с назад</span></div>
+        </div>
+
+        <div class="chiprow" id="stateChips" style="margin-bottom:14px"></div>
+        <div class="frow" style="margin-bottom:14px">
+          <div class="search">
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><circle cx="11" cy="11" r="7"/><path d="m20 20-3.5-3.5"/></svg>
+            <input id="kmSearch" placeholder="Поиск по коду КМ или заказу…">
+          </div>
+          <span class="hint" style="font-size:12px;color:var(--faint)">показано <span class="mono" id="jShown">0</span> из <span class="mono">15</span></span>
+        </div>
+
+        <div class="card">
+          <div class="twrap"><table class="t" id="jTable">
+            <thead><tr><th>Код маркировки</th><th>Состояние</th><th>Последний сигнал</th><th>Обновлён</th></tr></thead>
+            <tbody></tbody>
+          </table></div>
+        </div>
+        <div class="foot-note">Клик по строке — полная карточка события (JSON). Клик по иконке у кода — копирование.</div>
+      </section>
+
+    </main>
+  </div>
+</div>
+
+<!-- ================= тосты / модалка / дровер ================= -->
+<div id="toasts" aria-live="polite"></div>
+
+<div class="veil" id="veil">
+  <div class="modal" role="dialog" aria-modal="true" aria-labelledby="mTitle">
+    <h3 id="mTitle"></h3>
+    <p id="mText"></p>
+    <div class="mono-s" id="mDetail" hidden></div>
+    <div class="row">
+      <button class="btn" id="mCancel">Отмена</button>
+      <button class="btn pri" id="mOk">Подтвердить</button>
+    </div>
+  </div>
+</div>
+
+<div class="drawer-veil" id="drawerVeil"></div>
+<aside class="drawer" id="drawer" aria-label="Детали">
+  <div class="drawer-h">
+    <h3 id="dTitle"></h3>
+    <button class="btn sm" id="dClose">Закрыть</button>
+  </div>
+  <div class="drawer-b">
+    <div id="dBody"></div>
+  </div>
+</aside>
+
+<script>
+/* ================= данные драфта (синтетические) ================= */
+const now = Date.now(), H = 3600e3;
+const iso = (t) => { const d = new Date(t); return d.toLocaleDateString('ru-RU',{day:'2-digit',month:'2-digit'}) + ' ' + d.toLocaleTimeString('ru-RU',{hour:'2-digit',minute:'2-digit'}) };
+const DEADLINE_HOT = now + 18 * H, DEADLINE_MID = now + 6 * 24 * H + 12 * H;
+
+const ST_ITEM = {
+  NEW:['новый','grey'], PENDING_WITHDRAW:['к выводу','amber'], WITHDRAWN:['выведен','green'],
+  PENDING_RETURN:['к возврату','blue'], RETURNED:['возвращён','green'],
+  ANOMALY_RESALE:['аномалия: перепродажа','red'], ANOMALY_NO_RECEIPT:['аномалия: нет чека','red'],
+  ANOMALY_RERETURN:['аномалия: повторный возврат','red'], SKIPPED_FBW:['вне контура · FBW','grey'],
+};
+const ST_DOC = { draft:['черновик','grey'], signing:['подписывается','blue'], submitted:['подан','blue'], checked_ok:['принят ЧЗ','green'], error:['ошибка','red'] };
+const ST_CARD = { ok:['новая','grey'], fed:['подана','blue'], moderation:['модерация','amber'], notsigned:['ждёт подписи','amber'], signing:['подписывается','blue'], published:['опубликована','green'], error:['ошибка','red'], errors:['ошибки','red'], error_sign:['ошибка подписи','red'] };
+
+let docs = [
+  {id:23,type:'LK_RECEIPT',status:'draft',uuid:'',pos:3,created:'05.09 09:12',
+   payload:{inn:'090201471350',action:'DISTANCE',action_date:'2026-09-05',document_type:'RECEIPT',document_number:'WB-23',document_date:'2026-09-05',fias_id:'0c5b2444-70a0-4932-980c-b4dc0d3f02b5',products:[{cis:'01:04607123450138:21ЯБЦУ9ГЧ0ЛЮФ8',product_cost:459000},{cis:'01:04607123450145:21ВГДЕ5ЖЗ0ИКЛМ',product_cost:299000},{cis:'01:04607123450207:21НОПР2СТ0УФХЦ',product_cost:549000}]}},
+  {id:22,type:'LK_RECEIPT',status:'submitted',uuid:'9f2c4e10-7a41-4d02-b1e8-0c93f2ad7c55',pos:2,created:'04.09 18:40'},
+  {id:21,type:'LK_RECEIPT',status:'checked_ok',uuid:'1a7bd2f4-02c8-49e1-9a4d-7712c0e5b3aa',pos:2,created:'03.09 07:05'},
+  {id:20,type:'LP_RETURN',status:'checked_ok',uuid:'77e0c1b9-53f2-4a87-8d20-6fa1c9d4e210',pos:1,created:'02.09 12:22'},
+  {id:19,type:'LP_RETURN',status:'error',uuid:'b3d14e66-8a2c-4f51-b0aa-92c7d5e8f104',pos:2,created:'01.09 16:03',err:'CHECKED_NOT_OK: первичный документ не найден в ГИС МТ'},
+];
+let nextDocId = 24;
+let pendW = 3, pendR = 2;
+
+const journal = [
+  {km:'01:04607123450138:21ЯБЦУ9ГЧ0ЛЮФ8',st:'PENDING_WITHDRAW',sig:'продажа · 05.09 06:31 · чек 12351 · 4 590 ₽',upd:'05.09 06:31',
+   ev:{source:'wb_excise',kind:'sale',srid:'31284591',fiscal_doc_number:'12351',fiscal_dt:'2026-09-05',price:4590,operation_type_id:1}},
+  {km:'01:04607123450145:21ВГДЕ5ЖЗ0ИКЛМ',st:'PENDING_WITHDRAW',sig:'продажа · 05.09 06:29 · чек 12351 · 2 990 ₽',upd:'05.09 06:29',
+   ev:{source:'wb_excise',kind:'sale',srid:'31284592',fiscal_doc_number:'12351',fiscal_dt:'2026-09-05',price:2990,operation_type_id:1}},
+  {km:'01:04607123450207:21НОПР2СТ0УФХЦ',st:'PENDING_WITHDRAW',sig:'продажа · 04.09 18:44 · чек 12348 · 5 490 ₽',upd:'04.09 18:44',
+   ev:{source:'wb_excise',kind:'sale',srid:'31279004',fiscal_doc_number:'12348',fiscal_dt:'2026-09-04',price:5490,operation_type_id:1}},
+  {km:'01:04607123450344:21ЫЭЮЯ4АБ0ВГДЕ',st:'PENDING_RETURN',sig:'возврат · 03.09 10:15 · чек 12001 · вывод №21',upd:'03.09 10:15',
+   ev:{source:'wb_excise',kind:'return',srid:'31276430',fiscal_doc_number:'12001',fiscal_dt:'2026-09-03',price:3990,operation_type_id:2}},
+  {km:'01:04607123450351:21ЖЗИК5ЛМ0НОПР',st:'PENDING_RETURN',sig:'возврат · 02.09 19:02 · чек 11988 · вывод №20',upd:'02.09 19:02',
+   ev:{source:'wb_excise',kind:'return',srid:'31268815',fiscal_doc_number:'11988',fiscal_dt:'2026-09-02',price:2450,operation_type_id:2}},
+  {km:'01:04607123450401:21РСТУ7ВГ0ДЕЗИ',st:'ANOMALY_RESALE',sig:'повторная продажа · 05.09 05:58 · после вывода 01.09',upd:'05.09 05:58',
+   ev:{source:'wb_excise',kind:'sale',srid:'31286001',fiscal_doc_number:'12344',fiscal_dt:'2026-09-05',price:6900,operation_type_id:1,note:'state=WITHDRAWN → sale'}},
+  {km:'01:04607123450152:21КЛМН9ОП0РСТУ',st:'WITHDRAWN',sig:'вывод · 04.09 · документ №22',upd:'04.09 18:41',
+   ev:{source:'emitter',kind:'withdraw',doc_id:22}},
+  {km:'01:04607123450169:21ФХЦЧ1ШЩ0ЪЫЬЭ',st:'WITHDRAWN',sig:'вывод · 04.09 · документ №22',upd:'04.09 18:41',
+   ev:{source:'emitter',kind:'withdraw',doc_id:22}},
+  {km:'01:04607123450176:21ЮЯАБ3ВГ0ДЕЖЗ',st:'WITHDRAWN',sig:'вывод · 03.09 · документ №21',upd:'03.09 07:06',
+   ev:{source:'emitter',kind:'withdraw',doc_id:21}},
+  {km:'01:04607123450183:21ИКЛМ5НО0ПРСТ',st:'WITHDRAWN',sig:'вывод · 03.09 · документ №21',upd:'03.09 07:06',
+   ev:{source:'emitter',kind:'withdraw',doc_id:21}},
+  {km:'01:04607123450368:21УФХЦ7ЧШ0ЩЪЫЭ',st:'RETURNED',sig:'возврат проведён · 02.09 · документ №20',upd:'02.09 12:23',
+   ev:{source:'emitter',kind:'return_apply',doc_id:20}},
+  {km:'01:04607123450214:21ЯБВГ9ДЕ0ЖЗИК',st:'SKIPPED_FBW',sig:'продажа вне FBS · склад WB · вне контура',upd:'04.09 06:31',
+   ev:{source:'wb_excise',kind:'skip_fbw',srid:'31277110',reason:'rid not in fbs set'}},
+];
+const jCounts = {PENDING_WITHDRAW:3,PENDING_RETURN:2,WITHDRAWN:14,RETURNED:6,ANOMALY_RESALE:1,SKIPPED_FBW:5,NEW:0};
+
+let decls = [
+  {num:'ЕАЭС N RU Д-RU.АБ87.В.12345/26',date:'14.03.2026',type:'декларация'},
+  {num:'ЕАЭС N RU Д-CN.ЛБ02.В.98765/25',date:'02.11.2025',type:'декларация'},
+  {num:'ТС RU С-CN.ЛБ04.В.00312/25',date:'20.06.2025',type:'сертификат'},
+];
+
+let batches = [
+  {id:9,status:'new',file:'vygruzka_sentyabr.xlsx',created:'05.09 09:41',stats:{ok:30,error:0},
+   cards:[]},
+  {id:8,status:'moderation',file:'vygruzka_avgust.xlsx',created:'29.08 11:20',stats:{ok:30,error:2},
+   cards:[
+    {article:'DF-JNS-032',gtin:'04607123450138',name:'Джинсы мужские прямые, синий',status:'moderation'},
+    {article:'DF-JNS-033',gtin:'04607123450145',name:'Джинсы мужские зауженные, чёрный',status:'moderation'},
+    {article:'TF-BSK-101',gtin:'04607123450207',name:'Футболка базовая, хлопок 100%',status:'error',err:'Отклонено: атрибут «Состав» не соответствует схеме ТН ВЭД'},
+    {article:'DR-FLW-017',gtin:'04607123450344',name:'Платье летнее, вискоза',status:'error',err:'GTIN уже занят другой карточкой организации'},
+    {article:'SK-WNT-056',gtin:'04607123450351',name:'Юбка зимняя, шерсть',status:'moderation'},
+   ]},
+  {id:7,status:'published',file:'vygruzka_avgust.xlsx',created:'21.08 09:03',stats:{ok:12,error:0},
+   cards:[
+    {article:'DF-JNS-001',gtin:'04607123450038',name:'Джинсы мужские классические',status:'published'},
+    {article:'TF-WHT-002',gtin:'04607123450045',name:'Футболка белая, хлопок',status:'published'},
+    {article:'DR-CLS-003',gtin:'04607123450052',name:'Платье классическое, тёмно-синее',status:'published'},
+   ]},
+];
+
+/* ================= каркас: роутер, синхронизация ================= */
+const $ = (s,el=document)=>el.querySelector(s);
+const $$ = (s,el=document)=>[...el.querySelectorAll(s)];
+let currentView = 'overview';
+
+function show(view){
+  currentView = view;
+  $$('.view').forEach(v=>v.hidden = v.id !== 'view-'+view);
+  $$('.nav-item').forEach(b=>b.setAttribute('aria-current', b.dataset.view===view ? 'true':'false'));
+  window.scrollTo({top:0});
+}
+$$('.nav-item').forEach(b=>b.addEventListener('click',()=>show(b.dataset.view)));
+$$('[data-goto]').forEach(b=>b.addEventListener('click',()=>{
+  show(b.dataset.goto);
+  if(b.dataset.anom){ setChip('ANOMALY_RESALE'); renderJournal(); }
+}));
+
+/* «обновлено N с назад» */
+const t0 = Date.now();
+const syncEls = ['syncStr','syncStrW','syncStrR','syncStrC','syncStrJ'].map(id=>document.getElementById(id)).filter(Boolean);
+setInterval(()=>{ const s = Math.round((Date.now()-t0)/1000);
+  syncEls.forEach(el=>el.textContent = `обновлено ${s} с назад`); }, 5000);
+$('#refreshBtn').addEventListener('click',()=>toast('Данные обновлены','Драфт: показатели не изменились.'));
+
+$('#todayStr').textContent = new Date().toLocaleDateString('ru-RU',{day:'2-digit',month:'2-digit',year:'numeric'});
+
+/* ================= обратный отсчёт ================= */
+function fmtLeft(ms){
+  if(ms<=0) return 'просрочен';
+  const h = ms/H;
+  if(h>=48) return Math.round(h/24)+' дн';
+  if(h>=1) return Math.round(h)+' ч';
+  return Math.max(1,Math.round(ms/60000))+' мин';
+}
+function cdClass(ms){ return ms<=0?'over' : ms<=24*H?'danger' : ms<=48*H?'warn' : 'ok'; }
+function tickCd(){
+  $$('[data-cd]').forEach(el=>{ el.textContent = fmtLeft(DEADLINE_HOT-Date.now()); });
+  $$('[data-cd-el]').forEach(el=>{ const mid = el.dataset.cdEl==='mid';
+    const ms = (mid?DEADLINE_MID:DEADLINE_HOT)-Date.now();
+    el.textContent = fmtLeft(ms); el.className = 'cd '+cdClass(ms); });
+}
+tickCd(); setInterval(tickCd, 30000);
+
+/* ================= тосты ================= */
+function toast(title, text='', kind=''){
+  const el = document.createElement('div');
+  el.className = 'toast '+(kind==='warn'?'warn':kind==='bad'?'bad':'');
+  el.innerHTML = `<i></i><div><div class="tt"></div><div class="tx" style="opacity:.85;font-size:12.5px;margin-top:2px"></div></div>`;
+  el.querySelector('.tt').textContent = title;
+  el.querySelector('.tx').textContent = text;
+  $('#toasts').appendChild(el);
+  setTimeout(()=>{ el.style.opacity='0'; el.style.transition='opacity .3s'; setTimeout(()=>el.remove(),320); }, 4200);
+}
+
+/* ================= модалка подтверждения ================= */
+let mAction = null;
+function confirmModal(title, text, detail, okLabel, action){
+  $('#mTitle').textContent = title; $('#mText').textContent = text;
+  const d = $('#mDetail'); d.hidden = !detail; if(detail) d.textContent = detail;
+  $('#mOk').textContent = okLabel; mAction = action;
+  $('#veil').classList.add('on'); $('#mOk').focus();
+}
+$('#mCancel').addEventListener('click',()=>$('#veil').classList.remove('on'));
+$('#veil').addEventListener('click',e=>{ if(e.target===e.currentTarget) $('#veil').classList.remove('on'); });
+document.addEventListener('keydown',e=>{ if(e.key==='Escape'){ $('#veil').classList.remove('on'); closeDrawer(); }});
+$('#mOk').addEventListener('click',()=>{ $('#veil').classList.remove('on'); if(mAction) mAction(); });
+
+/* ================= дровер ================= */
+function openDrawer(title, bodyNode){
+  $('#dTitle').textContent = title;
+  const b = $('#dBody'); b.innerHTML=''; b.appendChild(bodyNode);
+  $('#drawer').classList.add('on'); $('#drawerVeil').classList.add('on');
+}
+function closeDrawer(){ $('#drawer').classList.remove('on'); $('#drawerVeil').classList.remove('on'); }
+$('#dClose').addEventListener('click',closeDrawer);
+$('#drawerVeil').addEventListener('click',closeDrawer);
+const preJSON = (obj)=>{ const p = document.createElement('pre'); p.textContent = JSON.stringify(obj,null,2); return p; };
+
+/* ================= копирование ================= */
+document.addEventListener('click',e=>{
+  const b = e.target.closest('[data-copy]'); if(!b) return;
+  navigator.clipboard?.writeText(b.dataset.copy).then(()=>toast('Код скопирован','','ok')).catch(()=>{});
+});
+
+/* ================= документы (вывод + возврат) ================= */
+function docRows(type){
+  return docs.filter(d=>d.type===type).map(d=>{
+    const [lbl,cls] = ST_DOC[d.status];
+    const acts = [];
+    if(d.status==='draft') acts.push(`<button class="btn sm pri" data-submit="${d.id}">Подать</button>`);
+    if(d.status==='submitted'||d.status==='error') acts.push(`<button class="btn sm" data-check="${d.id}">Проверить</button>`);
+    acts.push(`<button class="btn sm" data-payload="${d.id}">Состав</button>`);
+    return `<tr>
+      <td class="num">${d.id}</td>
+      <td><span class="bdg ${cls}">${lbl}</span>${d.err?`<div class="err-tx" style="margin-top:3px">${d.err}</div>`:''}</td>
+      <td class="mono">${d.uuid||'—'}</td>
+      <td class="num">${d.pos}</td>
+      <td class="mono">${d.created}</td>
+      <td class="actions">${acts.join('')}</td></tr>`;
+  }).join('') || `<tr><td colspan="6"><div class="empty"><b>Документов пока нет</b>Соберите первый из позиций журнала.</div></td></tr>`;
+}
+function renderDocs(){
+  $('#docsW tbody').innerHTML = docRows('LK_RECEIPT');
+  $('#docsR tbody').innerHTML = docRows('LP_RETURN');
+  $('#kpiDraft').textContent = docs.filter(d=>d.type==='LK_RECEIPT'&&d.status==='draft').length;
+  $('#kpiSubmitted').textContent = docs.filter(d=>d.type==='LK_RECEIPT'&&d.status==='submitted').length;
+}
+document.addEventListener('click',e=>{
+  const s = e.target.closest('[data-submit]');
+  if(s){ const d = docs.find(x=>x.id==s.dataset.submit);
+    confirmModal(`Подать документ №${d.id} в «Честный знак»?`,
+      'Документ уйдёт в ЧЗ и будет подписан УКЭП автоматически. Отменить подачу нельзя — только создать корректировку.',
+      `${d.type} · позиций: ${d.pos} · ИНН 090201471350`, 'Подать в ЧЗ', ()=>{
+        d.status='submitted'; d.uuid = crypto.randomUUID();
+        renderDocs(); kpis();
+        toast(`Документ №${d.id} подан`, 'Статус «подан». Автопроверка доведёт до «принят ЧЗ».');
+      });
+  }
+  const c = e.target.closest('[data-check]');
+  if(c){ const d = docs.find(x=>x.id==c.dataset.check);
+    d.status='checked_ok'; renderDocs(); kpis();
+    toast(`Документ №${d.id} принят ЧЗ`,'checked_ok — позиции считаются обработанными.');
+  }
+  const p = e.target.closest('[data-payload]');
+  if(p){ const d = docs.find(x=>x.id==p.dataset.payload);
+    const wrap = document.createElement('div');
+    const meta = document.createElement('p');
+    meta.style.cssText='font-size:12.5px;color:var(--muted);margin-bottom:10px';
+    meta.textContent = 'Так документ уходит в ЧЗ: base64(JSON) в product_document. Правка состава — только пересборкой черновика.';
+    wrap.appendChild(meta); wrap.appendChild(preJSON(d.payload||{note:'в драфте состав приведён только для черновика №23'}));
+    openDrawer(`Документ №${d.id} · ${d.type}`, wrap);
+  }
+});
+
+/* ================= KPI ================= */
+const pendRows = [
+  {km:'01:04607123450138:21ЯБЦУ9ГЧ0ЛЮФ8',sale:'05.09 06:31',chk:'12351',price:'4 590 ₽'},
+  {km:'01:04607123450145:21ВГДЕ5ЖЗ0ИКЛМ',sale:'05.09 06:29',chk:'12351',price:'2 990 ₽'},
+  {km:'01:04607123450207:21НОПР2СТ0УФХЦ',sale:'04.09 18:44',chk:'12348',price:'5 490 ₽'},
+];
+const copyIco = (km)=>`<button title="Скопировать" data-copy="${km}"><svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="9" y="9" width="12" height="12" rx="2"/><path d="M5 15V5a2 2 0 0 1 2-2h10"/></svg></button>`;
+function renderPend(){
+  $('#pendBody').innerHTML = pendW
+    ? pendRows.slice(0,pendW).map(r=>`<tr><td><span class="km">${r.km}${copyIco(r.km)}</span></td><td>${r.sale}</td><td class="num">${r.chk}</td><td class="num">${r.price}</td></tr>`).join('')
+    : `<tr><td colspan="4"><div class="empty"><b>Всё выведено</b>Новые продажи появятся после поллинга WB — 06:30 и 18:30 МСК.</div></td></tr>`;
+  ['#mkWithdrawBtn','#mkWithdrawBtn2'].forEach(s=>{ $(s).disabled = !pendW; });
+}
+function kpis(){
+  $('#kpiPendW').textContent = pendW; $('#pendCount').textContent = pendW;
+  $('#kpiPendR').textContent = pendR;
+  $('#cntWithdraw').textContent = pendW;
+  $('#cntReturns').textContent = pendR;
+  renderPend();
+}
+
+/* ================= сбор батчей ================= */
+function mkWithdraw(){
+  if(!pendW){ toast('Нет позиций к выводу','Журнал не содержит КМ в статусе «к выводу».','warn'); return; }
+  confirmModal('Собрать вывод из оборота?',
+    `Из ${pendW} КМ со фискальными чеками будет создан черновик LK_RECEIPT. КМ сразу перейдут в «Выведен», подача в ЧЗ — отдельным шагом.`,
+    'LK_RECEIPT · DISTANCE · ИНН 090201471350 · ФИАС подставится из «Справочников»', 'Собрать документ', ()=>{
+      docs.unshift({id:nextDocId,type:'LK_RECEIPT',status:'draft',uuid:'',pos:pendW,created:iso(Date.now()),payload:{note:'сокращено в драфте'}});
+      pendW = 0; renderDocs(); kpis();
+      toast(`Создан черновик №${nextDocId}`, 'КМ переведены в «Выведен». Подайте документ в ЧЗ.');
+      nextDocId++;
+    });
+}
+$('#mkWithdrawBtn').addEventListener('click',mkWithdraw);
+$('#mkWithdrawBtn2').addEventListener('click',mkWithdraw);
+
+$('#mkReturnBtn').addEventListener('click',()=>{
+  if(!pendR){ toast('Нет позиций к возврату','Нет КМ в статусе «к возврату».','warn'); return; }
+  confirmModal('Собрать возврат продавца?',
+    `Из ${pendR} КМ будет создан черновик LP_RETURN. Первичка — чеки из последних выводов; КМ без вывода будут пропущены и останутся «к возврату».`,
+    'LP_RETURN · REMOTE_SALE_RETURN · оплачено · первичка: RECEIPT', 'Собрать документ', ()=>{
+      docs.unshift({id:nextDocId,type:'LP_RETURN',status:'draft',uuid:'',pos:pendR,created:iso(Date.now()),payload:{note:'сокращено в драфте'}});
+      pendR = 0; renderDocs(); kpis();
+      toast(`Создан черновик LP_RETURN №${nextDocId}`, 'КМ переведены в «Возвращён». Подайте документ в ЧЗ.');
+      nextDocId++;
+    });
+});
+
+/* ================= опрос WB ================= */
+$('#pollWbBtn').addEventListener('click',()=>{
+  confirmModal('Опросить WB goods-return вручную?',
+    'Ручной опрос расходует ту же квоту, что и часовой автоматический: сейчас использован 1 из 2 запросов часа.',
+    'GET goods-return · last 7 days', 'Опросить', ()=>{
+      toast('Опрос выполнен','Новых возвратов 0, обновлено 1. Квота часа: 2 из 2.','warn');
+    });
+});
+
+/* ================= каталог ================= */
+let batchFilter = '';
+function renderPipeline(){
+  $$('.stage').forEach(st=>{
+    const f = st.dataset.stage;
+    st.setAttribute('aria-pressed', String(f===batchFilter));
+  });
+}
+$$('.stage').forEach(st=>st.addEventListener('click',()=>{ batchFilter = st.dataset.stage; renderPipeline(); renderBatches(); }));
+
+function renderBatches(){
+  const list = batches.filter(b=>!batchFilter||b.status===batchFilter);
+  $('#batchList').innerHTML = list.map(b=>{
+    const [lbl,cls] = {new:['новый','grey'],partial:['частично','amber'],feeding:['подача','blue'],moderation:['модерация','amber'],signing:['подпись','blue'],published:['опубликован','green'],error:['ошибка','red']}[b.status];
+    const cards = (b.cards||[]).map(c=>{
+      const [cl,cc] = ST_CARD[c.status];
+      return `<tr><td class="mono">${c.article}</td><td class="mono">${c.gtin||'—'}</td><td>${c.name}</td><td><span class="bdg ${cc}">${cl}</span></td><td class="err-tx">${c.err||''}</td></tr>`;
+    }).join('');
+    return `<div class="batch">
+      <div class="batch-h">
+        <span class="id">№${b.id}</span>
+        <span class="bdg ${cls}">${lbl}</span>
+        <span class="fn" title="${b.file}">${b.file}</span>
+        <span class="hint mono">${b.created}</span>
+        <span class="bdg ${b.stats.error?'red':'green'}">${b.stats.ok}/${b.stats.error}</span>
+        <span class="sp"></span>
+        <span class="btns">
+          <button class="btn sm" data-cards="${b.id}">Карточки</button>
+          ${b.status==='new'?`<button class="btn sm pri" data-feed="${b.id}">Подать фид</button>`:''}
+          ${b.status==='moderation'||b.status==='feeding'?`<button class="btn sm" data-refresh="${b.id}">Обновить</button>`:''}
+          ${b.status==='signing'?`<button class="btn sm pri" data-sign="${b.id}">Подписать</button>`:''}
+          <button class="btn sm" data-report="${b.id}" data-fmt="xlsx">Отчёт 1С</button>
+        </span>
+      </div>
+      ${cards?`<div class="cards-wrap" hidden>
+        <div class="tools"><span class="hint">карточки батча · счёт по статусам обновляется автопрогоном</span></div>
+        <div class="twrap"><table class="t small">
+          <thead><tr><th>Артикул</th><th>GTIN</th><th>Наименование</th><th>Статус</th><th>Ошибка</th></tr></thead>
+          <tbody>${cards}</tbody></table></div></div>`:''}
+    </div>`;
+  }).join('') || `<div class="empty"><b>Батчей в этом статусе нет</b>Импортируйте выгрузку, чтобы начать новый.</div>`;
+}
+document.addEventListener('click',e=>{
+  const cb = e.target.closest('[data-cards]');
+  if(cb){ const b = batches.find(x=>x.id==cb.dataset.cards);
+    const wrap = b.closest ? null : null; /* noop */
+    const panel = cb.closest('.batch').querySelector('.cards-wrap');
+    if(panel){ panel.hidden = !panel.hidden; cb.textContent = panel.hidden?'Карточки':'Скрыть'; }
+    return;
+  }
+  const fd = e.target.closest('[data-feed]');
+  if(fd){ const b = batches.find(x=>x.id==fd.dataset.feed);
+    confirmModal('Подать фид в Национальный каталог?',`Батч №${b.id} уйдёт в НК: ${b.stats.ok} карточек. Дальше модерация и подпись идут автоматически.`,'POST /v1/nkmt/batches/'+b.id+'/feed','Подать фид',()=>{
+      b.status='moderation'; renderBatches();
+      toast(`Фид батча №${b.id} отправлен`,'Дальше автоматика опрашивает модерацию каждые 10 мин.');
+    }); return; }
+  const rf = e.target.closest('[data-refresh]');
+  if(rf){ toast('Модерация опрошена','Изменений: 0. Следующий автопрогон — через 10 мин.'); return; }
+  const sg = e.target.closest('[data-sign]');
+  if(sg){ const b = batches.find(x=>x.id==sg.dataset.sign);
+    b.status='published'; renderBatches();
+    toast(`Батч №${b.id} подписан и опубликован`,'Карточки доступны в НК; отчёт для 1С готов.'); return; }
+  const rp = e.target.closest('[data-report]');
+  if(rp){ toast('Отчёт для 1С','В драфте скачивание отключено. Прод: xlsx «GTIN | Наименование» по опубликованным карточкам.'); return; }
+});
+
+/* импорт */
+const drop = $('#drop'); let fileChosen = false;
+const chooseFile = ()=>{ fileChosen = true; $('#dropFile').textContent = 'vygruzka_oktyabr_preview.xlsx · 128 КБ'; $('#importBtn').disabled = false; };
+drop.addEventListener('click',chooseFile);
+drop.addEventListener('keydown',e=>{ if(e.key==='Enter'||e.key===' '){ e.preventDefault(); chooseFile(); }});
+['dragover','dragenter'].forEach(ev=>drop.addEventListener(ev,e=>{ e.preventDefault(); drop.classList.add('on'); }));
+['dragleave','drop'].forEach(ev=>drop.addEventListener(ev,e=>{ e.preventDefault(); drop.classList.remove('on'); }));
+drop.addEventListener('drop',chooseFile);
+$('#importBtn').addEventListener('click',()=>{
+  batches.unshift({id:10,status:'new',file:'vygruzka_oktyabr_preview.xlsx',created:iso(Date.now()),stats:{ok:30,error:0},cards:[]});
+  $('#importBtn').disabled = true; $('#dropFile').textContent = '';
+  fileChosen = false; renderBatches(); renderPipeline();
+  toast('Импорт завершён','Батч №10: 30 карточек, ошибок 0. Подайте фид, когда готовы.');
+});
+
+/* ================= справочники ================= */
+function renderDecls(){
+  $('#declTable tbody').innerHTML = decls.map((d,i)=>`<tr>
+    <td style="font-size:12.5px">${d.num}</td><td class="mono">${d.date}</td>
+    <td><span class="bdg ${d.type==='сертификат'?'blue':'grey'}">${d.type}</span></td>
+    <td class="actions"><button class="btn sm" data-del="${i}">Удалить</button></td></tr>`).join('');
+}
+$('#addDeclBtn').addEventListener('click',()=>{
+  const num = $('#declNum').value.trim(), date = $('#declDate').value;
+  if(!num||!date){ toast('Заполните номер и дату','','warn'); return; }
+  if(decls.some(d=>d.num===num)){ toast('Такая декларация уже есть','Пара номер+дата должна быть уникальной.','warn'); return; }
+  decls.push({num,date:new Date(date).toLocaleDateString('ru-RU'),type:$('#declType').value==='certificate'?'сертификат':'декларация'});
+  $('#declNum').value=''; $('#declDate').value=''; renderDecls();
+  toast('Декларация добавлена','');
+});
+document.addEventListener('click',e=>{
+  const del = e.target.closest('[data-del]');
+  if(del){ const i = +del.dataset.del;
+    confirmModal('Удалить декларацию?', decls[i].num, 'Карточки, где она уже подставлена, не изменятся.', 'Удалить', ()=>{
+      decls.splice(i,1); renderDecls(); toast('Декларация удалена','');
+    });
+  }
+});
+$('#saveDefsBtn').addEventListener('click',()=>toast('Дефолты сохранены','Подставятся при следующем импорте.'));
+$('#saveEmitterBtn').addEventListener('click',()=>toast('Реквизиты эмиттера сохранены','Применятся к следующим черновикам LK_RECEIPT.'));
+
+/* ================= журнал ================= */
+let jState = '', jQ = '';
+const CHIP_ORDER = ['PENDING_WITHDRAW','PENDING_RETURN','WITHDRAWN','RETURNED','ANOMALY_RESALE','ANOMALY_RERETURN','ANOMALY_NO_RECEIPT','SKIPPED_FBW','NEW'];
+function setChip(st){ jState = st; renderChips(); }
+function renderChips(){
+  $('#stateChips').innerHTML = [''].concat(CHIP_ORDER).map(s=>{
+    const n = s? (jCounts[s]||0) : 15;
+    if(s && !n && s!==jState) return '';
+    const [lbl] = s? ST_ITEM[s] : ['все состояния'];
+    const alert = s && s.startsWith('ANOMALY');
+    return `<button class="chip${alert?' alert':''}" data-st="${s}" aria-pressed="${String(s===jState)}">${lbl} <span class="n">${n}</span></button>`;
+  }).join('');
+  $$('#stateChips .chip').forEach(c=>c.addEventListener('click',()=>{ jState = c.dataset.st; renderChips(); renderJournal(); }));
+}
+function renderJournal(){
+  const rows = journal.filter(it=>{
+    if(jState && it.st!==jState) return false;
+    if(jQ && !(it.km.toLowerCase().includes(jQ)||it.sig.toLowerCase().includes(jQ))) return false;
+    return true;
+  });
+  $('#jShown').textContent = rows.length;
+  $('#jTable tbody').innerHTML = rows.map(it=>{
+    const [lbl,cls] = ST_ITEM[it.st];
+    const anom = it.st.startsWith('ANOMALY');
+    return `<tr data-km="${it.km}" style="${anom?'background:var(--stamp-bg)':''}">
+      <td><span class="km">${it.km}<button title="Скопировать" data-copy="${it.km}"><svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="9" y="9" width="12" height="12" rx="2"/><path d="M5 15V5a2 2 0 0 1 2-2h10"/></svg></button></span></td>
+      <td><span class="bdg ${cls}">${lbl}</span></td>
+      <td style="font-size:12.5px">${it.sig}</td>
+      <td class="mono">${it.upd}</td></tr>`;
+  }).join('') || `<tr><td colspan="4"><div class="empty"><b>Ничего не найдено</b>Ослабьте фильтр или очистите поиск.</div></td></tr>`;
+}
+$('#jTable').addEventListener('click',e=>{
+  if(e.target.closest('[data-copy]')) return;
+  const tr = e.target.closest('tr[data-km]'); if(!tr) return;
+  const it = journal.find(x=>x.km===tr.dataset.km);
+  const wrap = document.createElement('div');
+  const p = document.createElement('p');
+  p.style.cssText='font-size:12.5px;color:var(--muted);margin-bottom:10px';
+  p.textContent = 'Последнее событие по коду (поле last_event в журнале). История всех событий доступна через API событий.';
+  wrap.appendChild(p); wrap.appendChild(preJSON(it.ev));
+  const [humLbl] = ST_ITEM[it.st];
+  openDrawer(`КМ · ${humLbl} · ${it.st}`, wrap);
+});
+$('#kmSearch').addEventListener('input',e=>{ jQ = e.target.value.trim().toLowerCase(); renderJournal(); });
+
+/* ================= auth ================= */
+$('#loginBtn').addEventListener('click',()=>{
+  const v = $('#tok').value.trim();
+  if(!v){ $('#authErr').textContent = 'Введите токен — в проде он проверяется запросом GET /v1/me.'; return; }
+  $('#auth').style.display='none'; $('#app').hidden = false;
+  renderDocs(); renderChips(); renderJournal(); renderBatches(); renderPipeline(); kpis();
+  toast('Добро пожаловать','Драфт: данные синтетические, действия никуда не отправляются.');
+});
+$('#tok').addEventListener('keydown',e=>{ if(e.key==='Enter') $('#loginBtn').click(); });
+$('#logoutBtn').addEventListener('click',()=>{ location.reload(); });
+
+/* стартовые значения */
+$('#kpiPendW').textContent = pendW; $('#kpiPendR').textContent = pendR;
+</script>
+</body>
+</html>

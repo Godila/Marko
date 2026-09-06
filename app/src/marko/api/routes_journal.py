@@ -1,3 +1,6 @@
+import time
+from datetime import datetime
+
 from fastapi import APIRouter, Depends, HTTPException, Query
 from fastapi.responses import PlainTextResponse
 from pydantic import BaseModel, Field
@@ -8,10 +11,11 @@ from sqlalchemy.orm import Session
 from marko.api.deps import audit, get_db, require_scope
 from marko.connector_wb.client import WBClient, WbHttpError, WbLimitError, load_wb_token
 from marko.connector_wb.models import WbReturn
-from marko.connector_wb.returns import run_returns_once
+from marko.connector_wb.returns import _parse_iso, run_returns_once
 from marko.emitter.batch import return_batch, to_csv, withdraw_batch
 from marko.journal.models import Item
 from marko.mt.models import MtDoc
+from marko.nkmt.models import Batch
 from marko.platform.models import PlatformKV, PlatformToken
 from marko.settings import settings
 
@@ -76,6 +80,51 @@ def journal_stats(
 ):
     rows = db.query(Item.state, func.count()).group_by(Item.state).all()
     return {state: count for state, count in rows}
+
+
+@router.get("/pulse")
+def pulse(
+    tok: PlatformToken = Depends(require_scope("read")),
+    db: Session = Depends(get_db),
+):
+    """Агрегат для обзора консоли: счётчики журнала/доков/батчей, ближайший
+    дедлайн забора возврата, квота goods-return и маркеры живости циклов."""
+    stats = dict(db.query(Item.state, func.count()).group_by(Item.state).all())
+    docs = {f"{t}:{s}": n for t, s, n in
+            db.query(MtDoc.type, MtDoc.status, func.count())
+            .group_by(MtDoc.type, MtDoc.status).all()}
+    batches = dict(db.query(Batch.status, func.count()).group_by(Batch.status).all())
+
+    nearest, active = "", 0
+    for r in db.query(WbReturn).all():
+        p = r.payload or {}
+        if p.get("completedDt"):
+            continue
+        dl = _parse_iso(r.expired_dt or "")
+        if dl is None:
+            continue
+        active += 1
+        if not nearest or dl < datetime.fromisoformat(nearest):
+            nearest = dl.isoformat()
+
+    kv = db.get(PlatformKV, "wb_goodsreturn_usage")
+    stamps = [t for t in (kv.value["stamps"] if kv else []) if time.time() - t < 3600 - 120]
+
+    def marker(key: str):
+        m = db.get(PlatformKV, key)
+        return m.value if m else None
+
+    return {
+        "stats": stats,
+        "docs": docs,
+        "batches": batches,
+        "returns": {"active": active, "nearest_deadline": nearest,
+                    "pending_return": stats.get("PENDING_RETURN", 0)},
+        "quota": {"goods_return_used": len(stamps), "goods_return_limit": 2},
+        "markers": {k: marker(k) for k in
+                    ("wb_last_poll", "signer_last_seen", "nkmt_loop_last",
+                     "returns_loop_last")},
+    }
 
 
 @router.post("/batches/withdraw")
