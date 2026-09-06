@@ -149,3 +149,17 @@ FBS-возврата, где вывод подавали мы; WB знает К�
    DISTANCE/BY_SAMPLES). Нужен выбор причины по источнику последнего вывода (наш LK_RECEIPT vs
    WB-ККТ).
 3. Стейт-машина в остальном справляется: WITHDRAWN+return→PENDING_RETURN уже есть.
+
+**Реализовано 06.09 (гварды возвратов):**
+- `journal.items.withdrawn_by` ('' / 'us' / 'wb', миграция 0008) — источник последнего вывода;
+- `wb_withdraw_guard` (emitter/batch.py): отказ LK_RECEIPT со словами «уже выбыл / не в обороте /
+  retired / not in circulation» → КМ документа помечаются withdrawn_by='wb' + journal-событие
+  (source=guard), НЕ аномалия; вызывается из _docs_checker и POST /v1/docs/{id}/check;
+- `return_batch` разделяет батч: 'us' → REMOTE_SALE_RETURN (первичка из нашего LK_RECEIPT,
+  как раньше), 'wb' → RETAIL_RETURN (первичка — чек возврата: fiscal_doc_number/fiscal_dt из
+  excise op=2 в last_event); смешанный батч = 2 документа; без первички КМ ждёт PENDING_RETURN;
+- `check_doc`: CHECKED_NOT_OK теперь терминален (→ error) — иначе гвард не увидел бы отказ
+  (live 04.09: прод отклоняет именно CHECKED_NOT_OK).
+- Осторожно: точная формулировка отказа ЧЗ по «уже выбыл» пока неизвестна (первый живой случай
+  покажет; сигнатуры в WB_WITHDRAW_SIG расширяемы). Преф-чек статуса КМ через API ЧЗ — не делали
+  (лишний вызов API; гвард пост-фактум достаточен).

@@ -79,6 +79,7 @@ def _signer_watchdog():
 def _docs_checker():
     """Раз в 10 мин: документы в submitted → опросить статус в ЧЗ до CHECKED_OK."""
     from marko.db import SessionLocal
+    from marko.emitter.batch import wb_withdraw_guard
     from marko.mt.models import MtDoc
     from marko.connector_mt import manager
     while True:
@@ -87,8 +88,14 @@ def _docs_checker():
             for doc in db.query(MtDoc).filter_by(status="submitted").all():
                 try:
                     info = manager.check_doc(db, doc.id)
+                    guard_fired = False
+                    if doc.type == "LK_RECEIPT" and doc.status == "error":
+                        guard_fired = wb_withdraw_guard(db, doc.id, info)
                     if doc.status in ("checked_ok", "error"):
-                        asyncio.run(send(f"ЧЗ документ {doc.id} ({doc.type}): {doc.status} — {str(info.get('status'))}"))
+                        msg = f"ЧЗ документ {doc.id} ({doc.type}): {doc.status} — {str(info.get('status'))}"
+                        if guard_fired:
+                            msg += " (гвард: коды уже вывел WB по ККТ)"
+                        asyncio.run(send(msg))
                 except Exception as e:
                     log.warning("docs check failed for %s: %s", doc.id, e)
             db.close()

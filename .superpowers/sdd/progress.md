@@ -88,3 +88,15 @@ Phase 3 execution (2026-09-02 fresh session, subagent-driven):
 Растяжка 04–06.09 закрыла: возвраты «контроль+кнопка» (монитор goods-return + UI + эмиттер fias_id/custom_name, seed kv на проде, живой полл 200 OK), ребрендинг marko (пакет/контейнеры/БД/объёмы/пути), домен marko.adel-factory.ru (LE-серт auto), UI-консоль 6 разделов (ad5c91c, параллельная сессия), разбор памятки WB 04.09 (раздел 8 дискавери).
 ЖДЁТ: (1) юзер чинит signer-агент (URL → marko.adel-factory.ru, рестарт; контроль signer_last_seen); (2) WIP параллельной сессии НЕ коммитить: ui/src/App.jsx (M) + ui/logo-marko.html (??) — лого «Матрица-М» ждёт вставки в консоль по слову юзера; (3) гэпы возвратов из памятки WB: гвард двойного вывода (WB-ККТ повторной продажи) + RETAIL_RETURN в return_batch — по команде юзера; (4) гейты phase-4: первый FBS-возврат (op=2?), S3-бэкап, TG-creds.
 Точка входа новой сессии: agentmemory «PRE-COMPACT CHECKPOINT 2026-09-06» + файловая память (архитектура — блок-переопределение в конце файла).
+
+## 2026-09-06 — гварды возвратов (двойной вывод + RETAIL_RETURN)
+
+По команде юзера «давай сделаем гварды возвратов» (закрывает гэпы 1-2 из раздела 8 дискавери):
+- journal.items.withdrawn_by (''/us/wb) + миграция 0008_item_withdrawn_by
+- wb_withdraw_guard (emitter/batch.py): отказ LK_RECEIPT «уже выбыл/не в обороте/retired/...» →
+  withdrawn_by='wb' + journal (source=guard), не аномалия; хуки в _docs_checker и POST /docs/{id}/check
+- return_batch: 'us' → REMOTE_SALE_RETURN (первичка из нашего LK_RECEIPT), 'wb' → RETAIL_RETURN
+  (первичка — чек возврата: fiscal_doc_number/fiscal_dt из op=2); смешанный = 2 документа
+- check_doc: CHECKED_NOT_OK теперь терминален → error (иначе гвард не увидел бы отказ)
+- тесты: +6 (гвард огонь/нет, RETAIL, blocked-без-фискальных, mixed 2 дока, CHECKED_NOT_OK)
+- /v1/journal отдаёт withdrawn_by (UI не трогали — там WIP параллельной сессии)

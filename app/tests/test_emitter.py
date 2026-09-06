@@ -1,5 +1,6 @@
 from marko.journal import apply_event
-from marko.emitter.batch import withdraw_batch, return_batch
+from marko.emitter.batch import wb_withdraw_guard, withdraw_batch, return_batch
+from marko.journal.models import Item
 from marko.mt.models import MtDoc
 
 INN = "090201471350"
@@ -20,7 +21,39 @@ def test_withdraw_batch(db):
     assert p["action"] == "DISTANCE" and p["document_type"] == "RECEIPT"
     assert p["products"][0] == {"cis": "0104630520676025215DDDDDDD", "product_cost": 179300}
     from marko.journal.models import Item
-    assert db.get(Item, "0104630520676025215DDDDDDD").state == "WITHDRAWN"
+    it = db.get(Item, "0104630520676025215DDDDDDD")
+    assert it.state == "WITHDRAWN" and it.withdrawn_by == "us"
+
+
+def test_wb_withdraw_guard_fires(db):
+    """Отказ ЧЗ «код уже выбыл» по LK_RECEIPT → withdrawn_by='wb', состояние не трогаем."""
+    km = "0104630520676025215WBWGGARD"
+    _sale(db, km)
+    doc_id = withdraw_batch(db, INN)
+    doc = db.get(MtDoc, doc_id)
+    doc.status = "error"
+    db.commit()
+    fired = wb_withdraw_guard(db, doc_id,
+                              {"status": "REJECTED",
+                               "products": [{"cis": km, "reason": "Код уже выбыл из оборота"}]})
+    assert fired
+    it = db.get(Item, km)
+    assert it.withdrawn_by == "wb" and it.state == "WITHDRAWN"
+
+
+def test_wb_withdraw_guard_negative(db):
+    """Иной отказ или не-error/не-LK_RECEIPT → гвард молчит."""
+    km = "0104630520676025215GRDNEG01"
+    _sale(db, km)
+    doc_id = withdraw_batch(db, INN)
+    db.get(MtDoc, doc_id).status = "error"
+    db.commit()
+    assert not wb_withdraw_guard(db, doc_id, {"status": "REJECTED", "reason": "неверная цена"})
+    assert db.get(Item, km).withdrawn_by == "us"      # не помечен 'wb'
+    d2 = db.get(MtDoc, doc_id)
+    d2.status = "checked_ok"
+    db.commit()
+    assert not wb_withdraw_guard(db, doc_id, {"status": "REJECTED", "reason": "код retired"})
 
 def test_withdraw_fias_and_custom_name(db):
     """kv emitter_defaults: fias_id в payload (задан — всегда), custom_name — только при OTHER."""
@@ -74,6 +107,68 @@ def test_return_batch_with_receipt(db):
     assert n == (1, 0)
     from marko.journal.models import Item
     assert db.get(Item, km).state == "RETURNED"
+    doc = db.query(MtDoc).filter_by(type="LP_RETURN").one()
+    assert doc.payload["return_type"] == "REMOTE_SALE_RETURN"
+
+
+def test_return_batch_wb_retail(db):
+    """withdrawn_by='wb' (вывел WB по ККТ) → RETAIL_RETURN, первичка — чек возврата (op=2)."""
+    from marko.journal.models import Item
+    km = "0104630520676025215WBRET001"
+    apply_event(db, source="wb_excise", source_event_id="w1:1", kind="sale", km=km, srid="w1",
+                payload={"price": 100})
+    withdraw_batch(db, INN)
+    it = db.get(Item, km)
+    it.withdrawn_by = "wb"      # сработал wb_withdraw_guard
+    db.commit()
+    apply_event(db, source="wb_excise", source_event_id="w1:2", kind="return", km=km, srid="w2",
+                payload={"price": 100, "fiscal_doc_number": 99188, "fiscal_dt": "2026-09-01"})
+    assert return_batch(db, INN) == (1, 0)
+    doc = db.query(MtDoc).filter_by(type="LP_RETURN").one()
+    p = doc.payload
+    assert p["return_type"] == "RETAIL_RETURN"
+    assert p["primary_document_number"] == "99188" and p["primary_document_date"] == "2026-09-01"
+    assert p["products_list"][0]["primary_document_number"] == "99188"
+    assert db.get(Item, km).state == "RETURNED"
+
+
+def test_return_batch_wb_without_fiscal_blocked(db):
+    """WB-вывод, но в op=2 нет фискальных данных (13% строк) → ждёт, blocked."""
+    from marko.journal.models import Item
+    km = "0104630520676025215WBNOFSC1"
+    apply_event(db, source="wb_excise", source_event_id="w2:1", kind="sale", km=km, srid="w3",
+                payload={"price": 100})
+    withdraw_batch(db, INN)
+    it = db.get(Item, km)
+    it.withdrawn_by = "wb"
+    db.commit()
+    apply_event(db, source="wb_excise", source_event_id="w2:2", kind="return", km=km, srid="w4",
+                payload={"price": 100})   # без fiscal_doc_number/fiscal_dt
+    assert return_batch(db, INN) == (0, 1)
+    assert db.get(Item, km).state == "PENDING_RETURN"
+
+
+def test_return_batch_mixed_two_docs(db):
+    """Смешанный батч: 'us' и 'wb' КМ → 2 документа с разными return_type."""
+    from marko.journal.models import Item
+    km_us = "0104630520676025215MIXUS001"
+    km_wb = "0104630520676025215MIXWB002"
+    apply_event(db, source="wb_excise", source_event_id="m1:1", kind="sale", km=km_us, srid="m1",
+                payload={"price": 100, "fiscal_dt": "2026-06-01", "fiscal_doc_number": "7"})
+    apply_event(db, source="wb_excise", source_event_id="m2:1", kind="sale", km=km_wb, srid="m2",
+                payload={"price": 200})
+    withdraw_batch(db, INN)
+    db.get(Item, km_wb).withdrawn_by = "wb"
+    db.commit()
+    apply_event(db, source="wb_excise", source_event_id="m1:2", kind="return", km=km_us, srid="m3",
+                payload={"price": 100})
+    apply_event(db, source="wb_excise", source_event_id="m2:2", kind="return", km=km_wb, srid="m4",
+                payload={"price": 200, "fiscal_doc_number": 555, "fiscal_dt": "2026-09-02"})
+    assert return_batch(db, INN) == (2, 0)
+    docs = db.query(MtDoc).filter_by(type="LP_RETURN").all()
+    types = {d.payload["return_type"] for d in docs}
+    assert types == {"REMOTE_SALE_RETURN", "RETAIL_RETURN"}
+    assert {db.get(Item, km_us).state, db.get(Item, km_wb).state} == {"RETURNED"}
 
 def test_withdraw_nonfiscal_wb_number_persists(db):
     """Non-fiscal ветка: OTHER + WB-<id>; перечитываем из НОВОЙ сессии —

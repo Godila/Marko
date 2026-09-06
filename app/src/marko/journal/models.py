@@ -9,6 +9,7 @@ class Item(Base):
     __table_args__ = {"schema": "journal"}
     km: Mapped[str] = mapped_column(String(64), primary_key=True)
     state: Mapped[str] = mapped_column(String(32), default="NEW")
+    withdrawn_by: Mapped[str] = mapped_column(String(16), default="", server_default="")
     updated_at = mapped_column(DateTime, server_default=func.now(), onupdate=func.now())
     last_event: Mapped[dict] = mapped_column(JSON)
 

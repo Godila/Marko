@@ -130,6 +130,16 @@ def test_check_doc_rejected(db, sg):
     assert db.get(MtDoc, doc.id).status == "error"
 
 
+def test_check_doc_checked_not_ok_terminal(db, sg):
+    """CHECKED_NOT_OK терминален (live 04.09: прод так отклоняет), не вечный submitted."""
+    c = FakeMtClient()
+    doc = _draft_doc(db)
+    manager.submit_doc(db, doc.id, c)
+    c.doc_status = "CHECKED_NOT_OK"
+    manager.check_doc(db, doc.id, c)
+    assert db.get(MtDoc, doc.id).status == "error"
+
+
 # --- MtClient: реальные форматы прода markirovka.crpt.ru (live 2026-09-04) ---
 
 def _mt(transport):

@@ -110,7 +110,9 @@ def check_doc(db: Session, mt_doc_id: int, client: MtClient | None = None) -> di
     status = info.get("status")
     if status == "CHECKED_OK":
         doc.status = "checked_ok"
-    elif status in ("REJECTED", "ERROR"):
+    elif status in ("REJECTED", "ERROR", "CHECKED_NOT_OK"):
+        # CHECKED_NOT_OK терминален (live 04.09: прод отклоняет так, напр. DISTANCE
+        # без custom_name) — иначе документ вечно висит submitted
         doc.status = "error"
     db.commit()
     return info

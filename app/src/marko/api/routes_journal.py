@@ -67,8 +67,8 @@ def journal_list(
     if state:
         q = q.filter_by(state=state)
     return [
-        {"km": it.km, "state": it.state, "updated_at": it.updated_at,
-         "last_event": it.last_event}
+        {"km": it.km, "state": it.state, "withdrawn_by": it.withdrawn_by,
+         "updated_at": it.updated_at, "last_event": it.last_event}
         for it in q.order_by(Item.updated_at.desc()).limit(limit).all()
     ]
 
@@ -255,5 +255,10 @@ def check_mt_doc(doc_id: int,
     except Exception as e:
         raise HTTPException(502, f"check failed: {e}")
     doc = db.get(MtDoc, doc_id)
-    audit(db, tok.principal_id, "doc.check", {"doc_id": doc_id, "mt_status": info.get("status")})
-    return {"status": doc.status, "mt_status": info.get("status")}
+    guard_fired = False
+    if doc.type == "LK_RECEIPT" and doc.status == "error":
+        from marko.emitter.batch import wb_withdraw_guard
+        guard_fired = wb_withdraw_guard(db, doc_id, info)
+    audit(db, tok.principal_id, "doc.check",
+          {"doc_id": doc_id, "mt_status": info.get("status"), "wb_guard": guard_fired})
+    return {"status": doc.status, "mt_status": info.get("status"), "wb_guard": guard_fired}
