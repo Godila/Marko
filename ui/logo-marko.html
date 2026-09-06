@@ -1,0 +1,169 @@
+<!doctype html>
+<html lang="ru">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>МАРКО — знак (концепция «Матрица-М»)</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Unbounded:wght@500;600&family=Golos+Text:wght@400;500;600&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+<style>
+:root{
+  --paper:#F1F4F3; --surface:#FFFFFF; --ink:#17242B; --muted:#5E6B72; --faint:#93A0A6;
+  --line:#DDE3E2; --stamp:#C81E36; --rail:#0E181E; --rail-ink:#E9EFEF; --rail-2:#152430; --rail-line:#22333F;
+  --mono:'JetBrains Mono',monospace; --ui:'Golos Text',system-ui,sans-serif; --disp:'Unbounded',var(--ui);
+}
+*{box-sizing:border-box;margin:0;padding:0}
+body{font:14px/1.55 var(--ui);color:var(--ink);background:var(--paper);padding:34px 30px 70px}
+.wrap{max-width:1080px;margin:0 auto}
+h1{font:500 22px var(--disp)}
+.sub{color:var(--muted);margin:8px 0 30px;max-width:720px}
+h2{font:600 14px var(--ui);margin:38px 0 14px;padding-top:18px;border-top:1px solid var(--line)}
+.grid{display:grid;gap:18px}
+.row3{grid-template-columns:repeat(3,1fr)}
+.row4{grid-template-columns:repeat(4,1fr)}
+.tile{border:1px solid var(--line);border-radius:12px;overflow:hidden;background:var(--surface)}
+.tile .cv{display:flex;align-items:center;justify-content:center;padding:34px;min-height:210px}
+.tile.dark{background:var(--rail)}
+.tile.paperish{background:var(--paper)}
+.tile .cap{border-top:1px solid var(--line);padding:9px 14px;font-size:12px;color:var(--muted);display:flex;justify-content:space-between;align-items:center;gap:8px}
+.tile.dark .cap{background:var(--rail-2);color:var(--rail-ink);border-color:var(--rail-line)}
+.cap b{color:inherit}
+.dl{font:500 11.5px var(--mono);color:var(--stamp);border:1px solid currentColor;border-radius:6px;padding:2px 8px;cursor:pointer;background:transparent}
+.dl:hover{background:var(--stamp);color:#fff;border-color:var(--stamp)}
+.fav{display:flex;align-items:flex-end;gap:26px;padding:26px 30px}
+.fv{display:flex;flex-direction:column;align-items:center;gap:8px;font:500 11px var(--mono);color:var(--muted)}
+.lockup{display:flex;align-items:center;gap:16px}
+.lockup b{font:600 30px var(--disp);letter-spacing:.01em}
+.lockup.small b{font:600 20px var(--disp)}
+.stack{display:flex;flex-direction:column;align-items:center;gap:12px}
+.stack b{font:600 22px var(--disp)}
+.note{margin-top:8px;font-size:12.5px;color:var(--muted)}
+.spec{font:12px/1.7 var(--mono);color:var(--muted);background:var(--surface);border:1px solid var(--line);border-radius:10px;padding:14px 18px;margin-top:14px}
+.spec b{color:var(--ink)}
+.foot{margin-top:40px;font-size:11.5px;color:var(--faint)}
+</style>
+</head>
+<body>
+<div class="wrap">
+  <h1>МАРКО · знак «Матрица-М»</h1>
+  <p class="sub">Код маркировки как моно­грамма: фирменная L-рамка-искатель DataMatrix, внутри — «М», собранная из модулей. Один карминовый акцент — само «М», всё остальное — графит. Не пересекается с круглым знаком «Честного знака».</p>
+
+  <h2>Основные варианты</h2>
+  <div class="grid row3" id="main"></div>
+
+  <h2>Favicon — живые размеры</h2>
+  <div class="tile"><div class="fav" id="fav"></div></div>
+
+  <h2>Локапы</h2>
+  <div class="grid row3">
+    <div class="tile"><div class="cv"><div class="lockup" id="lk1"></div></div>
+      <div class="cap"><span>горизонтальный</span><button class="dl" data-dl="lock-h">SVG</button></div></div>
+    <div class="tile dark"><div class="cv"><div class="lockup" id="lk2"></div></div>
+      <div class="cap"><span>на тёмном рельсе</span><button class="dl" data-dl="lock-h-dark">SVG</button></div></div>
+    <div class="tile"><div class="cv"><div class="stack" id="lk3"></div></div>
+      <div class="cap"><span>вертикальный</span><button class="dl" data-dl="lock-v">SVG</button></div></div>
+  </div>
+
+  <div class="spec" id="spec"></div>
+  <p class="foot">МАРКО · МАРкировка + КОды · черновик знака, 06.09.2026 — все варианты генерируются из одной функции buildMark() и скачиваются как SVG.</p>
+</div>
+
+<script>
+/* ================= конструктор знака =================
+   Сетка 9×9 модулей: L-искатель слева+снизу (сплошной), тайминг сверху+справа
+   (через модуль), в центре 5×5 — литера «М». Модуль = 1 единица viewBox 9×9. */
+/* ================= конструктор знака =================
+   Сетка 9×9 модулей: L-искатель слева+снизу (сплошные бары), тайминг сверху+справа
+   (через модуль), в центре 5×5 — литера «М». mini=true — без тайминга (favicon). */
+const M_ROWS = ["X...X", "XX.XX", "X.X.X", "X...X", "X...X"];
+
+function markCells(mini) {
+  const cells = [];
+  const put = (c, r) => cells.push([c, r]);
+  if (!mini) {
+    for (let c = 2; c < 8; c += 2) put(c, 0);         // тайминг: верх (кроме углов)
+    for (let r = 2; r < 8; r += 2) put(8, r);         // тайминг: право
+  }
+  M_ROWS.forEach((row, i) => [...row].forEach((ch, j) => { if (ch === "X") put(2 + j, 2 + i); }));
+  return cells;
+}
+const INK = "#17242B", STAMP = "#C81E36", STAMP_D = "#E42B47", PAPER = "#F1F4F3", RAIL_INK = "#E9EFEF", RAIL = "#0E181E";
+
+function buildMark({ fg = INK, accent = STAMP, size = 120, pad = 0.5, bg = null, radius = 0, mini = false } = {}) {
+  // pad — тихая зона в модулях; bg — цвет подложки (null = прозрачный)
+  const total = 9 + pad * 2;
+  const u = size / total;
+  const px = (n) => ((pad + n) * u).toFixed(2);
+  const cell = ([c, r], fill) =>
+    `<rect x="${px(c)}" y="${px(r)}" width="${u.toFixed(2)}" height="${u.toFixed(2)}" fill="${fill}"/>`;
+  const finder = `<rect x="${px(0)}" y="${px(0)}" width="${u.toFixed(2)}" height="${(9 * u).toFixed(2)}" fill="${fg}"/>` +
+                 `<rect x="${px(0)}" y="${px(8)}" width="${(9 * u).toFixed(2)}" height="${u.toFixed(2)}" fill="${fg}"/>`;
+  const timing = mini ? "" : markCells(false).filter(([c, r]) => r === 0 || c === 8)
+    .map((cr) => cell(cr, fg)).join("");
+  const m = markCells(true).map((cr) => cell(cr, accent)).join("");
+  const bgRect = bg ? `<rect width="${size}" height="${size}" rx="${radius}" fill="${bg}"/>` : "";
+  return `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 ${size} ${size}" width="${size}" height="${size}" role="img" aria-label="МАРКО">${bgRect}${finder}${timing}${m}</svg>`;
+}
+
+/* ================= варианты на листе ================= */
+const V = [
+  { cap: "основной · светлая подложка", bg: null, opts: {} },
+  { cap: "инверсия · тёмный рельс", dark: true, opts: { fg: RAIL_INK, accent: STAMP_D } },
+  { cap: "монохром · одна краска", opts: { fg: INK, accent: INK } },
+];
+document.getElementById("main").innerHTML = V.map((v, i) => {
+  const o = { size: 132, ...v.opts };
+  const svg = buildMark(o);
+  return `<div class="tile ${v.dark ? "dark" : ""}">
+    <div class="cv">${svg}</div>
+    <div class="cap"><span>${v.cap}</span><button class="dl" data-idx="${i}">SVG</button></div></div>`;
+}).join("");
+
+/* favicon */
+const fav = document.getElementById("fav");
+[[16, true], [32, true], [48, false], [64, false]].forEach(([s, mini]) => {
+  const d = document.createElement("div"); d.className = "fv";
+  d.innerHTML = buildMark({ size: s, fg: INK, accent: STAMP, mini }) + `<span>${s} px${mini ? " · мини" : ""}</span>`;
+  fav.appendChild(d);
+});
+
+/* локапы */
+const word = (color, size) => `<b style="color:${color};font-size:${size}px">МАРКО</b>`;
+document.getElementById("lk1").innerHTML = buildMark({ size: 56 }) + word("var(--ink)", 30);
+document.getElementById("lk2").innerHTML = buildMark({ size: 56, fg: RAIL_INK, accent: STAMP_D }) + word("var(--rail-ink)", 30);
+document.getElementById("lk3").innerHTML = `<div class="stack">${buildMark({ size: 72 })}${word("var(--ink)", 22)}</div>`;
+
+/* скачивание */
+function dlSvg(name, inner) {
+  const blob = new Blob([inner], { type: "image/svg+xml" });
+  const a = document.createElement("a"); a.href = URL.createObjectURL(blob);
+  a.download = `marko-${name}.svg`; a.click(); URL.revokeObjectURL(a.href);
+}
+document.addEventListener("click", (e) => {
+  const b = e.target.closest("[data-idx]"); if (b) {
+    const v = V[+b.dataset.idx];
+    return dlSvg(["mark-light", "mark-dark", "mark-mono"][+b.dataset.idx], buildMark({ size: 512, ...v.opts }));
+  }
+  const l = e.target.closest("[data-dl]"); if (!l) return;
+  const n = l.dataset.dl;
+  if (n === "lock-h") return dlSvg(n, `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 420 100">
+    ${buildMark({ size: 88, pad: 0.5 })}<text x="108" y="70" font-family="Unbounded, sans-serif" font-weight="600" font-size="52" fill="${INK}">МАРКО</text></svg>`);
+  if (n === "lock-h-dark") return dlSvg(n, `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 420 100">
+    <rect width="420" height="100" rx="14" fill="${RAIL_BG}"/>
+    ${buildMark({ size: 88, fg: RAIL_INK, accent: STAMP_D })}<text x="108" y="70" font-family="Unbounded, sans-serif" font-weight="600" font-size="52" fill="${RAIL_INK}">МАРКО</text></svg>`);
+  if (n === "lock-v") return dlSvg(n, `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 300 190">
+    ${buildMark({ size: 120 })}<text x="150" y="172" text-anchor="middle" font-family="Unbounded, sans-serif" font-weight="600" font-size="44" fill="${INK}">МАРКО</text></svg>`);
+});
+const RAIL_BG = "#0E181E";
+
+/* спецификация */
+document.getElementById("spec").innerHTML =
+  `<b>Сетка:</b> 9×9 модулей (внутреннее поле 5×5 = «М») · <b>L-искатель:</b> слева и снизу, сплошной ·
+   <b>Тайминг:</b> сверху и справа через модуль (как в настоящем DataMatrix) ·
+   <b>Тихая зона:</b> ≥ 0,5 модуля вокруг (в UI — 8 px) ·
+   <b>Цвета:</b> графит #17242B, кармин #C81E36 (на тёмном #E42B47) ·
+   <b>Правило:</b> «М» всегда кармин, рамка всегда монохром — акцент один.`;
+</script>
+</body>
+</html>

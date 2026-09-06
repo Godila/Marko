@@ -88,13 +88,23 @@ const evLine = (it) => { const ev = it.last_event || {}
     + (ev.price ? ` · ${rub(ev.price)}` : '') }
 
 /* ================= иконки ================= */
+// Знак МАРКО «Матрица-М»: L-искатель DataMatrix + «М» из модулей
+// (концепция и лист вариантов — ui/logo-marko.html)
+const M_ROWS = ['X...X', 'XX.XX', 'X.X.X', 'X...X', 'X...X']
+const markSvg = (size, fg, accent) => {
+  const pad = 0.5, total = 9 + pad * 2, u = size / total
+  const px = (n) => ((pad + n) * u).toFixed(2)
+  const cell = ([c, r]) => `<rect x="${px(c)}" y="${px(r)}" width="${u.toFixed(2)}" height="${u.toFixed(2)}" fill="${accent}"/>`
+  const finder = `<rect x="${px(0)}" y="${px(0)}" width="${u.toFixed(2)}" height="${(9 * u).toFixed(2)}" fill="${fg}"/>` +
+    `<rect x="${px(0)}" y="${px(8)}" width="${(9 * u).toFixed(2)}" height="${u.toFixed(2)}" fill="${fg}"/>`
+  const m = M_ROWS.flatMap((row, i) => [...row].map((ch, j) => ch === 'X' ? [2 + j, 2 + i] : null).filter(Boolean)).map(cell).join('')
+  return `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 ${size} ${size}" width="${size}" height="${size}" aria-hidden="true">${finder}${m}</svg>`
+}
+const Mark = ({ size = 34, fg = 'var(--rail-ink)', accent = '#E42B47' }) => (
+  <span className="seal" style={{ display: 'inline-flex', lineHeight: 0 }}
+    dangerouslySetInnerHTML={{ __html: markSvg(size, fg, accent) }} />
+)
 const I = {
-  seal: (s = 34) => <svg className="seal" width={s} height={s} viewBox="0 0 40 40" aria-hidden="true">
-    <circle cx="20" cy="20" r="18.5" fill="none" stroke="#C81E36" strokeWidth="2" />
-    <circle cx="20" cy="20" r="13" fill="none" stroke="#C81E36" strokeWidth="1" />
-    <path d="M20 8v4M20 28v4M8 20h4M28 20h4" stroke="#C81E36" strokeWidth="1.4" />
-    <path d="M14.5 20.5l3.6 3.6 7.4-8" fill="none" stroke="#C81E36" strokeWidth="2.2"
-      strokeLinecap="round" strokeLinejoin="round" /></svg>,
   pulse: <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round"><path d="M2 12h4l2.5-6 4 12 2.5-6h7" /></svg>,
   swap: <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M4 7h13l-3-3M20 17H7l3 3" /></svg>,
   back: <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M9 14L4 9l5-5" /><path d="M4 9h10a6 6 0 0 1 0 12h-3" /></svg>,
@@ -680,7 +690,7 @@ function Console({ token, me, logout }) {
       {navCnt[key] ? <span className="cnt">{navCnt[key]}</span> : null}</button> }
   return <div id="app">
     <aside className="rail">
-      <div className="brand">{I.seal(34)}<div><b>МАРКО</b><span>Честный знак · нацкат · WB</span></div></div>
+      <div className="brand"><Mark size={34} /><div><b>МАРКО</b><span>Честный знак · нацкат · WB</span></div></div>
       <nav className="nav" aria-label="Разделы">{NAV.map((x) => navBtn(x[0]))}</nav>
       <div className="rail-foot">
         <span className="who">оператор · {(me.scopes || []).join(', ')}</span>
@@ -690,7 +700,7 @@ function Console({ token, me, logout }) {
     </aside>
     <div>
       <div className="topnav">
-        <div className="tn-brand">{I.seal(26)}<b style={{ font: '600 13px var(--disp)' }}>МАРКО</b></div>
+        <div className="tn-brand"><Mark size={26} /><b style={{ font: '600 13px var(--disp)' }}>МАРКО</b></div>
         <div className="tn-scroll">{NAV.map((x) => navBtn(x[0]))}</div>
       </div>
       <main className="content">
@@ -736,7 +746,7 @@ export default function App() {
   const logout = () => { localStorage.removeItem('tok'); setToken(''); setMe(null) }
   if (!me) return <div id="auth" role="dialog" aria-label="Вход в консоль">
     <div className="auth-card">
-      <div className="brandline">{I.seal(40)}
+      <div className="brandline"><Mark size={40} fg="#17242B" accent="#C81E36" />
         <div><h1>МАРКО</h1><div style={{ fontSize: 11, color: 'var(--faint)' }}>МАРкировка + КОды · консоль оператора</div></div></div>
       <p className="sub">Введите токен доступа платформы. Он выдаётся администратором и хранится только в этом браузере.</p>
       <div className="field"><label>Токен доступа</label>
