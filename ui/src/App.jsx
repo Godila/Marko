@@ -51,9 +51,9 @@ const BATCH_STATUS = { new: ['новый', 'grey'], partial: ['частично'
   moderation: ['модерация', 'amber'], signing: ['подпись', 'blue'], published: ['опубликован', 'green'],
   error: ['ошибка', 'red'] }
 const GTIN_STATUS = { new: ['новый', 'grey'], update: ['обновится', 'blue'], conflict: ['конфликт', 'red'] }
-const SRC_RU = { file: 'файл', rule: 'правило', dict: 'справочник', default: 'дефолт' }
-// подписи источников в «примерке»: бренд оператора семантически = значение из файла
-const RZ_SRC = { file: 'введено', rule: 'правило РД', dict: 'справочник бренда', default: 'дефолт' }
+const SRC_RU = { file: 'файл', rule: 'правило', default: 'дефолт' }
+// подписи источников в «Проверке подстановок»: бренд оператора семантически = значение из файла
+const RZ_SRC = { file: 'введено', rule: 'правило РД', default: 'дефолт' }
 // ключ стадии пайплайна → какие batch-статусы она покрывает
 const STAGES = [
   { key: '', l: 'все батчи', match: null },
@@ -424,9 +424,8 @@ function Returns({ ctx, pulse }) {
 }
 
 /* ================= каталог НК ================= */
-// Превью импорта: тот же разбор, что сделает импорт (файл → правило РД →
-// справочник бренда → дефолты), без записи; апрув в drawer'е — повторная
-// подача того же файла в /import.
+// Превью импорта: тот же разбор, что сделает импорт (файл → правило РД → дефолт),
+// без записи; апрув в drawer'е — повторная подача того же файла в /import.
 function ImportPreview({ ctx, file, onDone }) {
   const { token, notify, closeDrawer, bump } = ctx
   const [data, setData] = useState(null)
@@ -451,7 +450,7 @@ function ImportPreview({ ctx, file, onDone }) {
     ? <div className="faint" style={{ fontSize: 11 }}>← {SRC_RU[src] || src}</div> : null
   return <>
     <p style={{ fontSize: 12.5, color: 'var(--muted)', marginTop: 0 }}>
-      Подстановка: значение из файла → правило РД → справочник бренда → дефолты. Импорт повторит ровно этот разбор.</p>
+      Подстановка: значение из файла → правило РД → дефолты. Импорт повторит ровно этот разбор.</p>
     <div className="twrap"><table className="t small">
       <thead><tr><th>Артикул</th><th>Наименование</th><th>Бренд</th><th>Декларация</th><th>Производитель</th><th>GTIN</th><th>Итог</th><th>Ошибка</th></tr></thead>
       <tbody>{data.rows.map((r, i) => <tr key={i}>
@@ -579,15 +578,13 @@ function Refs({ ctx }) {
   const [defs, setDefs] = useState(null)
   const [em, setEm] = useState(null)
   const [rules, setRules] = useState(null)
-  const [brands, setBrands] = useState(null)
   const [dnum, setDnum] = useState(''); const [ddate, setDdate] = useState(''); const [dtype, setDtype] = useState('declaration')
-  const [rbrand, setRbrand] = useState(''); const [rptype, setRptype] = useState('')
-  const [rprod, setRprod] = useState(''); const [rdecl, setRdecl] = useState('')
-  const [bname, setBname] = useState(''); const [bprod, setBprod] = useState(''); const [bdecl, setBdecl] = useState('')
+  const [rbrand, setRbrand] = useState(''); const [rdecl, setRdecl] = useState('')
+  const [rtypes, setRtypes] = useState([]); const [rtypeInput, setRtypeInput] = useState('')
+  const [rprod, setRprod] = useState('')
   const [rzBrand, setRzBrand] = useState(''); const [rzType, setRzType] = useState(''); const [rz, setRz] = useState(null)
   useEffect(() => { nkmt('/v1/nkmt/declarations', token).then(setDecls).catch(() => setDecls([]))
-    nkmt('/v1/nkmt/rules', token).then(setRules).catch(() => setRules([]))
-    nkmt('/v1/nkmt/brands', token).then(setBrands).catch(() => setBrands([])) }, [ctx.tick])
+    nkmt('/v1/nkmt/rules', token).then(setRules).catch(() => setRules([])) }, [ctx.tick])
   // формы дефолтов и эмиттера грузятся один раз при входе: 60-секундный тик
   // консоли не должен затирать несохранённые правки оператора
   useEffect(() => {
@@ -604,16 +601,19 @@ function Refs({ ctx }) {
     () => nkmt(`/v1/nkmt/declarations/${d.id}`, token, { method: 'DELETE' })
       .then(() => { notify('Декларация удалена', ''); ctx.bump() })
       .catch((e) => notify('Не удалось удалить', e.message, 'bad')))
-  const addRule = () => { if (!rbrand.trim() && !rptype.trim())
+  const addRule = () => { if (!rbrand.trim() && !rtypes.length)
       return notify('Заполните бренд или вид товара', 'Правило без условия не создаётся — оно подходило бы всем строкам.', 'warn')
     if (!rdecl) return notify('Выберите декларацию', '', 'warn')
     nkmt('/v1/nkmt/rules', token, { method: 'POST',
-        body: JSON.stringify({ brand: rbrand, product_type: rptype, declaration_id: Number(rdecl), producer: rprod }) })
-      .then(() => { setRbrand(''); setRptype(''); setRprod(''); setRdecl('')
+        body: JSON.stringify({ brand: rbrand, product_types: rtypes, declaration_id: Number(rdecl), producer: rprod }) })
+      .then(() => { setRbrand(''); setRtypes([]); setRtypeInput(''); setRprod(''); setRdecl('')
         notify('Правило добавлено', 'Сработает при следующем импорте.'); ctx.bump() })
       .catch((e) => notify('Не добавлено', e.message, 'bad')) }
+  const addRtype = () => { const t = rtypeInput.trim()
+    if (t && !rtypes.includes(t)) setRtypes([...rtypes, t])
+    setRtypeInput('') }
   const delRule = (r) => confirm('Удалить правило РД?',
-    `${r.brand || 'любой бренд'} × ${r.product_type || 'любой вид'}`,
+    `${r.brand || 'любой бренд'} × ${r.product_types?.length ? r.product_types.join(', ') : 'любой вид'}`,
     'Правило перестанет действовать при следующем импорте.', 'Удалить',
     () => nkmt(`/v1/nkmt/rules/${r.id}`, token, { method: 'DELETE' })
       .then(() => { notify('Правило удалено', ''); ctx.bump() })
@@ -628,27 +628,28 @@ function Refs({ ctx }) {
     if (!v) return setDefs({ ...(defs || {}), declaration_number: '', declaration_date: '' })
     const d = (decls || []).find((x) => String(x.id) === v)
     if (d) setDefs({ ...(defs || {}), declaration_number: d.doc_number, declaration_date: d.doc_date }) }
-  const addBrand = () => { if (!bname.trim()) return notify('Укажите бренд', '', 'warn')
-    nkmt('/v1/nkmt/brands', token, { method: 'POST',
-        body: JSON.stringify({ name: bname, producer: bprod, declaration_id: bdecl ? Number(bdecl) : null }) })
-      .then(() => { setBname(''); setBprod(''); setBdecl('')
-        notify('Бренд добавлен', 'Сработает при следующем импорте.'); ctx.bump() })
-      .catch((e) => notify('Не добавлено', e.message, 'bad')) }
-  const delBrand = (b) => confirm('Удалить бренд из справочника?', b.name,
-    'Подстановки этого бренда перестанут действовать при следующем импорте.', 'Удалить',
-    () => nkmt(`/v1/nkmt/brands/${b.id}`, token, { method: 'DELETE' })
-      .then(() => { notify('Бренд удалён', ''); ctx.bump() })
-      .catch((e) => notify('Не удалось удалить', e.message, 'bad')))
+  // управляемый состав дефолтов: убранное поле перестаёт подставляться;
+  // декларация — парой номер+дата, техрегламент несъёмный (НК требует всегда)
+  const delField = (k) => { const d = { ...(defs || {}) }
+    delete d[k]
+    if (k === 'declaration_number') delete d.declaration_date
+    if (k === 'declaration_date') delete d.declaration_number
+    setDefs(d) }
+  const addField = (k) => { if (!k || !defs || k in defs) return
+    const d = { ...defs, [k]: '' }
+    if (k === 'declaration_number') d.declaration_date = d.declaration_date ?? ''
+    if (k === 'declaration_date') d.declaration_number = d.declaration_number ?? ''
+    setDefs(d) }
   const tryResolve = () => nkmt('/v1/nkmt/resolve', token, { method: 'POST',
       body: JSON.stringify({ brand: rzBrand, product_type: rzType }) })
-    .then(setRz).catch((e) => notify('Примерка не удалась', e.message, 'bad'))
+    .then(setRz).catch((e) => notify('Проверка не удалась', e.message, 'bad'))
   const saveEm = () => api('/v1/emitter/defaults', token, { method: 'PUT', body: JSON.stringify(em || {}) })
     .then(() => notify('Реквизиты эмиттера сохранены', 'Применятся к следующим черновикам LK_RECEIPT.'))
     .catch((e) => notify('Не сохранено', e.message, 'bad'))
-  const tabs = [['fields', 'Поля'], ['brands', 'Бренды'], ['decls', 'Декларации'],
+  const tabs = [['fields', 'Поля'], ['decls', 'Декларации'],
     ['rules', 'Правила'], ['emitter', 'Эмиттер ЧЗ']]
   return <>
-    <Head title="Справочники" sub="Значения для карточек НК и документов. Приоритет подстановки: файл → правило РД → справочник бренда → дефолт."
+    <Head title="Справочники" sub="Значения для карточек НК и документов. Приоритет подстановки: файл → правило РД → дефолт."
       tools={<Sync tick={ctx.tick} />} />
     <div className="chiprow" style={{ marginBottom: 14 }}>
       {tabs.map(([k, l]) => <button key={k} className="chip" aria-pressed={tab === k}
@@ -657,81 +658,69 @@ function Refs({ ctx }) {
     {tab === 'fields' && <>
       <div className="card">
         <div className="card-h"><h2>Поля и значения по умолчанию</h2>
-          <span className="hint">подставляются, если в файле пусто и не сработали правило или справочник</span></div>
+          <span className="hint">подставляются, если в файле пусто и не сработало правило; состав полей можно менять</span></div>
         <div className="card-b" style={{ borderBottom: '1px solid var(--line)' }}>
           <ul className="loops">
-            {DEF_FIELDS.map(([k, label]) => <li key={k}>
-              <span className="nm">{label}</span>
-              {k === 'declaration_number'
-                ? <select style={{ maxWidth: 400 }} value={selDecl ? String(selDecl.id)
-                    : ((defs || {}).declaration_number ? 'manual' : '')}
-                    onChange={(e) => setDecl(e.target.value)}>
-                    <option value="">— не задано —</option>
-                    {(decls || []).map((d) => <option key={d.id} value={String(d.id)}>{d.doc_number} · {d.doc_date}</option>)}
-                    {(defs || {}).declaration_number && !selDecl
-                      && <option value="manual">{defs.declaration_number} (вне реестра)</option>}
-                  </select>
-                : <input style={{ maxWidth: 400, textAlign: 'right' }}
-                    type={k === 'declaration_date' ? 'date' : 'text'}
-                    value={(defs || {})[k] || ''}
-                    onChange={(e) => setDefs({ ...(defs || {}), [k]: e.target.value })} />}
+            {defs && DEF_FIELDS.filter(([k]) => k in defs).map(([k, label]) => <li key={k}>
+              <span className="nm">{label}{k === 'techreg'
+                ? <span className="faint" style={{ fontSize: 11 }}> · системное</span> : null}</span>
+              <span style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                {k === 'declaration_number'
+                  ? <select style={{ maxWidth: 400 }} value={selDecl ? String(selDecl.id)
+                      : ((defs || {}).declaration_number ? 'manual' : '')}
+                      onChange={(e) => setDecl(e.target.value)}>
+                      <option value="">— не задано —</option>
+                      {(decls || []).map((d) => <option key={d.id} value={String(d.id)}>{d.doc_number} · {d.doc_date}</option>)}
+                      {(defs || {}).declaration_number && !selDecl
+                        && <option value="manual">{defs.declaration_number} (вне реестра)</option>}
+                    </select>
+                  : <input style={{ maxWidth: 400, textAlign: 'right' }}
+                      type={k === 'declaration_date' ? 'date' : 'text'}
+                      value={(defs || {})[k] || ''}
+                      onChange={(e) => setDefs({ ...(defs || {}), [k]: e.target.value })} />}
+                {k !== 'techreg' && <button className="btn sm" title="Убрать поле из дефолтов"
+                  onClick={() => delField(k)}>×</button>}
+              </span>
             </li>)}
           </ul>
-          <div style={{ display: 'flex', justifyContent: 'flex-end', marginTop: 12 }}>
-            <button className="btn pri" onClick={saveDefs}>Сохранить дефолты</button></div>
+          <div className="frow" style={{ marginTop: 12 }}>
+            <div className="field" style={{ flex: 1, maxWidth: 320 }}><label>Добавить поле из доступных</label>
+              <select value="" onChange={(e) => addField(e.target.value)}>
+                <option value="">— выберите поле —</option>
+                {DEF_FIELDS.filter(([k]) => defs && !(k in defs))
+                  .map(([k, label]) => <option key={k} value={k}>{label}</option>)}
+              </select></div>
+            <button className="btn pri" style={{ alignSelf: 'flex-end' }}
+              onClick={saveDefs}>Сохранить дефолты</button>
+          </div>
+          <div className="note">Убранное поле перестанет подставляться по умолчанию — значение должно прийти из файла или правила (состав применяется кнопкой «Сохранить дефолты»). Техрегламент системный: НК требует его всегда.</div>
         </div>
       </div>
       <div className="card">
-        <div className="card-h"><h2>Примерка подстановок</h2>
-          <span className="hint">как поля заполнятся для бренда и вида товара — без файла</span></div>
+        <div className="card-h"><h2>Проверка подстановок</h2>
+          <span className="hint">что получит карточка для бренда и вида товара — без файла</span></div>
         <div className="card-b">
           <div className="frow">
             <div className="field" style={{ flex: 1 }}><label>Бренд</label>
               <input value={rzBrand} placeholder="пусто = дефолтный бренд"
                 onChange={(e) => setRzBrand(e.target.value)} /></div>
             <div className="field" style={{ flex: 1 }}><label>Вид товара</label>
-              <input value={rzType} placeholder="например, ФУТБОЛКА"
+              <input value={rzType} placeholder="например, ШАПКА"
                 onChange={(e) => setRzType(e.target.value)} /></div>
-            <button className="btn pri" onClick={tryResolve}>Примерить</button>
+            <button className="btn pri" onClick={tryResolve}>Проверить</button>
           </div>
           {rz
             ? <ul className="loops" style={{ marginTop: 6 }}>
-                {DEF_FIELDS.map(([k, label]) => { const cell = rz[k] || { value: '', src: 'default' }
+                {DEF_FIELDS.filter(([k]) => k in rz).map(([k, label]) => { const cell = rz[k]
                   return <li key={k}><span className="nm">{label}</span>
                     <span className="int" style={{ textAlign: 'right' }}>{cell.value || '—'}
                       <span style={{ display: 'block', fontSize: 11, color: 'var(--faint)' }}>
                         ← {RZ_SRC[cell.src] || cell.src}</span></span></li> })}
               </ul>
-            : <div className="note">Введите бренд и вид товара — увидите итоговые значения и откуда каждое: правило, справочник бренда или дефолт.</div>}
+            : <div className="note">Введите бренд и вид товара и нажмите «Проверить» — увидите, какие декларация и производитель получит карточка ещё до импорта файла. Удобно проверять правила сразу после их настройки.</div>}
         </div>
       </div>
     </>}
-    {tab === 'brands' && <div className="card">
-      <div className="card-h"><h2>Справочник брендов</h2>
-        <span className="hint">бренд → производитель и (опц.) декларация; влияет на импорт</span></div>
-      <div className="card-b" style={{ borderBottom: '1px solid var(--line)' }}>
-        <div className="frow">
-          <div className="field" style={{ flex: 1, minWidth: 140 }}><label>Бренд</label>
-            <input value={bname} onChange={(e) => setBname(e.target.value)} /></div>
-          <div className="field" style={{ flex: 1, minWidth: 180 }}><label>Производитель</label>
-            <input value={bprod} onChange={(e) => setBprod(e.target.value)} /></div>
-          <div className="field" style={{ flex: 1, minWidth: 200 }}><label>Декларация (опционально)</label>
-            <select value={bdecl} onChange={(e) => setBdecl(e.target.value)}>
-              <option value="">— без декларации —</option>
-              {(decls || []).map((d) => <option key={d.id} value={d.id}>{d.doc_number} · {d.doc_date}</option>)}
-            </select></div>
-          <button className="btn pri" onClick={addBrand}>Добавить</button>
-        </div>
-      </div>
-      <div className="twrap"><table className="t small">
-        <thead><tr><th>Бренд</th><th>Производитель</th><th>Декларация</th><th></th></tr></thead>
-        <tbody>{(brands || []).map((b) => <tr key={b.id}>
-          <td>{b.name}</td><td>{b.producer || '—'}</td>
-          <td style={{ fontSize: 12.5 }}>{b.declaration_number || '—'}</td>
-          <td className="actions"><button className="btn sm" onClick={() => delBrand(b)}>Удалить</button></td></tr>)}
-          {brands && !brands.length && <tr><td colSpan={4}><div className="empty"><b>Список пуст</b>Добавьте частотные бренды — для них подставятся производитель и декларация, если их нет в файле и в правилах.</div></td></tr>}
-        </tbody></table></div>
-    </div>}
     {tab === 'decls' && <div className="card">
       <div className="card-h"><h2>Декларации соответствия</h2><span className="hint">подставляются в карточки по номеру</span></div>
       <div className="card-b" style={{ borderBottom: '1px solid var(--line)' }}>
@@ -753,19 +742,30 @@ function Refs({ ctx }) {
         </tbody></table></div>
     </div>}
     {tab === 'rules' && <div className="card">
-      <div className="card-h"><h2>Правила РД</h2><span className="hint">бренд × вид товара → декларация/производитель</span></div>
+      <div className="card-h"><h2>Правила РД</h2><span className="hint">бренд × виды товара → декларация/производитель</span></div>
       <div className="card-b" style={{ borderBottom: '1px solid var(--line)' }}>
-        <div className="note">Бренд сравнивается без учёта регистра, вид товара — точно; из подошедших правил выигрывает то, у которого больше непустых условий, при равенстве — заведённое позже.</div>
+        <div className="note">Бренд сравнивается без учёта регистра; вид товара — точно и должен входить в список правила (видов можно указать несколько). Правило без видов действует на любой вид товара. Из подошедших правил выигрывает то, у которого больше непустых условий, при равенстве — заведённое позже.</div>
         <div className="frow" style={{ marginTop: 10 }}>
           <div className="field" style={{ flex: 1, minWidth: 130 }}><label>Бренд (пусто = любой)</label>
             <input value={rbrand} onChange={(e) => setRbrand(e.target.value)} /></div>
-          <div className="field" style={{ flex: 1, minWidth: 130 }}><label>Вид товара (пусто = любой)</label>
-            <input value={rptype} onChange={(e) => setRptype(e.target.value)} /></div>
           <div className="field" style={{ flex: 1, minWidth: 180 }}><label>Декларация</label>
             <select value={rdecl} onChange={(e) => setRdecl(e.target.value)}>
               <option value="">— выберите —</option>
               {(decls || []).map((d) => <option key={d.id} value={d.id}>{d.doc_number} · {d.doc_date}</option>)}
             </select></div>
+        </div>
+        <div className="frow">
+          <div className="field" style={{ flex: 1 }}><label>Виды товара (пусто = любой; можно несколько)</label>
+            <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6, alignItems: 'center' }}>
+              {rtypes.map((t) => <span key={t} className="bdg blue" style={{ cursor: 'default' }}>{t}
+                <a title="Убрать вид" style={{ marginLeft: 5, cursor: 'pointer' }}
+                  onClick={() => setRtypes(rtypes.filter((x) => x !== t))}>×</a></span>)}
+              <input style={{ flex: 1, minWidth: 160 }} value={rtypeInput}
+                placeholder="например, ШАПКА — Enter или +"
+                onChange={(e) => setRtypeInput(e.target.value)}
+                onKeyDown={(e) => { if (e.key === 'Enter') { e.preventDefault(); addRtype() } }} />
+              <button className="btn sm" onClick={addRtype}>+</button>
+            </div></div>
         </div>
         <div className="frow">
           <div className="field" style={{ flex: 1 }}><label>Производитель (опционально)</label>
@@ -774,13 +774,14 @@ function Refs({ ctx }) {
         </div>
       </div>
       <div className="twrap"><table className="t small">
-        <thead><tr><th>Бренд</th><th>Вид товара</th><th>Декларация</th><th>Производитель</th><th></th></tr></thead>
+        <thead><tr><th>Бренд</th><th>Виды товара</th><th>Декларация</th><th>Производитель</th><th></th></tr></thead>
         <tbody>{(rules || []).map((r) => <tr key={r.id}>
-          <td>{r.brand || 'любой'}</td><td>{r.product_type || 'любой'}</td>
+          <td>{r.brand || 'любой'}</td>
+          <td style={{ fontSize: 12.5 }}>{r.product_types?.length ? r.product_types.join(', ') : 'любой'}</td>
           <td style={{ fontSize: 12.5 }}>{r.declaration_number}</td>
           <td>{r.producer || '—'}</td>
           <td className="actions"><button className="btn sm" onClick={() => delRule(r)}>Удалить</button></td></tr>)}
-          {rules && !rules.length && <tr><td colSpan={5}><div className="empty"><b>Правил нет</b>Правило подставит декларацию и производителя по бренду и виду товара.</div></td></tr>}
+          {rules && !rules.length && <tr><td colSpan={5}><div className="empty"><b>Правил нет</b>Правило подставит декларацию и производителя для бренда и одного или нескольких видов товара; правило без видов действует на любой вид.</div></td></tr>}
         </tbody></table></div>
     </div>}
     {tab === 'emitter' && <div className="card">

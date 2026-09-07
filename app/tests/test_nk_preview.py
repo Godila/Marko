@@ -19,7 +19,7 @@ def test_preview_dry_run_and_rule(db, client, monkeypatch, model):
     d1 = Declaration(doc_number="Д-1", doc_date="2025-11-01")
     d2 = Declaration(doc_number="Д-2", doc_date="2025-12-01")
     db.add_all([d1, d2]); db.flush()
-    db.add(Rule(brand="YCPB", product_type="ФУТБОЛКА", declaration_id=d1.id,
+    db.add(Rule(brand="YCPB", product_types=["ФУТБОЛКА"], declaration_id=d1.id,
                 producer="ИП Байкулов"))
     db.commit()
     files = {"file": ("p.xlsx", make_xlsx(HDR, [ROW_NO_DECL, ROW_FILE_DECL]), XLSX_MIME)}
@@ -68,26 +68,6 @@ def test_preview_gtin_statuses(db, client, monkeypatch, model):
     assert st["C-1"]["ok"] is False and "gtin" in st["C-1"]["error"]
     assert out["stats"] == {"ok": 2, "error": 1, "new": 1, "update": 1, "conflict": 1}
     assert db.query(Batch).count() == 1   # только seed — превью не пишет
-
-
-def test_preview_dict_provenance(db, client, monkeypatch, model):
-    """Справочник брендов как 4-й источник: превью показывает src='dict'."""
-    from marko.nkmt.models import Brand
-    monkeypatch.setattr("marko.connector_mt.manager.get_token", lambda _db: "T")
-    db.add(Declaration(doc_number="Д-РЕЕСТР", doc_date="2025-10-01"))
-    db.flush()
-    decl = db.query(Declaration).filter_by(doc_number="Д-РЕЕСТР").one()
-    db.add(Brand(name="КЛИЕНТ", producer="Фабрика клиента", declaration_id=decl.id))
-    db.commit()
-    files = {"file": ("p.xlsx", make_xlsx(HDR, [
-        ["D-1", "6109100000", "Футболка клиент", "ФУТБОЛКА", "БЕЛЫЙ", "100% хлопок",
-         "M", "Tee", "КЛИЕНТ", "", "", "", ""]]), XLSX_MIME)}
-    out = client.post("/v1/nkmt/import/preview", headers=AUTH, files=files).json()
-    row = out["rows"][0]
-    assert row["producer"] == "Фабрика клиента" and row["src"]["producer"] == "dict"
-    assert row["declaration_number"] == "Д-РЕЕСТР" and row["src"]["declaration_number"] == "dict"
-    assert row["declaration_date"] == "2025-10-01"
-    assert row["ok"] is True and row["rule_id"] is None
 
 
 def test_preview_bad_file_400(db, client, monkeypatch, model):

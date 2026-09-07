@@ -1,5 +1,5 @@
 from sqlalchemy import CheckConstraint, DateTime, ForeignKey, Integer, String, UniqueConstraint, func
-from sqlalchemy.dialects.postgresql import JSON
+from sqlalchemy.dialects.postgresql import JSON, JSONB
 from sqlalchemy.orm import Mapped, mapped_column
 from marko.db import Base
 
@@ -49,43 +49,24 @@ class Declaration(Base):
 class Rule(Base):
     """Правило РД: подстановка декларации/производителя при импорте выгрузки.
 
-    Условие — точный бренд и/или вид товара (хотя бы одно непустое, CHECK);
-    пустое поле условия = «любой». Из подошедших правил выигрывает то, у кого
-    больше непустых условий, при равенстве — больший id (resolve.match_rule).
-    Приоритет значений: файл > правило > глоб. дефолт.
+    Условие — точный бренд и/или список видов товара (хотя бы одно непустое,
+    CHECK); пустое поле условия = «любой». Вид товара — СПИСОК: правило
+    срабатывает, если вид строки входит в него. Из подошедших правил выигрывает
+    то, у кого больше непустых условий, при равенстве — больший id
+    (resolve.match_rule). Приоритет значений: файл > правило > дефолт.
     """
     __tablename__ = "rules"
     __table_args__ = (
-        CheckConstraint("btrim(brand) <> '' OR btrim(product_type) <> ''",
+        CheckConstraint("btrim(brand) <> '' OR jsonb_array_length(product_types) > 0",
                         name="ck_rules_condition"),
         {"schema": "nkmt"},
     )
     id: Mapped[int] = mapped_column(primary_key=True)
     brand: Mapped[str] = mapped_column(String, default="")            # "" = любой бренд
-    product_type: Mapped[str] = mapped_column(String, default="")     # "" = любой вид товара
+    product_types: Mapped[list] = mapped_column(JSONB, default=list)  # [] = любой вид товара
     declaration_id: Mapped[int] = mapped_column(
         ForeignKey("nkmt.declarations.id", ondelete="RESTRICT"))
     producer: Mapped[str] = mapped_column(String, default="")
-
-
-class Brand(Base):
-    """Справочник брендов: бренд → производитель и (опц.) декларация.
-
-    НЕ путать с BrandCache (кэш brand_id НК). Четвёртый источник подстановок:
-    файл > правило РД > справочник бренда > дефолт (resolve.apply_brand_dict) —
-    заполняет только слоты src=='default', src='dict'. Имя уникально по сути
-    (409 на casefold-дубль в API, как у правил).
-    """
-    __tablename__ = "brands"
-    __table_args__ = (
-        CheckConstraint("btrim(name) <> ''", name="ck_brands_name"),
-        {"schema": "nkmt"},
-    )
-    id: Mapped[int] = mapped_column(primary_key=True)
-    name: Mapped[str] = mapped_column(String)
-    producer: Mapped[str] = mapped_column(String, default="")
-    declaration_id: Mapped[int | None] = mapped_column(
-        ForeignKey("nkmt.declarations.id", ondelete="RESTRICT"), nullable=True)
 
 
 class BrandCache(Base):

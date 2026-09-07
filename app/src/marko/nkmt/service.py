@@ -106,7 +106,7 @@ def preview_batch(db, data: bytes, client, token) -> dict:
     """Dry-run импорта: тот же resolve → plan, ничего не пишется.
 
     Возвращает {"rows": [...], "stats": {"ok","error","new","update","conflict"}}.
-    В строке — итоговые подстановки и их источник (src: file|rule|dict|default),
+    В строке — итоговые подстановки и их источник (src: file|rule|default),
     сработавшее правило (rule_id) и судьба gtin (gtin_status). Дубль артикула
     в файле — ошибка строки, карточки не будет (как в импорте).
     """

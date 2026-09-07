@@ -1,16 +1,16 @@
-"""Резолвер строк выгрузки: дефолты → правила РД → справочник брендов.
+"""Резолвер строк выгрузки: дефолты → правила РД, с provenance подстановок.
 
-Конвейер импорта, превью и «примерки» — один resolve_pipeline; расхождение
-семантики невозможно. Приоритет «файл > правило > справочник бренда > дефолт»
-держится инвариантом _fill: слот перебивается только в состоянии 'default'
-(файловые значения apply_defaults не трогает, правило/справочник штампуют
-'rule'/'dict'). Условия правил сравниваются со значениями строки ПОСЛЕ
-дефолтов («эффективное значение строки»). Дата при подстановке декларации
-берётся из записи реестра, на которую указывает правило/справочник, — пара
+Конвейер импорта, превью и «проверки подстановок» — один resolve_pipeline;
+расхождение семантики невозможно. Приоритет «файл > правило > дефолт» держится
+инвариантом _fill: слот перебивается только в состоянии 'default' (файловые
+значения apply_defaults не трогает, правило штампует 'rule'). Условия правил
+сравниваются со значениями строки ПОСЛЕ дефолтов («эффективное значение
+строки»); вид товара матчится, если входит в список правила. Дата при
+подстановке берётся из записи реестра, на которую указывает правило, — пара
 «номер-дата» всегда консистентна. Пишет только кэши справочников
 (kv, brand_cache) — карточки/батчи не трогает.
 """
-from marko.nkmt.dicts import get_brands, get_defaults, get_rules
+from marko.nkmt.dicts import get_defaults, get_rules
 from marko.nkmt.parse import DEFAULTED_KEYS, apply_defaults, parse_xlsx
 from marko.nkmt.validate import validate_rows
 
@@ -40,9 +40,10 @@ def sources(raw: list[dict]) -> list[dict]:
 
 
 def match_rule(rules: list[dict], brand: str, product_type: str) -> dict | None:
-    """Подошедшее правило: все непустые условия совпали; из подошедших — больше
-    непустых условий, ничья → больший id. Бренд — casefold (как brand_cache),
-    вид товара — точно (как preset-проверка). Никого — None."""
+    """Подошедшее правило: бренд (casefold, как brand_cache) и вид товара
+    (точно, как preset-проверка; должен входить в список правила); пустое
+    условие = «любой». Из подошедших — больше непустых условий, ничья →
+    больший id. Никого — None."""
     best, best_key = None, (-1, -1)
     for r in rules:
         score = 0
@@ -50,8 +51,8 @@ def match_rule(rules: list[dict], brand: str, product_type: str) -> dict | None:
             if r["brand"].casefold() != brand.casefold():
                 continue
             score += 1
-        if r["product_type"]:
-            if r["product_type"] != product_type:
+        if r["product_types"]:
+            if product_type not in r["product_types"]:
                 continue
             score += 1
         if (score, r["id"]) > best_key:
@@ -82,41 +83,13 @@ def apply_rules(rules: list[dict], rows: list[dict],
     return out_rows, out_src, matched
 
 
-def match_brand(brands: list[dict], brand: str) -> dict | None:
-    """Запись справочника по имени casefold (уникальность гарантирует API);
-    пустой бренд не матчится никогда."""
-    low = brand.casefold()
-    return next((b for b in brands if b["name"].casefold() == low), None)
-
-
-def apply_brand_dict(brands: list[dict], rows: list[dict],
-                     src: list[dict]) -> tuple[list[dict], list[dict]]:
-    """Справочник брендов ПОСЛЕ правил: только слоты src == 'default' (правило
-    уже штампует 'rule' — этим кодируется «правило бьёт справочник», без чисел
-    приоритета). Декларация — парой номер+дата из записи реестра, producer —
-    если задан. Входные rows/src не мутируются."""
-    out_rows, out_src = [], []
-    for row, s in zip(rows, src):
-        r, s2 = dict(row), dict(s)
-        hit = match_brand(brands, str(row.get("brand", "")))
-        if hit:
-            _stamp_decl(r, s2, hit["declaration_number"],
-                        hit["declaration_date"], "dict")
-            _fill(r, s2, "producer", hit["producer"], "dict")
-        out_rows.append(r)
-        out_src.append(s2)
-    return out_rows, out_src
-
-
-def resolve_pipeline(raw: list[dict], defaults: dict, rules: list[dict],
-                     brands: list[dict]) -> tuple[list[dict], list[dict], list[int | None]]:
-    """Дефолты → правила → справочник брендов: единая последовательность стадий
-    для импорта, превью и «примерки»."""
+def resolve_pipeline(raw: list[dict], defaults: dict,
+                     rules: list[dict]) -> tuple[list[dict], list[dict], list[int | None]]:
+    """Дефолты → правила: единая последовательность стадий для импорта,
+    превью и «проверки подстановок»."""
     rows = apply_defaults(raw, defaults)
     src = sources(raw)
-    rows, src, matched = apply_rules(rules, rows, src)
-    rows, src = apply_brand_dict(brands, rows, src)
-    return rows, src, matched
+    return apply_rules(rules, rows, src)
 
 
 def resolve_rows(db, client, token: str, data: bytes) -> dict:
@@ -126,19 +99,18 @@ def resolve_rows(db, client, token: str, data: bytes) -> dict:
     выбрасываются; побочные записи — только кэши справочников (kv, brand_cache).
     """
     raw = parse_xlsx(data)
-    rows, src, matched = resolve_pipeline(raw, get_defaults(db),
-                                          get_rules(db), get_brands(db))
+    rows, src, matched = resolve_pipeline(raw, get_defaults(db), get_rules(db))
     return {"validated": validate_rows(db, client, token, rows),
             "src": src, "matched": matched}
 
 
 def resolve_fields(brand: str, product_type: str, defaults: dict,
-                   rules: list[dict], brands: list[dict]) -> dict:
-    """«Примерка» без файла: как если бы в файле была строка, заполненная
-    только брендом и видом товара. → {поле: {value, src}} по подставляемым
-    полям + techreg (он по построению только из дефолтов)."""
+                   rules: list[dict]) -> dict:
+    """«Проверка подстановок» без файла: как если бы в файле была строка,
+    заполненная только брендом и видом товара. → {поле: {value, src}} по
+    подставляемым полям + techreg (он по построению только из дефолтов)."""
     raw = [{"brand": brand.strip(), "product_type": product_type.strip()}]
-    rows, src, _ = resolve_pipeline(raw, defaults, rules, brands)
+    rows, src, _ = resolve_pipeline(raw, defaults, rules)
     keys = {k: {"value": rows[0].get(k, ""), "src": src[0][k]}
             for k in DEFAULTED_KEYS}
     keys["techreg"] = {"value": rows[0].get("techreg", ""), "src": "default"}
