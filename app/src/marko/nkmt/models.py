@@ -68,6 +68,26 @@ class Rule(Base):
     producer: Mapped[str] = mapped_column(String, default="")
 
 
+class Brand(Base):
+    """Справочник брендов: бренд → производитель и (опц.) декларация.
+
+    НЕ путать с BrandCache (кэш brand_id НК). Четвёртый источник подстановок:
+    файл > правило РД > справочник бренда > дефолт (resolve.apply_brand_dict) —
+    заполняет только слоты src=='default', src='dict'. Имя уникально по сути
+    (409 на casefold-дубль в API, как у правил).
+    """
+    __tablename__ = "brands"
+    __table_args__ = (
+        CheckConstraint("btrim(name) <> ''", name="ck_brands_name"),
+        {"schema": "nkmt"},
+    )
+    id: Mapped[int] = mapped_column(primary_key=True)
+    name: Mapped[str] = mapped_column(String)
+    producer: Mapped[str] = mapped_column(String, default="")
+    declaration_id: Mapped[int | None] = mapped_column(
+        ForeignKey("nkmt.declarations.id", ondelete="RESTRICT"), nullable=True)
+
+
 class BrandCache(Base):
     __tablename__ = "brand_cache"
     __table_args__ = {"schema": "nkmt"}

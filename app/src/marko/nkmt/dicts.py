@@ -13,7 +13,7 @@ from sqlalchemy import func, select
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.orm import Session
 
-from marko.nkmt.models import BrandCache, Declaration, Rule
+from marko.nkmt.models import Brand, BrandCache, Declaration, Rule
 from marko.platform.models import PlatformKV
 
 TTL = 24 * 3600
@@ -112,3 +112,16 @@ def get_rules(db: Session) -> list[dict]:
              "declaration_id": r.declaration_id, "declaration_number": doc_number,
              "declaration_date": doc_date, "producer": r.producer}
             for r, doc_number, doc_date in rows]
+
+
+def get_brands(db: Session) -> list[dict]:
+    """Справочник брендов с реквизитами декларации (outerjoin: декларация
+    опциональна) — чистые dict'ы для resolve.apply_brand_dict, id по возрастанию."""
+    rows = db.execute(select(Brand, Declaration.doc_number, Declaration.doc_date)
+                      .join(Declaration, Brand.declaration_id == Declaration.id,
+                            isouter=True).order_by(Brand.id)).all()
+    return [{"id": b.id, "name": b.name, "producer": b.producer,
+             "declaration_id": b.declaration_id,
+             "declaration_number": doc_number or "",
+             "declaration_date": doc_date or ""}
+            for b, doc_number, doc_date in rows]

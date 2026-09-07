@@ -65,3 +65,46 @@ def test_rules_crud_and_declaration_guard(db, client):
     assert client.delete(f"/v1/nkmt/rules/{r.json()['id']}", headers=AUTH).json() == {"ok": True}
     assert client.delete(f"/v1/nkmt/declarations/{d}", headers=AUTH).json() == {"ok": True}
     assert client.delete("/v1/nkmt/rules/99999", headers=AUTH).status_code == 404
+
+
+def test_brands_crud_and_declaration_guard(db, client):
+    d = client.post("/v1/nkmt/declarations", headers=AUTH, json=DECL).json()["id"]
+    r = client.post("/v1/nkmt/brands", headers=AUTH,
+                    json={"name": "YCPB", "producer": "ИП Байкулов", "declaration_id": d})
+    assert r.status_code == 200 and r.json()["id"]
+    lst = client.get("/v1/nkmt/brands", headers=AUTH_RO).json()
+    assert lst[0]["name"] == "YCPB" and lst[0]["producer"] == "ИП Байкулов"
+    assert lst[0]["declaration_number"] == DECL["doc_number"]
+    # пустое имя — 400; чужая декларация — 404; дубль casefold — 409
+    assert client.post("/v1/nkmt/brands", headers=AUTH,
+                       json={"name": "  "}).status_code == 400
+    assert client.post("/v1/nkmt/brands", headers=AUTH,
+                       json={"name": "X", "declaration_id": 99999}).status_code == 404
+    assert client.post("/v1/nkmt/brands", headers=AUTH,
+                       json={"name": "ycpb"}).status_code == 409
+    # декларация под записью справочника не удаляется; после удаления бренда — да
+    assert client.delete(f"/v1/nkmt/declarations/{d}", headers=AUTH).status_code == 409
+    assert client.delete(f"/v1/nkmt/brands/{r.json()['id']}", headers=AUTH).json() == {"ok": True}
+    assert client.delete(f"/v1/nkmt/declarations/{d}", headers=AUTH).json() == {"ok": True}
+    assert client.delete("/v1/nkmt/brands/99999", headers=AUTH).status_code == 404
+
+
+def test_resolve_endpoint(db, client):
+    from marko.nkmt.models import Brand, Rule
+    d = client.post("/v1/nkmt/declarations", headers=AUTH, json=DECL).json()["id"]
+    db.add(Rule(brand="YCPB", product_type="ФУТБОЛКА", declaration_id=d, producer=""))
+    db.add(Brand(name="КЛИЕНТ", producer="Фабрика клиента"))
+    db.commit()
+    # правило: декларация от правила, бренд «введён» (как файловый)
+    r = client.post("/v1/nkmt/resolve", headers=AUTH_RO,
+                    json={"brand": "YCPB", "product_type": "ФУТБОЛКА"})
+    assert r.status_code == 200
+    keys = r.json()
+    assert keys["declaration_number"] == {"value": DECL["doc_number"], "src": "rule"}
+    assert keys["brand"] == {"value": "YCPB", "src": "file"}
+    assert keys["techreg"]["src"] == "default" and keys["techreg"]["value"]
+    # справочник бренда: producer оттуда, декларация — дефолт
+    r2 = client.post("/v1/nkmt/resolve", headers=AUTH_RO,
+                     json={"brand": "клиент", "product_type": "ШАПКА"}).json()
+    assert r2["producer"] == {"value": "Фабрика клиента", "src": "dict"}
+    assert r2["declaration_number"]["src"] == "default"

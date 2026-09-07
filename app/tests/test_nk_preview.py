@@ -70,6 +70,26 @@ def test_preview_gtin_statuses(db, client, monkeypatch, model):
     assert db.query(Batch).count() == 1   # только seed — превью не пишет
 
 
+def test_preview_dict_provenance(db, client, monkeypatch, model):
+    """Справочник брендов как 4-й источник: превью показывает src='dict'."""
+    from marko.nkmt.models import Brand
+    monkeypatch.setattr("marko.connector_mt.manager.get_token", lambda _db: "T")
+    db.add(Declaration(doc_number="Д-РЕЕСТР", doc_date="2025-10-01"))
+    db.flush()
+    decl = db.query(Declaration).filter_by(doc_number="Д-РЕЕСТР").one()
+    db.add(Brand(name="КЛИЕНТ", producer="Фабрика клиента", declaration_id=decl.id))
+    db.commit()
+    files = {"file": ("p.xlsx", make_xlsx(HDR, [
+        ["D-1", "6109100000", "Футболка клиент", "ФУТБОЛКА", "БЕЛЫЙ", "100% хлопок",
+         "M", "Tee", "КЛИЕНТ", "", "", "", ""]]), XLSX_MIME)}
+    out = client.post("/v1/nkmt/import/preview", headers=AUTH, files=files).json()
+    row = out["rows"][0]
+    assert row["producer"] == "Фабрика клиента" and row["src"]["producer"] == "dict"
+    assert row["declaration_number"] == "Д-РЕЕСТР" and row["src"]["declaration_number"] == "dict"
+    assert row["declaration_date"] == "2025-10-01"
+    assert row["ok"] is True and row["rule_id"] is None
+
+
 def test_preview_bad_file_400(db, client, monkeypatch, model):
     monkeypatch.setattr("marko.connector_mt.manager.get_token", lambda _db: "T")
     files = {"file": ("bad.xlsx", b"not an xlsx at all", XLSX_MIME)}

@@ -18,8 +18,10 @@ from sqlalchemy import func
 from sqlalchemy.orm import Session
 
 from marko.api.deps import audit, get_db, require_scope
-from marko.nkmt.dicts import attrs_model, get_defaults, get_rules, set_defaults
-from marko.nkmt.models import Batch, Card, Declaration, Rule
+from marko.nkmt.dicts import (attrs_model, get_brands, get_defaults, get_rules,
+                              set_defaults)
+from marko.nkmt.models import Batch, Brand, Card, Declaration, Rule
+from marko.nkmt.validate import DATE_RE
 from marko.platform.models import PlatformToken
 
 router = APIRouter(prefix="/v1/nkmt")
@@ -45,6 +47,17 @@ class RuleBody(BaseModel):
     producer: str = ""
 
 
+class BrandBody(BaseModel):
+    name: str
+    producer: str = ""
+    declaration_id: int | None = None
+
+
+class ResolveBody(BaseModel):
+    brand: str = ""
+    product_type: str = ""
+
+
 @router.get("/declarations")
 def declarations_list(
     tok: PlatformToken = Depends(require_scope("read")),
@@ -63,17 +76,24 @@ def declarations_create(
     tok: PlatformToken = Depends(require_scope("nkmt:import")),
     db: Session = Depends(get_db),
 ):
+    # номер и дата обязательны и валидны: пара едет в карточки правилами
+    # и справочником брендов, битая дата уронит DATE_RE валидатора построчно
+    doc_number, doc_date = body.doc_number.strip(), body.doc_date.strip()
+    if not doc_number:
+        raise HTTPException(400, "укажите номер декларации")
+    if not DATE_RE.fullmatch(doc_date):
+        raise HTTPException(400, "дата декларации: ожидается ГГГГ-ММ-ДД")
     dup = db.query(Declaration).filter_by(
-        doc_number=body.doc_number, doc_date=body.doc_date).first()
+        doc_number=doc_number, doc_date=doc_date).first()
     if dup:
         raise HTTPException(409, "declaration pair already exists")
-    d = Declaration(doc_number=body.doc_number, doc_date=body.doc_date,
+    d = Declaration(doc_number=doc_number, doc_date=doc_date,
                     doc_type=body.doc_type, title=body.title)
     db.add(d)
     db.commit()
     db.refresh(d)
     audit(db, tok.principal_id, "nkmt.declaration.create",
-          {"id": d.id, "doc_number": d.doc_number, "doc_date": d.doc_date})
+          {"id": d.id, "doc_number": doc_number, "doc_date": doc_date})
     return {"id": d.id}
 
 
@@ -88,9 +108,12 @@ def declarations_delete(
         raise HTTPException(404, "declaration not found")
     if db.query(Rule).filter(Rule.declaration_id == decl_id).first():
         raise HTTPException(409, "правило РД использует эту декларацию — удалите правило")
+    if db.query(Brand).filter(Brand.declaration_id == decl_id).first():
+        raise HTTPException(409, "справочник брендов использует эту декларацию — удалите запись")
     db.delete(d)
     db.commit()
-    audit(db, tok.principal_id, "nkmt.declaration.delete", {"id": decl_id})
+    audit(db, tok.principal_id, "nkmt.declaration.delete",
+          {"id": decl_id, "doc_number": d.doc_number})
     return {"ok": True}
 
 
@@ -145,6 +168,69 @@ def rules_delete(
     audit(db, tok.principal_id, "nkmt.rule.delete",
           {"id": rule_id, "brand": r.brand, "product_type": r.product_type})
     return {"ok": True}
+
+
+# --- справочник брендов: бренд → производитель/декларация (4-й источник) ---
+
+@router.get("/brands")
+def brands_list(
+    tok: PlatformToken = Depends(require_scope("read")),
+    db: Session = Depends(get_db),
+):
+    return get_brands(db)
+
+
+@router.post("/brands")
+def brands_create(
+    body: BrandBody,
+    tok: PlatformToken = Depends(require_scope("nkmt:import")),
+    db: Session = Depends(get_db),
+):
+    name = body.name.strip()
+    if not name:
+        raise HTTPException(400, "укажите название бренда")
+    if body.declaration_id is not None and db.get(Declaration, body.declaration_id) is None:
+        raise HTTPException(404, "declaration not found")
+    dup = db.query(Brand).filter(func.lower(Brand.name) == name.casefold()).first()
+    if dup:
+        raise HTTPException(409, "бренд с таким именем уже существует")
+    b = Brand(name=name, producer=body.producer.strip(),
+              declaration_id=body.declaration_id)
+    db.add(b)
+    db.commit()
+    db.refresh(b)
+    audit(db, tok.principal_id, "nkmt.brand.create",
+          {"id": b.id, "name": name, "producer": b.producer,
+           "declaration_id": b.declaration_id})
+    return {"id": b.id}
+
+
+@router.delete("/brands/{brand_id}")
+def brands_delete(
+    brand_id: int,
+    tok: PlatformToken = Depends(require_scope("nkmt:import")),
+    db: Session = Depends(get_db),
+):
+    b = db.get(Brand, brand_id)
+    if not b:
+        raise HTTPException(404, "brand not found")
+    db.delete(b)
+    db.commit()
+    audit(db, tok.principal_id, "nkmt.brand.delete", {"id": brand_id, "name": b.name})
+    return {"ok": True}
+
+
+@router.post("/resolve")
+def nkmt_resolve(
+    body: ResolveBody,
+    tok: PlatformToken = Depends(require_scope("read")),
+    db: Session = Depends(get_db),
+):
+    """«Примерка»: резолв всех подставляемых полей для бренда и вида товара
+    без файла (дефолты → правила → справочник брендов). Read-only."""
+    from marko.nkmt.resolve import resolve_fields
+    return resolve_fields(body.brand, body.product_type,
+                          get_defaults(db), get_rules(db), get_brands(db))
 
 
 @router.get("/defaults")
