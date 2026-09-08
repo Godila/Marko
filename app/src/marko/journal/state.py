@@ -1,7 +1,6 @@
 RULES = {
     ("NEW", "sale"): "PENDING_WITHDRAW",
     ("NEW", "return"): "ANOMALY_NO_RECEIPT",
-    ("NEW", "skip_fbw"): "SKIPPED_FBW",
     ("PENDING_WITHDRAW", "sale"): "ANOMALY_RESALE",
     ("PENDING_WITHDRAW", "return"): "PENDING_RETURN",
     ("WITHDRAWN", "return"): "PENDING_RETURN",

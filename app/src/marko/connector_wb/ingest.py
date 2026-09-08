@@ -1,6 +1,6 @@
 from sqlalchemy.orm import Session
 
-from marko.journal import apply_event
+from marko.journal import apply_event, log_action
 
 
 def excise_rows_to_events(rows: list[dict]) -> list[dict]:
@@ -22,15 +22,18 @@ def fbs_rids(order_rows: list[dict]) -> set[str]:
     return {o["rid"] for o in order_rows if o.get("rid")}
 
 
-# Контракт порядка (worker/poll): fbs-множество строится ДО ingest_excise — строка, journaled как skip_fbw, уже никогда не станет sale (dedup по source_event_id).
+# Контракт порядка (worker/poll): fbs-множество строится ДО ingest_excise — строка,
+# journaled как skip_fbw, уже никогда не станет sale (dedup по source_event_id).
 def ingest_excise(db: Session, rows: list[dict], fbs: set[str]) -> dict:
     stats = {"sale": 0, "return": 0, "skipped_fbw": 0, "duplicates": 0}
     for ev in excise_rows_to_events(rows):
         if ev["srid"] not in fbs:
-            _, created = apply_event(db, source="wb_excise",
-                                     source_event_id=ev["source_event_id"],
-                                     kind="skip_fbw", km=ev["km"], srid=ev["srid"],
-                                     payload=ev["payload"])
+            # FBW-строки — вне контура FBS: только аудит-событие, позиция в журнале
+            # НЕ создаётся (08.09: журнал = жизненный цикл наших КМ, FBW-код выводит WB)
+            created = log_action(db, source="wb_excise",
+                                 source_event_id=ev["source_event_id"],
+                                 kind="skip_fbw", km=ev["km"], srid=ev["srid"],
+                                 payload=ev["payload"])
             if created:
                 stats["skipped_fbw"] += 1
             else:

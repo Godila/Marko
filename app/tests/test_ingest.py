@@ -23,8 +23,12 @@ def test_ingest_filters_fbw(db):
     # вся фикстура прода — FBW: ни один srid не входит в fbs-множество.
     # В фикстуре 1022 строки, но одна пара байт-в-байт одинаковых строк
     # (WB отдал один и тот же возврат дважды) → журнал дедуплицирует: 1021 + 1 dup.
+    # FBW — вне контура: только аудит-события, позиций в журнале НЕ создаётся.
     stats = ingest_excise(db, FIXT, fbs=set())
     assert stats == {"sale": 0, "return": 0, "skipped_fbw": 1021, "duplicates": 1}
+    from marko.journal.models import Event, Item
+    assert db.query(Item).count() == 0
+    assert db.query(Event).filter_by(kind="skip_fbw").count() == 1021
 
 
 def test_ingest_sale_and_return(db):

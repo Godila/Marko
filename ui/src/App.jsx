@@ -37,11 +37,10 @@ const ITEM_STATES = {
   ANOMALY_NO_RECEIPT: ['аномалия: нет чека', 'red'], ANOMALY_RESALE: ['аномалия: перепродажа', 'red'],
   ANOMALY_RERETURN: ['аномалия: повторный возврат', 'red'],
   ANOMALY_UNKNOWN_TRANSITION: ['аномалия: неизвестный переход', 'red'],
-  SKIPPED_FBW: ['вне контура · FBW', 'grey'],
 }
 const CHIP_ORDER = ['PENDING_WITHDRAW', 'PENDING_RETURN', 'WITHDRAWN', 'RETURNED',
   'ANOMALY_RESALE', 'ANOMALY_NO_RECEIPT', 'ANOMALY_RERETURN', 'ANOMALY_UNKNOWN_TRANSITION',
-  'SKIPPED_FBW', 'NEW']
+  'NEW']
 const DOC_STATUS = { draft: ['черновик', 'grey'], signing: ['подписывается', 'blue'],
   submitted: ['подан', 'blue'], checked_ok: ['принят ЧЗ', 'green'], error: ['ошибка', 'red'] }
 const CARD_STATUS = { ok: ['новая', 'grey'], fed: ['подана', 'blue'], moderation: ['модерация', 'amber'],
@@ -69,7 +68,7 @@ const DEF_FIELDS = [
   ['size_system', 'Система размеров'], ['country', 'Страна'], ['producer', 'Производитель'],
   ['declaration_number', 'Номер декларации'], ['declaration_date', 'Дата декларации']]
 const KIND_RU = { sale: 'продажа', return: 'возврат', withdraw: 'вывод',
-  return_apply: 'возврат проведён', skip_fbw: 'вне FBS' }
+  return_apply: 'возврат проведён' }
 
 /* ================= формат ================= */
 const pad2 = (n) => String(n).padStart(2, '0')

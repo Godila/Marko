@@ -11,7 +11,6 @@ from marko.journal.state import transition
     ("PENDING_RETURN", "sale", "PENDING_WITHDRAW"),
     ("PENDING_RETURN", "return", "ANOMALY_RERETURN"),
     ("RETURNED", "sale", "PENDING_WITHDRAW"),
-    ("NEW", "skip_fbw", "SKIPPED_FBW"),
     ("WITHDRAWN", "sale", "ANOMALY_UNKNOWN_TRANSITION"),
 ])
 def test_transitions(state, kind, expected):
