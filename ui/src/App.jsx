@@ -677,10 +677,11 @@ function Refs({ ctx }) {
                       {(defs || {}).declaration_number && !selDecl
                         && <option value="manual">{defs.declaration_number} (вне реестра)</option>}
                     </select>
-                  : <input style={{ maxWidth: 400, textAlign: 'right' }}
-                      type={k === 'declaration_date' ? 'date' : 'text'}
-                      value={(defs || {})[k] || ''}
-                      onChange={(e) => setDefs({ ...(defs || {}), [k]: e.target.value })} />}
+                  : <input style={{ maxWidth: 400, textAlign: 'right', textOverflow: 'ellipsis' }}
+                    title={(defs || {})[k] || ''}
+                    type={k === 'declaration_date' ? 'date' : 'text'}
+                    value={(defs || {})[k] || ''}
+                    onChange={(e) => setDefs({ ...(defs || {}), [k]: e.target.value })} />}
                 {k !== 'techreg' && <button className="btn sm" title="Убрать поле из дефолтов"
                   onClick={() => delField(k)}>×</button>}
               </span>
@@ -761,7 +762,7 @@ function Refs({ ctx }) {
         <div className="faint" style={{ fontSize: 11, textTransform: 'uppercase', letterSpacing: '.06em', marginBottom: 8 }}>Когда сработает</div>
         <div className="frow">
           <div className="field" style={{ flex: 1, minWidth: 160 }}><label>Бренд (пусто = любой)</label>
-            <input list="hint-brands" value={rbrand} placeholder="начните вводить — покажем известные"
+            <input list="hint-brands" value={rbrand} placeholder="вводите — будут подсказки"
               onChange={(e) => setRbrand(e.target.value)} /></div>
           <div className="field" style={{ flex: 2 }}><label>Виды товара — можно несколько (пусто = любой)</label>
             <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6, alignItems: 'center' }}>
