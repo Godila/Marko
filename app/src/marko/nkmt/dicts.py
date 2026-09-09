@@ -19,9 +19,25 @@ from marko.platform.models import PlatformKV
 TTL = 24 * 3600
 DEFAULTS_KEY = "nk_defaults"
 DEFAULTS = {"brand": "YCPB", "techreg": 'ТР ТС 017/2011 "О безопасности продукции легкой промышленности"',
-            "target_gender": "ЖЕНСКИЙ", "size_system": "МЕЖДУНАРОДНЫЙ",
+            "target_gender": "ЖЕНСКИЙ", "size_system": "МЕЖДУНАРОДНЫЙ", "product_type": "",
             # live: attr 2630 — справочник ISOCountries, нужен код («RU»), не русское имя
             "country": "RU", "producer": "", "declaration_number": "", "declaration_date": ""}
+
+
+def dict_hints(db: Session, defaults: dict) -> dict:
+    """Подсказки для условий правил РД из уже закэшированных справочников НК:
+    product_types — union пресетов атрибута 12 «Вид товара» по всем nk_attrs:{tnved};
+    brands — имена из brand_cache + дефолтный бренд. Сеть не трогается."""
+    pts: set[str] = set()
+    for kv in db.query(PlatformKV).filter(PlatformKV.key.like("nk_attrs:%")).all():
+        for a in (kv.value or {}).get("m", []) + (kv.value or {}).get("r", []):
+            if a.get("attr_id") == 12:
+                pts.update(p for p in (a.get("attr_preset") or [])
+                           if p and p != "НЕТ В СПРАВОЧНИКЕ")
+    brands = {b.name for b in db.query(BrandCache).all()}
+    if defaults.get("brand"):
+        brands.add(defaults["brand"])
+    return {"product_types": sorted(pts), "brands": sorted(brands - {""})}
 
 
 class UnknownBrand(Exception):

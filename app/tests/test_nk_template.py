@@ -8,8 +8,9 @@ def test_spec_derived_constants():
     from marko.nkmt.parse import COLUMNS, DEFAULTED_KEYS, REQUIRED_ROW_KEYS, SPEC
     assert REQUIRED_ROW_KEYS == ["article", "tnved", "name", "product_type", "color",
                                  "composition", "size"]
-    assert DEFAULTED_KEYS == ["brand", "target_gender", "size_system", "declaration_number",
-                              "declaration_date", "producer", "country"]
+    assert DEFAULTED_KEYS == ["product_type", "brand", "target_gender", "size_system",
+                              "declaration_number", "declaration_date", "producer",
+                              "country"]
     for s in SPEC:
         if s.title:
             assert COLUMNS[s.title.casefold()] == s.key

@@ -43,6 +43,22 @@ def test_dicts_attributes_validates_tnved(db, client, monkeypatch):
     assert r.status_code == 400
 
 
+def test_dicts_hints(db, client):
+    """Подсказки для правил: пресеты вида товара из кэша атрибутных моделей
+    + бренды из brand_cache и дефолта."""
+    from marko.nkmt.models import BrandCache
+    from marko.platform.models import PlatformKV
+    db.add(PlatformKV(key="nk_attrs:6109100000", value={"m": [
+        {"attr_id": 12, "attr_name": "Вид товара", "attr_preset": ["ФУТБОЛКА", "ШАПКА"]}], "r": []}))
+    db.add(BrandCache(name="ycpb", brand_id=2102811))
+    db.commit()
+    r = client.get("/v1/nkmt/dicts/hints", headers=AUTH_RO)
+    assert r.status_code == 200
+    hints = r.json()
+    assert hints["product_types"] == ["ФУТБОЛКА", "ШАПКА"]
+    assert "ycpb" in hints["brands"] and "YCPB" in hints["brands"]   # кэш + дефолт
+
+
 def test_rules_crud_and_declaration_guard(db, client):
     d = client.post("/v1/nkmt/declarations", headers=AUTH, json=DECL).json()["id"]
     r = client.post("/v1/nkmt/rules", headers=AUTH,

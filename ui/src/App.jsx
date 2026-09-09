@@ -64,9 +64,10 @@ const STAGES = [
   { key: 'error', l: 'ошибка', match: ['error'] },
 ]
 const DEF_FIELDS = [
-  ['brand', 'Бренд'], ['techreg', 'Техрегламент'], ['target_gender', 'Пол'],
-  ['size_system', 'Система размеров'], ['country', 'Страна'], ['producer', 'Производитель'],
-  ['declaration_number', 'Номер декларации'], ['declaration_date', 'Дата декларации']]
+  ['brand', 'Бренд'], ['product_type', 'Вид товара'], ['techreg', 'Техрегламент'],
+  ['target_gender', 'Пол'], ['size_system', 'Система размеров'], ['country', 'Страна'],
+  ['producer', 'Производитель'], ['declaration_number', 'Номер декларации'],
+  ['declaration_date', 'Дата декларации']]
 const KIND_RU = { sale: 'продажа', return: 'возврат', withdraw: 'вывод',
   return_apply: 'возврат проведён' }
 
@@ -578,12 +579,15 @@ function Refs({ ctx }) {
   const [em, setEm] = useState(null)
   const [rules, setRules] = useState(null)
   const [dnum, setDnum] = useState(''); const [ddate, setDdate] = useState(''); const [dtype, setDtype] = useState('declaration')
+  const [dtitle, setDtitle] = useState('')
+  const [hints, setHints] = useState({ brands: [], product_types: [] })
   const [rbrand, setRbrand] = useState(''); const [rdecl, setRdecl] = useState('')
   const [rtypes, setRtypes] = useState([]); const [rtypeInput, setRtypeInput] = useState('')
   const [rprod, setRprod] = useState('')
   const [rzBrand, setRzBrand] = useState(''); const [rzType, setRzType] = useState(''); const [rz, setRz] = useState(null)
   useEffect(() => { nkmt('/v1/nkmt/declarations', token).then(setDecls).catch(() => setDecls([]))
-    nkmt('/v1/nkmt/rules', token).then(setRules).catch(() => setRules([])) }, [ctx.tick])
+    nkmt('/v1/nkmt/rules', token).then(setRules).catch(() => setRules([]))
+    nkmt('/v1/nkmt/dicts/hints', token).then(setHints).catch(() => {}) }, [ctx.tick])
   // формы дефолтов и эмиттера грузятся один раз при входе: 60-секундный тик
   // консоли не должен затирать несохранённые правки оператора
   useEffect(() => {
@@ -593,8 +597,8 @@ function Refs({ ctx }) {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [])
   const addDecl = () => { if (!dnum || !ddate) return notify('Заполните номер и дату', '', 'warn')
-    nkmt('/v1/nkmt/declarations', token, { method: 'POST', body: JSON.stringify({ doc_number: dnum, doc_date: ddate, doc_type: dtype }) })
-      .then(() => { setDnum(''); setDdate(''); notify('Декларация добавлена', ''); ctx.bump() })
+    nkmt('/v1/nkmt/declarations', token, { method: 'POST', body: JSON.stringify({ doc_number: dnum, doc_date: ddate, doc_type: dtype, title: dtitle }) })
+      .then(() => { setDnum(''); setDdate(''); setDtitle(''); notify('Декларация добавлена', ''); ctx.bump() })
       .catch((e) => notify('Не добавлено', e.message, 'bad')) }
   const delDecl = (d) => confirm('Удалить декларацию?', d.doc_number, 'Карточки, где она уже подставлена, не изменятся.', 'Удалить',
     () => nkmt(`/v1/nkmt/declarations/${d.id}`, token, { method: 'DELETE' })
@@ -730,47 +734,60 @@ function Refs({ ctx }) {
           <div className="field"><label>Тип</label><select value={dtype} onChange={(e) => setDtype(e.target.value)}>
             <option value="declaration">декларация</option><option value="certificate">сертификат</option></select></div>
           <button className="btn pri" onClick={addDecl}>Добавить</button></div>
+        <div className="frow">
+          <div className="field" style={{ flex: 1 }}><label>Название (для себя, опционально)</label>
+            <input value={dtitle} placeholder="например, Шапки лёгпром до 2027"
+              onChange={(e) => setDtitle(e.target.value)} /></div>
+        </div>
       </div>
       <div className="twrap"><table className="t small">
-        <thead><tr><th>Номер</th><th>Дата</th><th>Тип</th><th></th></tr></thead>
+        <thead><tr><th>Номер</th><th>Название</th><th>Дата</th><th>Тип</th><th></th></tr></thead>
         <tbody>{(decls || []).map((d) => <tr key={d.id}>
-          <td style={{ fontSize: 12.5 }}>{d.doc_number}</td><td className="mono">{d.doc_date}</td>
+          <td style={{ fontSize: 12.5 }}>{d.doc_number}</td>
+          <td>{d.title || '—'}</td>
+          <td className="mono">{d.doc_date}</td>
           <td>{d.doc_type === 'certificate' ? 'сертификат' : 'декларация'}</td>
           <td className="actions"><button className="btn sm" onClick={() => delDecl(d)}>Удалить</button></td></tr>)}
-          {decls && !decls.length && <tr><td colSpan={4}><div className="empty"><b>Список пуст</b>Добавьте действующую декларацию — она подставится в карточки.</div></td></tr>}
+          {decls && !decls.length && <tr><td colSpan={5}><div className="empty"><b>Список пуст</b>Добавьте действующую декларацию — она подставится в карточки.</div></td></tr>}
         </tbody></table></div>
     </div>}
     {tab === 'rules' && <div className="card">
-      <div className="card-h"><h2>Правила РД</h2><span className="hint">бренд × виды товара → декларация/производитель</span></div>
+      <div className="card-h"><h2>Правила РД</h2><span className="hint">условие → подстановка декларации/производителя</span></div>
       <div className="card-b" style={{ borderBottom: '1px solid var(--line)' }}>
-        <div className="note">Бренд сравнивается без учёта регистра; вид товара — точно и должен входить в список правила (видов можно указать несколько). Правило без видов действует на любой вид товара. Из подошедших правил выигрывает то, у которого больше непустых условий, при равенстве — заведённое позже.</div>
-        <div className="frow" style={{ marginTop: 10 }}>
-          <div className="field" style={{ flex: 1, minWidth: 130 }}><label>Бренд (пусто = любой)</label>
-            <input value={rbrand} onChange={(e) => setRbrand(e.target.value)} /></div>
-          <div className="field" style={{ flex: 1, minWidth: 180 }}><label>Декларация</label>
-            <select value={rdecl} onChange={(e) => setRdecl(e.target.value)}>
-              <option value="">— выберите —</option>
-              {(decls || []).map((d) => <option key={d.id} value={d.id}>{d.doc_number} · {d.doc_date}</option>)}
-            </select></div>
-        </div>
+        <datalist id="hint-brands">
+          {(hints.brands || []).map((b) => <option key={b} value={b} />)}</datalist>
+        <datalist id="hint-ptypes">
+          {(hints.product_types || []).map((t) => <option key={t} value={t} />)}</datalist>
+        <div className="faint" style={{ fontSize: 11, textTransform: 'uppercase', letterSpacing: '.06em', marginBottom: 8 }}>Когда сработает</div>
         <div className="frow">
-          <div className="field" style={{ flex: 1 }}><label>Виды товара (пусто = любой; можно несколько)</label>
+          <div className="field" style={{ flex: 1, minWidth: 160 }}><label>Бренд (пусто = любой)</label>
+            <input list="hint-brands" value={rbrand} placeholder="начните вводить — покажем известные"
+              onChange={(e) => setRbrand(e.target.value)} /></div>
+          <div className="field" style={{ flex: 2 }}><label>Виды товара — можно несколько (пусто = любой)</label>
             <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6, alignItems: 'center' }}>
               {rtypes.map((t) => <span key={t} className="bdg blue" style={{ cursor: 'default' }}>{t}
                 <a title="Убрать вид" style={{ marginLeft: 5, cursor: 'pointer' }}
                   onClick={() => setRtypes(rtypes.filter((x) => x !== t))}>×</a></span>)}
-              <input style={{ flex: 1, minWidth: 160 }} value={rtypeInput}
+              <input list="hint-ptypes" style={{ flex: 1, minWidth: 160 }} value={rtypeInput}
                 placeholder="например, ШАПКА — Enter или +"
                 onChange={(e) => setRtypeInput(e.target.value)}
                 onKeyDown={(e) => { if (e.key === 'Enter') { e.preventDefault(); addRtype() } }} />
-              <button className="btn sm" onClick={addRtype}>+</button>
+              <button className="btn sm" title="Добавить вид" onClick={addRtype}>+</button>
             </div></div>
         </div>
+        <div className="faint" style={{ fontSize: 11, textTransform: 'uppercase', letterSpacing: '.06em', margin: '12px 0 8px' }}>Что подставить</div>
         <div className="frow">
+          <div className="field" style={{ flex: 2, minWidth: 240 }}><label>Декларация</label>
+            <select value={rdecl} onChange={(e) => setRdecl(e.target.value)}>
+              <option value="">— выберите —</option>
+              {(decls || []).map((d) => <option key={d.id} value={d.id}>
+                {d.title ? `${d.title} · ${d.doc_number}` : `${d.doc_number} · ${d.doc_date}`}</option>)}
+            </select></div>
           <div className="field" style={{ flex: 1 }}><label>Производитель (опционально)</label>
             <input value={rprod} onChange={(e) => setRprod(e.target.value)} /></div>
-          <button className="btn pri" onClick={addRule}>Добавить</button>
+          <button className="btn pri" style={{ alignSelf: 'flex-end' }} onClick={addRule}>Добавить правило</button>
         </div>
+        <div className="note" style={{ marginTop: 10 }}>Как применяется: у строки файла берётся эффективный бренд и вид (из файла или дефолтов); правило подходит, если бренд совпал (без учёта регистра) и вид входит в список. Из подошедших побеждает правило с большим числом условий. Подстановка действует только там, где значение не задано файлом.</div>
       </div>
       <div className="twrap"><table className="t small">
         <thead><tr><th>Бренд</th><th>Виды товара</th><th>Декларация</th><th>Производитель</th><th></th></tr></thead>
@@ -780,7 +797,7 @@ function Refs({ ctx }) {
           <td style={{ fontSize: 12.5 }}>{r.declaration_number}</td>
           <td>{r.producer || '—'}</td>
           <td className="actions"><button className="btn sm" onClick={() => delRule(r)}>Удалить</button></td></tr>)}
-          {rules && !rules.length && <tr><td colSpan={5}><div className="empty"><b>Правил нет</b>Правило подставит декларацию и производителя для бренда и одного или нескольких видов товара; правило без видов действует на любой вид.</div></td></tr>}
+          {rules && !rules.length && <tr><td colSpan={5}><div className="empty"><b>Правил нет</b>Пример: бренд Adel + виды «ШАПКА, КЕПКА» → декларация №… и производитель. Правило без бренда и видов не создаётся — оно подходило бы всем строкам.</div></td></tr>}
         </tbody></table></div>
     </div>}
     {tab === 'emitter' && <div className="card">

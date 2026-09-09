@@ -38,3 +38,12 @@ def test_parse_and_defaults():
     r = out[0]
     assert r["brand"] == "YCPB" and r["target_gender"] == "ЖЕНСКИЙ" and r["techreg"].startswith("ТР ТС 017")
     assert r["country"] == "RU" and r["declaration_number"] == "Д-1"
+
+
+def test_apply_defaults_product_type():
+    """Вид товара дефолтуем: пустой ← дефолт, файловый цел (условия правил
+    матчатся по эффективному значению)."""
+    from marko.nkmt.parse import apply_defaults
+    rows = [{"product_type": ""}, {"product_type": "ШАПКА"}]
+    out = apply_defaults(rows, {"product_type": "ФУТБОЛКА"})
+    assert out[0]["product_type"] == "ФУТБОЛКА" and out[1]["product_type"] == "ШАПКА"

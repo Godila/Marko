@@ -18,7 +18,8 @@ from sqlalchemy import func
 from sqlalchemy.orm import Session
 
 from marko.api.deps import audit, get_db, require_scope
-from marko.nkmt.dicts import attrs_model, get_defaults, get_rules, set_defaults
+from marko.nkmt.dicts import (attrs_model, dict_hints, get_defaults, get_rules,
+                              set_defaults)
 from marko.nkmt.models import Batch, Card, Declaration, Rule
 from marko.nkmt.validate import DATE_RE
 from marko.platform.models import PlatformToken
@@ -212,6 +213,16 @@ def dicts_attributes(
         return attrs_model(db, client, token, tnved)
     except NkHttpError as e:
         raise HTTPException(502, f"nk upstream error: {e}")
+
+
+@router.get("/dicts/hints")
+def dicts_hints(
+    tok: PlatformToken = Depends(require_scope("read")),
+    db: Session = Depends(get_db),
+):
+    """Подсказки для условий правил РД: пресетные виды товара (из кэша
+    атрибутных моделей) и известные бренды. Без сети."""
+    return dict_hints(db, get_defaults(db))
 
 
 @router.post("/import")
