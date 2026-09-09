@@ -34,10 +34,14 @@ def dict_hints(db: Session, defaults: dict) -> dict:
             if a.get("attr_id") == 12:
                 pts.update(p for p in (a.get("attr_preset") or [])
                            if p and p != "НЕТ В СПРАВОЧНИКЕ")
-    brands = {b.name for b in db.query(BrandCache).all()}
+    # casefold-дедуп: кэш хранит и «YCPB», и «ycpb» — в подсказках один вариант,
+    # написание дефолтного бренда приоритетнее
+    brands_map: dict[str, str] = {}
+    for b in db.query(BrandCache).all():
+        brands_map.setdefault(b.name.casefold(), b.name)
     if defaults.get("brand"):
-        brands.add(defaults["brand"])
-    return {"product_types": sorted(pts), "brands": sorted(brands - {""})}
+        brands_map[defaults["brand"].casefold()] = defaults["brand"]
+    return {"product_types": sorted(pts), "brands": sorted(brands_map.values())}
 
 
 class UnknownBrand(Exception):

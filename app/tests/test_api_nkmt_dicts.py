@@ -56,7 +56,8 @@ def test_dicts_hints(db, client):
     assert r.status_code == 200
     hints = r.json()
     assert hints["product_types"] == ["ФУТБОЛКА", "ШАПКА"]
-    assert "ycpb" in hints["brands"] and "YCPB" in hints["brands"]   # кэш + дефолт
+    # casefold-дедуп: кэш «ycpb» + дефолт «YCPB» → один вариант с дефолтным написанием
+    assert hints["brands"] == ["YCPB"]
 
 
 def test_rules_crud_and_declaration_guard(db, client):
