@@ -5,7 +5,8 @@ from datetime import date, timedelta
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.orm import Session
 
-from marko.connector_wb.ingest import fbs_rids, ingest_excise
+from marko.connector_wb.ingest import ingest_excise
+from marko.connector_wb.registry import non_fbs_docs, registry_docs, upsert_orders
 from marko.platform.models import PlatformKV
 from marko.settings import settings
 
@@ -13,15 +14,16 @@ log = logging.getLogger("marko.poll")
 
 
 def run_once(db: Session, client) -> dict:
-    # Порядок обязателен (review Task 10): orders() → fbs-множество СТРОГО ДО
-    # excise_report()/ingest — строка, journaled как skip_fbw, уже никогда не
-    # станет sale. orders() ничего не пишет, поэтому _gate_excise (commit внутри
-    # excise_report) не подтянет незавершённые journal-записи.
+    # Реестр заказов прогревается ДО ingest: классификация эксайз-строки опирается
+    # на персистентный wb.orders, а не на «видимость заказа в снапшоте прямо
+    # сейчас». orders()/upsert_orders не пишут в журнал — commit внутри
+    # _gate_excise (excise_report) не подтянет незавершённых journal-записей.
     orders = client.orders()
-    fbs = fbs_rids(orders)
+    upsert_orders(db, orders)
+    known_docs, fbw_docs = registry_docs(db), non_fbs_docs(db)
     to, frm = date.today(), date.today() - timedelta(days=settings.excise_days_back)
     rows = client.excise_report(frm.isoformat(), to.isoformat())
-    stats = ingest_excise(db, rows, fbs)
+    stats = ingest_excise(db, rows, fbw_docs=fbw_docs, known_docs=known_docs)
     now = time.time()
     marker = {"at": now, "stats": stats}
     db.execute(pg_insert(PlatformKV).values(
@@ -31,5 +33,5 @@ def run_once(db: Session, client) -> dict:
         set_={"value": marker},
     ))
     db.commit()
-    log.info("poll done: %s (fbs_rids=%d)", stats, len(fbs))
+    log.info("poll done: %s (registry=%d, fbw_docs=%d)", stats, len(known_docs), len(fbw_docs))
     return stats

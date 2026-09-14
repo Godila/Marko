@@ -25,7 +25,9 @@ async def poll_cycle():
     try:
         client = WBClient(token=load_wb_token(settings.wb_token_file), db=db)
         stats = run_once(db, client)
-        if stats["sale"] or stats["return"]:
+        # skipped_fbw/fbs_unknown — трипваеры классификации: любое событие,
+        # отличное от «тихого нуля», должно быть видно (инцидент 09.2026)
+        if any(stats[k] for k in ("sale", "return", "skipped_fbw", "fbs_unknown")):
             await send(f"WB poll: {stats}")
     except (WbHttpError, WbLimitError) as e:
         log.error("poll failed: %s", e)
@@ -175,14 +177,25 @@ def _nkmt_loop():
 
 def _wb_returns_loop():
     """Раз в час: монитор возвратов WB (goods-return, квота 2/1ч — гейт в клиенте)
-    + TG-алерты (новый возврат; дедлайн забора ≤48 ч)."""
+    + прогрев реестра wb.orders (orders() без квот) + TG-алерты (новый возврат;
+    дедлайн забора ≤48 ч). Реестр обязан пополняться между эксайз-слотами: заказ
+    уходит из снапшота /api/v3/orders на 1–3 дня раньше эксайз-строки."""
     from marko.connector_wb.returns import run_returns_once
+    from marko.connector_wb.registry import upsert_orders
     from marko.db import SessionLocal
     while True:
         db = None
         try:
             db = SessionLocal()
             client = WBClient(token=load_wb_token(settings.wb_token_file), db=db)
+            try:
+                upsert_orders(db, client.orders())
+            except (WbHttpError, WbLimitError) as e:
+                db.rollback()  # aborted-транзакция не должна ронять returns-проход
+                log.error("registry warm failed: %s", e)
+            except Exception:
+                db.rollback()
+                log.exception("registry warm failed")
             res = run_returns_once(db, client)
             for text in res.get("alerts", []):
                 asyncio.run(send(text))

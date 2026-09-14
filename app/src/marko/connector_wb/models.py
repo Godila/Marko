@@ -23,3 +23,20 @@ class WbReturn(Base):
     alerted_deadline: Mapped[bool] = mapped_column(Boolean, default=False)
     payload: Mapped[dict] = mapped_column(JSON)
     updated_at = mapped_column(DateTime, server_default=func.now(), onupdate=func.now())
+
+
+class WbOrder(Base):
+    """Реестр заказов WB (/api/v3/orders): order_doc = rid без хвостовых
+    счётчиков позиции '.n.m' — эксайз srid и orders rid живут в одном
+    пространстве документов, но суффиксы расходятся (инцидент 09.2026).
+    Персистентность критична: выкупленный заказ уходит из снапшота раньше,
+    чем приезжает эксайз-строка."""
+    __tablename__ = "orders"
+    __table_args__ = {"schema": "wb"}
+
+    order_doc: Mapped[str] = mapped_column(String(64), primary_key=True)
+    delivery_type: Mapped[str] = mapped_column(String(8), default="")   # fbs/fbo/…
+    nm_id: Mapped[int | None] = mapped_column(BigInteger, nullable=True)
+    order_created_at: Mapped[str] = mapped_column(String(32), default="")  # ISO от WB
+    first_seen = mapped_column(DateTime, server_default=func.now())
+    last_seen = mapped_column(DateTime, server_default=func.now(), onupdate=func.now())

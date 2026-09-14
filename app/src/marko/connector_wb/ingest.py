@@ -1,5 +1,6 @@
 from sqlalchemy.orm import Session
 
+from marko.connector_wb.registry import order_doc
 from marko.journal import apply_event, log_action
 
 
@@ -18,18 +19,21 @@ def excise_rows_to_events(rows: list[dict]) -> list[dict]:
     return out
 
 
-def fbs_rids(order_rows: list[dict]) -> set[str]:
-    return {o["rid"] for o in order_rows if o.get("rid")}
-
-
-# Контракт порядка (worker/poll): fbs-множество строится ДО ingest_excise — строка,
-# journaled как skip_fbw, уже никогда не станет sale (dedup по source_event_id).
-def ingest_excise(db: Session, rows: list[dict], fbs: set[str]) -> dict:
-    stats = {"sale": 0, "return": 0, "skipped_fbw": 0, "duplicates": 0}
+# Контракт классификации (инцидент 09.2026): skip_fbw — ТОЛЬКО когда order_doc(srid)
+# в реестре wb.orders явно не-FBS. Прежняя схема «srid ∉ текущего снапшота orders()»
+# отправляла наши FBS-продажи в skip_fbw: суффикс позиции '.n.m' расходится между
+# эксайзом и orders (0/131 совпадений), а выкупленный заказ исчезает из снапшота
+# раньше приезда эксайз-строки (128/131 вне снапшота). Документ вне реестра = наш
+# FBS (счётчик fbs_unknown — трипваер); реестр прогревается upsert_orders ДО ingest
+# в poll и ежечасно в воркере. Настоящая FBW-строка, попавшая в вывод, поглощается
+# wb_withdraw_guard («уже выбыл» → withdrawn_by='wb').
+def ingest_excise(db: Session, rows: list[dict], *, fbw_docs: set[str],
+                  known_docs: set[str]) -> dict:
+    stats = {"sale": 0, "return": 0, "skipped_fbw": 0, "duplicates": 0, "fbs_unknown": 0}
     for ev in excise_rows_to_events(rows):
-        if ev["srid"] not in fbs:
-            # FBW-строки — вне контура FBS: только аудит-событие, позиция в журнале
-            # НЕ создаётся (08.09: журнал = жизненный цикл наших КМ, FBW-код выводит WB)
+        if order_doc(ev["srid"]) in fbw_docs:
+            # FBW — вне контура FBS: только аудит-событие, позиция в журнале
+            # НЕ создаётся (журнал = жизненный цикл наших КМ)
             created = log_action(db, source="wb_excise",
                                  source_event_id=ev["source_event_id"],
                                  kind="skip_fbw", km=ev["km"], srid=ev["srid"],
@@ -42,6 +46,8 @@ def ingest_excise(db: Session, rows: list[dict], fbs: set[str]) -> dict:
         _, created = apply_event(db, **ev)
         if created:
             stats[ev["kind"]] += 1
+            if order_doc(ev["srid"]) not in known_docs:
+                stats["fbs_unknown"] += 1
         else:
             stats["duplicates"] += 1
     return stats

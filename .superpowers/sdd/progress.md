@@ -210,3 +210,28 @@ TG-creds, S3-бэкап, УКЭП до 21.10.2026. БЭКЛОГ: фильтр FB
 goods-return без supplyType), индикатор FBS-выкупов в Обзор, 25к-справочники отдельной сессией
 (план: агрегатор→апрув→REST), чистка error_text при published, архив «Шапки Тест НК».
 Точка входа: agentmemory «PRE-COMPACT CHECKPOINT 2026-09-14» + файловая память (архитектура, блоки внизу).
+
+## ИНЦИДЕНТ skip_fbw → фикс классификации WB-эксайза (14.09, по /feature-dev-методологии)
+
+Юзер опроверг вывод ресерча «выкупы все FBW»: живые выкупы FBS видны в ЛК (скрин: СЦ Кавказский
+бульвар/Крыловская, «Свой склад»). Диагноз по прод-БД + живому снапшоту: 131 продажа наших КМ
+(fiscal 20.08–13.09) ВСЯ в wb_excise/skip_fbw, журнал пуст. Две причины матчинга srid∈{rid
+из /api/v3/orders}: (1) суффикс позиции '.n.m' расходится между эксайзом и orders (0/131 полных
+совпадений, 3 по документу); (2) выкупленный заказ уходит из снапшота на 1–3 дня раньше приезда
+эксайз-строки (128/131 вне снапшота; сам снапшот 1365 заказов, все fbs). Ресерч-вывод «FBS=0» —
+ошибка эвристики по warehouseName (WB-фулфилмент = fbs со складом «Склад WB РФ»).
+
+Фикс (blueprint code-explorer+code-architect, ревью code-reviewer, 4×P2 закрыты):
+- ПЕРСИСТЕНТНЫЙ реестр wb.orders (order_doc=rid без '.n.m', delivery_type, nm_id, created;
+  миграция 0012) — прогрев upsert_orders ДО ingest в poll + ежечасно в _wb_returns_loop
+  (advisory xact-lock 912001 против дедлока двух апсертов, дедуп позиций в партии).
+- ИНВЕРСИЯ: skip_fbw ТОЛЬКО при order_doc ∈ non_fbs_docs (NOT IN ('fbs','')); документ вне
+  реестра = наш FBS + счётчик fbs_unknown (трипваер TG). Асимметрия рисков: ложный skip — тихая
+  упущенная продажа; ложный sale — громко, поглощает wb_withdraw_guard.
+- repair.py: replay_skip_fbw — delete+flush+apply_event (kind по operation_type_id, маркер
+  replayed_from/orig_event_id, сортировка по fiscal_dt), фильтр non_fbs_docs; docker exec -m.
+- Тесты: test_registry + test_repair (+left_fbw), test_ingest переписан (суффикс-дрейф —
+  регресс инцидента; unknown→наш FBS; живая фикстура 1022 строк с раскладом), test_poll e2e.
+  Сьют 174. Коммит: фикс классификации + миграция 0012.
+Прод-план: деплой → 0012 → рестарт воркера (прогрев реестра) → repair --dry-run (ожидание
+found=131, left_fbw=0) → repair → журнал ~131 PENDING_WITHDRAW → 18:30-слот новым кодом.
