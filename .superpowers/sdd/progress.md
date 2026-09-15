@@ -262,3 +262,27 @@ RESALE — применение эксайз-строк в порядке выд
 withdrawn_by). Коммит: аномалии-разбор. Бэклог: with_for_update на resolve (гонка с apply_event —
 окно мало), Esc для drawer (DESIGN 112), карточка разбора не видна на проде до первой реальной
 аномалии (0 сейчас — все 131 в PENDING_WITHDRAW).
+
+## PRE-COMPACT CHECKPOINT 2026-09-15
+
+Состояние: main=origin=aa129ff, дерево чистое, прод задеплоен на aa129ff
+(healthz ok: signer ВЕРНУЛСЯ после правки конфига юзером на marko.adel-factory.ru,
+в stats появился fbs_unknown из 0012). Сьют 179 passed.
+
+С чекпоинта 14.09 (уже в проде и в памяти):
+- d8ff116: классификация excise FBS/FBW по персистентному реестру wb.orders
+  (миграция 0012) — вместо множества rid, снятогоorders-окна.
+- aa129ff: аномалии — сортировка ingest по fiscal_dt (профилактика ложных RESALE),
+  POST /v1/journal/{km}/resolve (Literal-target, гварды, withdrawn_by backfill),
+  UI AnomalyCard (объяснение+пресеты+confirm), человекочитаемые чипы.
+
+Инфра-статус к compact:
+- SSH-туннель 15432 (pytest → marko_test) на ноутбуке НЕ запущен — перезапускать
+  while-loop рецептом из памяти (run_in_background, НЕ `&` внутри команды).
+- ui/logo-marko.html + DESIGN.md — источник UI-стиля; знак встроен (Mark-компонент,
+  favicon.svg мини-версия; полный знак везде, мини — только favicon).
+
+Открытое (без изменений): with_for_update на resolve; Esc закрывает drawer;
+гейты — первая живая FBS-продажа (LK_RECEIPT) и возврат; TG-creds; S3-бэкап;
+УКЭП до 21.10.2026; кандидат — СУЗ (ресерч в crpt-specs); карточка разбора аномалий
+не видана на проде (реальных аномалий 0 — все в PENDING_WITHDRAW, ждут первой продажи).
