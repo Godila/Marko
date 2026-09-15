@@ -94,3 +94,16 @@ class MtClient:
         if isinstance(data, list):
             return data[0] if data else {}
         return data
+
+    def cises_info(self, token: str, cises: list[str]) -> list[dict]:
+        """Сведения о КИ по списку (True API 5.1.2): тело — голый JSON-массив
+        КМ, лимит 1000. Поэлементные ошибки («КИ не найден») приходят с
+        HTTP 200 внутри элементов (errorMessage) — клиент их не разбирает."""
+        r = self._req("POST", f"{self.v3}/cises/info",
+                      params={"pg": self.pg},
+                      headers={"Accept": "application/json",
+                               "Content-Type": "application/json",
+                               "Authorization": f"Bearer {token}"},
+                      json=cises)
+        data = r.json()
+        return data if isinstance(data, list) else [data]

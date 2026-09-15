@@ -11,6 +11,18 @@ import marko.nkmt.models  # noqa: F401  (регистрация nkmt-модел�
 import marko.sign.models  # noqa  # noqa
 
 
+@pytest.fixture(autouse=True)
+def _no_mt_network(monkeypatch):
+    """Преф-флайт ЧЗ в роутах по умолчанию офлайн (fail-open → skipped);
+    тесты cis-функциональности подменяют default_client точечно."""
+    from marko.connector_mt import manager
+    from marko.connector_mt.client import MtHttpError
+
+    def boom():
+        raise MtHttpError(503, "offline in tests")
+    monkeypatch.setattr(manager, "default_client", boom)
+
+
 @pytest.fixture
 def db():
     from marko.db import Base, engine, SessionLocal

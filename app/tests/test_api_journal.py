@@ -3,6 +3,7 @@ from fastapi.testclient import TestClient
 from marko.api.app import create_app
 from marko.platform.models import PlatformPrincipal, PlatformToken, hash_token
 from marko.journal import apply_event
+from marko.journal.models import Event, Item
 
 KM = "0104630520676025215TEST123"
 INN = "090201471350"
@@ -69,7 +70,10 @@ def test_docs_detail_includes_payload_and_404(db, client):
 
 def test_withdraw_nothing_pending(db, client):
     r = client.post("/v1/batches/withdraw", headers=AUTH, json={"inn": INN})
-    assert r.status_code == 200 and r.json() == {"doc_id": 0}
+    # без кандидатов пре-флят завершается нулём (сеть не трогается) — не skipped
+    assert r.status_code == 200
+    assert r.json() == {"doc_id": 0,
+                        "preflight": {"checked": 0, "translated": 0, "errors": 0}}
 
 
 def test_readonly_token_403_on_batches(db, client):
@@ -211,6 +215,222 @@ def test_resolve_guards(db, client):
                        json={"target": "ANOMALY_RESALE"}).status_code == 422
     assert client.post(f"/v1/journal/{KM}/resolve", headers=AUTH,
                        json={"target": "NEW", "note": "x" * 501}).status_code == 422
+
+
+# --- проверка КИЗ в ЧЗ (cises/info) ---
+
+class _Cz:
+    def __init__(self, answers):
+        self.answers = answers
+
+    def cises_info(self, token, cises):
+        return [self.answers[km] for km in cises]
+
+
+def _mt_online(monkeypatch, cz):
+    from marko.connector_mt import manager
+    monkeypatch.setattr(manager, "get_token", lambda d, c=None: "T")
+    monkeypatch.setattr(manager, "default_client", lambda: cz)
+
+
+def test_cis_sync_route(db, client, monkeypatch):
+    _sale(db)
+    _cz = _Cz({KM: {"cisInfo": {"status": "RETIRED", "productName": "Шапка"}}})
+    _mt_online(monkeypatch, _cz)
+    r = client.post("/v1/journal/cis-sync", headers=AUTH, json={})
+    assert r.status_code == 200
+    body = r.json()
+    assert body["translated"] == 1 and body["statuses"]["retired"] == 1
+    assert "items" not in body                 # пустое тело = все позиции, без карточек
+    r2 = client.post("/v1/journal/cis-sync", headers=AUTH_RO, json={})
+    assert r2.status_code == 403
+    # явные kms: карточка КМ получает свежие поля
+    r3 = client.post("/v1/journal/cis-sync", headers=AUTH, json={"kms": [KM]})
+    assert [i["km"] for i in r3.json()["items"]] == [KM]
+
+
+def test_cis_sync_502_on_mt_error(db, client, monkeypatch):
+    from marko.connector_mt import manager
+    from marko.connector_mt.client import MtHttpError
+    _sale(db)
+
+    def boom():
+        raise MtHttpError(500, "cz down")
+    monkeypatch.setattr(manager, "default_client", boom)
+    r = client.post("/v1/journal/cis-sync", headers=AUTH, json={})
+    assert r.status_code == 502
+
+
+def test_withdraw_preflight_splits_batch(db, client, monkeypatch):
+    """«Собрать вывод»: RETIRED без нашей претензии уходит в «вывел WB»,
+    документ собирается только из реально ожидающих."""
+    from marko.mt.models import MtDoc
+    km2 = "0104630520676025215TEST999"
+    _sale(db, KM, "p1"); _sale(db, km2, "p2")
+    _mt_online(monkeypatch, _Cz({
+        KM: {"cisInfo": {"status": "RETIRED"}},
+        km2: {"cisInfo": {"status": "INTRODUCED"}},
+    }))
+    r = client.post("/v1/batches/withdraw", headers=AUTH, json={"inn": INN})
+    assert r.status_code == 200
+    body = r.json()
+    assert body["preflight"]["translated"] == 1
+    assert db.get(Item, KM).state == "WITHDRAWN" \
+        and db.get(Item, KM).withdrawn_by == "wb"
+    doc = db.query(MtDoc).filter(MtDoc.type == "LK_RECEIPT").one()
+    assert [p["cis"] for p in doc.payload["products"]] == [km2]
+
+
+def test_withdraw_preflight_fail_open(db, client, monkeypatch):
+    """ЧЗ недоступен — сборка идёт как раньше, preflight=skipped."""
+    _sale(db)
+    # default_client уже глушится autouse-фикстурой (offline)
+    r = client.post("/v1/batches/withdraw", headers=AUTH, json={"inn": INN})
+    assert r.status_code == 200
+    assert r.json()["preflight"]["skipped"] is True
+    assert r.json()["doc_id"] > 0
+
+
+def test_withdraw_source_hatch(db, client):
+    _sale(db)
+    r = client.post(f"/v1/journal/{KM}/withdraw-source", headers=AUTH,
+                    json={"by": "wb"})
+    assert r.status_code == 200
+    assert r.json() == {"km": KM, "state": "WITHDRAWN", "withdrawn_by": "wb"}
+    # обратный люк без нашего LK_RECEIPT — возврат потерял бы первичку: 409
+    assert client.post(f"/v1/journal/{KM}/withdraw-source", headers=AUTH,
+                       json={"by": "us"}).status_code == 409
+    # гварды
+    assert client.post(f"/v1/journal/{KM}/withdraw-source", headers=AUTH,
+                       json={"by": "wb"}).status_code == 409      # уже не «к выводу»
+    assert client.post("/v1/journal/0104630520676025215NOPE002/withdraw-source",
+                       headers=AUTH, json={"by": "wb"}).status_code == 404
+    assert client.post(f"/v1/journal/{KM}/withdraw-source", headers=AUTH_RO,
+                       json={"by": "wb"}).status_code == 403
+
+
+def test_withdraw_source_us_with_receipt(db, client):
+    """Обратный люк при наличии нашей первички: 'wb'→'us' меняет только пометку."""
+    _sale(db)
+    client.post("/v1/batches/withdraw", headers=AUTH, json={"inn": INN})
+    db.get(Item, KM).withdrawn_by = "wb"; db.commit()      # как после гварда
+    r = client.post(f"/v1/journal/{KM}/withdraw-source", headers=AUTH,
+                    json={"by": "us"})
+    assert r.status_code == 200
+    assert r.json() == {"km": KM, "state": "WITHDRAWN", "withdrawn_by": "us"}
+
+
+# --- удаление черновика документа ---
+
+def test_docs_delete_reverts_items(db, client):
+    from marko.mt.models import MtDoc
+    _sale(db)
+    doc_id = client.post("/v1/batches/withdraw", headers=AUTH,
+                         json={"inn": INN}).json()["doc_id"]
+    r = client.delete(f"/v1/docs/{doc_id}", headers=AUTH)
+    assert r.status_code == 200
+    assert r.json() == {"deleted": True, "reverted": 1, "skipped": 0}
+    it = db.get(Item, KM)
+    assert it.state == "PENDING_WITHDRAW" and it.withdrawn_by == ""
+    assert db.get(MtDoc, doc_id) is None
+    ev = db.query(Event).filter_by(kind="revert").one()
+    assert ev.source == "manual" and ev.source_event_id == f"docdel:{doc_id}:{KM}"
+    from marko.platform.models import PlatformAudit
+    assert "doc.delete" in [a.action for a in db.query(PlatformAudit).all()]
+    # повторное удаление — 404
+    assert client.delete(f"/v1/docs/{doc_id}", headers=AUTH).status_code == 404
+
+
+def test_docs_delete_guards(db, client):
+    from marko.mt.models import MtDoc
+    _sale(db)
+    doc_id = client.post("/v1/batches/withdraw", headers=AUTH,
+                         json={"inn": INN}).json()["doc_id"]
+    db.get(MtDoc, doc_id).status = "submitted"; db.commit()
+    assert client.delete(f"/v1/docs/{doc_id}", headers=AUTH).status_code == 409
+    db.get(MtDoc, doc_id).status = "draft"; db.commit()
+    # КМ ушёл в возврат: удаление сломало бы первичку LP_RETURN — запрет
+    apply_event(db, source="wb_excise", source_event_id="w-ret", kind="return",
+                km=KM, srid="s", payload={"price": 1})
+    assert db.get(Item, KM).state == "PENDING_RETURN"
+    assert client.delete(f"/v1/docs/{doc_id}", headers=AUTH).status_code == 409
+    assert client.delete(f"/v1/docs/{doc_id}", headers=AUTH_RO).status_code == 403
+    assert client.delete("/v1/docs/99999", headers=AUTH).status_code == 404
+
+
+def test_docs_delete_skips_wb_marked(db, client):
+    """Код из черновика, помеченный «вывел WB» — реальность ЧЗ, откату не подлежит."""
+    from marko.mt.models import MtDoc
+    _sale(db)
+    doc_id = client.post("/v1/batches/withdraw", headers=AUTH,
+                         json={"inn": INN}).json()["doc_id"]
+    it = db.get(Item, KM)
+    it.withdrawn_by = "wb"; db.commit()
+    r = client.delete(f"/v1/docs/{doc_id}", headers=AUTH)
+    assert r.json() == {"deleted": True, "reverted": 0, "skipped": 1}
+    assert db.get(Item, KM).state == "WITHDRAWN"      # не откачен
+
+
+def test_docs_delete_lp_return_reverts(db, client):
+    from marko.mt.models import MtDoc
+    _sale(db)
+    client.post("/v1/batches/withdraw", headers=AUTH, json={"inn": INN})
+    apply_event(db, source="wb_excise", source_event_id="lp-ret", kind="return",
+                km=KM, srid="s", payload={"price": 1793, "fiscal_dt": "2026-09-02",
+                                          "fiscal_doc_number": "7"})
+    r = client.post("/v1/batches/return", headers=AUTH, json={"inn": INN})
+    assert r.json() == {"docs": 1, "blocked": 0}
+    lp_id = db.query(MtDoc).filter(MtDoc.type == "LP_RETURN").one().id
+    r2 = client.delete(f"/v1/docs/{lp_id}", headers=AUTH)
+    assert r2.json() == {"deleted": True, "reverted": 1, "skipped": 0}
+    assert db.get(Item, KM).state == "PENDING_RETURN"
+
+
+def test_docs_delete_allows_when_older_receipt_exists(db, client):
+    """КМ в возвратном контуре, но первичкой служит СТАРЫЙ вывод — удаление
+    нового черновика безвредно (P2 ревью: ложный 409)."""
+    from marko.mt.models import MtDoc
+    _sale(db, KM, "o1")
+    doc1 = client.post("/v1/batches/withdraw", headers=AUTH,
+                       json={"inn": INN, "limit": 1}).json()["doc_id"]
+    apply_event(db, source="wb_excise", source_event_id="o-ret", kind="return",
+                km=KM, srid="s", payload={"price": 1})
+    _sale(db, KM, "o2")                                  # перепродажа
+    doc2 = client.post("/v1/batches/withdraw", headers=AUTH,
+                       json={"inn": INN, "limit": 1}).json()["doc_id"]
+    apply_event(db, source="wb_excise", source_event_id="o-ret2", kind="return",
+                km=KM, srid="s", payload={"price": 1})
+    assert db.get(Item, KM).state == "PENDING_RETURN"
+    r = client.delete(f"/v1/docs/{doc2}", headers=AUTH)
+    assert r.status_code == 200 and r.json()["deleted"] is True
+    assert db.get(MtDoc, doc1) is not None              # старый вывод жив
+
+
+def test_withdraw_preflight_covers_unchecked_tail(db, client, monkeypatch):
+    """Очередь > limit: переведённые уходят, сборка добирает хвост — цикл
+    пре-флайта проверяет и его, документ собирается только из проверенных."""
+    from marko.mt.models import MtDoc
+    kms = [f"0104630520676025215TAIL{i:02d}" for i in range(4)]
+    for i, km in enumerate(kms):
+        _sale(db, km, f"t{i}")
+    answers = {km: {"cisInfo": {"cis": km, "status": "RETIRED"}} for km in kms[:2]}
+    answers.update({km: {"cisInfo": {"cis": km, "status": "INTRODUCED"}} for km in kms[2:]})
+    _mt_online(monkeypatch, _Cz(answers))
+    r = client.post("/v1/batches/withdraw", headers=AUTH,
+                    json={"inn": INN, "limit": 2})
+    body = r.json()
+    # раунд 1: TAIL00-01 (retd) → переведены; раунд 2: хвост TAIL02-03 проверен
+    assert body["preflight"]["checked"] == 4 and body["preflight"]["translated"] == 2
+    doc = db.query(MtDoc).filter(MtDoc.type == "LK_RECEIPT").one()
+    assert sorted(p["cis"] for p in doc.payload["products"]) == sorted(kms[2:])
+
+
+def test_withdraw_source_us_requires_receipt(db, client):
+    _sale(db)
+    client.post(f"/v1/journal/{KM}/withdraw-source", headers=AUTH, json={"by": "wb"})
+    # 'us' без нашего LK_RECEIPT — возврат потеряет первичку: 409
+    r = client.post(f"/v1/journal/{KM}/withdraw-source", headers=AUTH, json={"by": "us"})
+    assert r.status_code == 409
 
 
 def test_resolve_no_receipt_feeds_return_batch(db, client):

@@ -24,10 +24,28 @@ TOKEN_KV = "mt_token"
 TOKEN_TTL_FALLBACK = timedelta(hours=9)      # если ЧЗ не отдал expireDate
 TOKEN_REFRESH_MARGIN = timedelta(minutes=10)
 SIGN_WAIT_SEC = 240                           # signer берёт задачу ≤30с + подпись
+CISES_CHUNK = 1000                            # True API 5.1.2: ≤1000 КИ в запросе
 
 
 def _client() -> MtClient:
     return MtClient(base_v3=settings.mt_base_v3, base_v4=settings.mt_base_v4, pg=settings.mt_pg)
+
+
+def default_client() -> MtClient:
+    """Публичный конструктор для роутов (пре-флайты, проверки КИ)."""
+    return _client()
+
+
+def cises_info(db: Session, cises: list[str], client: MtClient | None = None) -> list[dict]:
+    """Сведения о КИ списком (чанками ≤1000); read-only, без коммитов."""
+    if not cises:
+        return []
+    c = client or _client()
+    token = get_token(db, c)
+    out: list[dict] = []
+    for i in range(0, len(cises), CISES_CHUNK):
+        out.extend(c.cises_info(token, cises[i:i + CISES_CHUNK]))
+    return out
 
 
 def _sign_via_gateway(db: Session, type_: str, payload: dict) -> str:

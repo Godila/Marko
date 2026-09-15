@@ -12,6 +12,11 @@ class Item(Base):
     withdrawn_by: Mapped[str] = mapped_column(String(16), default="", server_default="")
     updated_at = mapped_column(DateTime, server_default=func.now(), onupdate=func.now())
     last_event: Mapped[dict] = mapped_column(JSON)
+    # факт последней проверки кода в Честном ЗНАКе (cises/info):
+    # статус КИ, наименование из карточки ЧЗ, момент наблюдения
+    cis_status: Mapped[str] = mapped_column(String(32), default="", server_default="")
+    cis_product_name: Mapped[str] = mapped_column(String(256), default="", server_default="")
+    cis_checked_at = mapped_column(DateTime, nullable=True)
 
 
 class Event(Base):

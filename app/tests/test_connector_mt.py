@@ -193,3 +193,49 @@ def test_doc_info_dict_as_is():
     def handler(r):
         return httpx.Response(200, json={"status": "REJECTED"})
     assert _mt(httpx.MockTransport(handler)).doc_info("T", "u") == {"status": "REJECTED"}
+
+
+def test_cises_info_sends_bare_array():
+    """Тело запроса — голый JSON-массив КМ, pg-параметр, Bearer (True API 5.1.2)."""
+    seen = {}
+    def handler(r):
+        seen["url"], seen["auth"] = str(r.url), r.headers.get("Authorization")
+        seen["body"] = json.loads(r.content)
+        return httpx.Response(200, json=[{"cisInfo": {"status": "RETIRED"}}])
+    res = _mt(httpx.MockTransport(handler)).cises_info("T7", ["km1", "km2"])
+    assert res == [{"cisInfo": {"status": "RETIRED"}}]
+    assert seen["url"] == "https://v3.example/cises/info?pg=lp"
+    assert seen["auth"] == "Bearer T7" and seen["body"] == ["km1", "km2"]
+
+
+def test_cises_info_errors_passthrough_with_200():
+    """Поэлементная ошибка («КИ не найден») приходит с HTTP 200 внутри
+    элемента — клиент отдаёт её как есть, не бросая."""
+    def handler(r):
+        return httpx.Response(200, json=[{"cisInfo": {"status": "INTRODUCED"}},
+                                         {"errorMessage": "КИ не найден", "errorCode": "404"}])
+    res = _mt(httpx.MockTransport(handler)).cises_info("T", ["a", "b"])
+    assert res[0]["cisInfo"]["status"] == "INTRODUCED"
+    assert res[1]["errorCode"] == "404"
+
+
+def test_cises_info_400_raises():
+    def handler(r):
+        return httpx.Response(400, json={"error_message": "В запросе не указан ни один КМ"})
+    with pytest.raises(MtHttpError):
+        _mt(httpx.MockTransport(handler)).cises_info("T", [])
+
+
+def test_manager_cises_info_chunks(db, sg, monkeypatch):
+    class Chunk(FakeMtClient):
+        def __init__(self):
+            super().__init__()
+            self.batches = []
+        def cises_info(self, token, cises):
+            self.batches.append(list(cises))
+            return [{"cisInfo": {"status": "INTRODUCED"}} for _ in cises]
+    monkeypatch.setattr(manager, "CISES_CHUNK", 2)
+    c = Chunk()
+    res = manager.cises_info(db, ["a", "b", "c", "d", "e"], c)
+    assert len(res) == 5
+    assert c.batches == [["a", "b"], ["c", "d"], ["e"]]

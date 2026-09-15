@@ -39,6 +39,9 @@ const ITEM_STATES = {
 const CHIP_ORDER = ['PENDING_WITHDRAW', 'PENDING_RETURN', 'WITHDRAWN', 'RETURNED',
   'ANOMALY_RESALE', 'ANOMALY_NO_RECEIPT', 'ANOMALY_RERETURN', 'ANOMALY_UNKNOWN_TRANSITION',
   'NEW']
+// статус КИЗ по данным Честного ЗНАКа (cises/info); пусто → «—» (не проверялся)
+const CIS_STATUS = { introduced: ['в обороте', 'blue'], in_circulation: ['в обороте', 'blue'],
+  retired: ['выбыл', 'green'], written_off: ['списан', 'grey'] }
 const DOC_STATUS = { draft: ['черновик', 'grey'], signing: ['подписывается', 'blue'],
   submitted: ['подан', 'blue'], checked_ok: ['принят ЧЗ', 'green'], error: ['ошибка', 'red'] }
 const CARD_STATUS = { ok: ['новая', 'grey'], fed: ['подана', 'blue'], moderation: ['модерация', 'amber'],
@@ -197,6 +200,18 @@ function DocTable({ docs, ctx, empty }) {
       const r = await api(`/v1/docs/${d.id}/check`, { method: 'POST' })
       notify(`Документ №${d.id}: ${DOC_STATUS[r.status]?.[0] || r.status}`, r.mt_status || ''); bump()
     } catch (e) { notify('Проверка не удалась', e.message, 'bad') } }
+  const deleteDoc = async (d) => {
+    let n = '—'
+    try { const full = await api(`/v1/docs/${d.id}`)
+      n = (full.payload?.products || full.payload?.products_list || []).length } catch {}
+    confirm(`Удалить черновик №${d.id}?`,
+      `Документ будет удалён безвозвратно, позиции (${n}) вернутся в очередь журнала. Коды, ушедшие дальше по жизни (возврат, пометка «вывел WB»), не откатятся — их счёт придёт в ответе.`,
+      `${d.type} · позиций ${n}`, 'Удалить', async () => {
+        try { const r = await api(`/v1/docs/${d.id}`, { method: 'DELETE' })
+          notify(`Черновик №${d.id} удалён`,
+            `возвращено позиций: ${r.reverted}${r.skipped ? `, пропущено: ${r.skipped}` : ''}`)
+          bump()
+        } catch (e) { notify('Удаление не удалось', e.message, 'bad') } }) }
   const showPayload = async (d) => { try {
       const full = await api(`/v1/docs/${d.id}`)
       openDrawer(`Документ №${d.id} · ${d.type}`,
@@ -214,6 +229,7 @@ function DocTable({ docs, ctx, empty }) {
       <td className="mono">{fmtD(d.created_at)}</td>
       <td className="actions">
         {d.status === 'draft' && <button className="btn sm pri" onClick={() => submitDoc(d)}>Подать</button>}
+        {d.status === 'draft' && <button className="btn sm" onClick={() => deleteDoc(d)}>Удалить</button>}
         {(d.status === 'submitted' || d.status === 'error')
           && <button className="btn sm" onClick={() => checkDoc(d)}>Проверить</button>}
         <button className="btn sm" onClick={() => showPayload(d)}>Состав</button>
@@ -360,11 +376,17 @@ function Withdraw({ ctx }) {
   const doWithdraw = () => { const n = pend ? pend.length : 0
     if (!n) return notify('Нет позиций к выводу', 'Журнал не содержит КМ в статусе «к выводу».', 'warn')
     confirm('Собрать вывод из оборота?',
-      `Из ${n} КМ будет создан черновик LK_RECEIPT (позиции без фискального чека уйдут отдельным документом «Иное»). КМ сразу перейдут в «Выведен»; подача в ЧЗ — отдельным шагом.`,
+      `Перед сбором коды проверяются в Честном Знаке: уже выведенные WB в документ не попадут (перейдут в «выведен (WB)»). Из остальных будет создан черновик LK_RECEIPT (позиции без фискального чека — отдельным документом «Иное»). КМ сразу перейдут в «Выведен»; подача в ЧЗ — отдельным шагом.`,
       `ИНН ${inn}`, 'Собрать документ', async () => {
         try { const r = await api('/v1/batches/withdraw', { method: 'POST', body: JSON.stringify({ inn }) })
           if (r.doc_id === 0) notify('Нет позиций к выводу', '', 'warn')
-          else notify(`Создан черновик LK_RECEIPT №${r.doc_id}`, 'Подайте его в ЧЗ — кнопкой «Подать» ниже.')
+          else {
+            const p = r.preflight || {}
+            const extra = p.skipped
+              ? 'ЧЗ был недоступен — проверка статусов пропущена.'
+              : `ЧЗ: проверено ${p.checked ?? 0} · переведено «вывел WB» ${p.translated ?? 0}.`
+            notify(`Создан черновик LK_RECEIPT №${r.doc_id}`, `${extra} Подайте его в ЧЗ — кнопкой «Подать» ниже.`)
+          }
           bump()
         } catch (e) { notify('Ошибка сбора вывода', e.message, 'bad') } }) }
   const lk = (docs || []).filter((d) => d.type === 'LK_RECEIPT')
@@ -381,10 +403,13 @@ function Withdraw({ ctx }) {
     <div className="card">
       <div className="card-h"><h2>Готовы к выводу</h2><span className="hint">шт: {pend ? pend.length : '…'} · ИНН из «Справочников»</span></div>
       <div className="twrap"><table className="t">
-        <thead><tr><th>Код маркировки</th><th>Последний сигнал</th></tr></thead>
+        <thead><tr><th>Код маркировки</th><th>Наименование</th><th>Последний сигнал</th></tr></thead>
         <tbody>{(pend || []).map((it) => <tr key={it.km}>
-          <td><KmCell km={it.km} /></td><td style={{ fontSize: 12.5 }}>{evLine(it)}</td></tr>)}
-          {pend && !pend.length && <tr><td colSpan={2}><div className="empty"><b>Всё выведено</b>Новые продажи появятся после поллинга WB — 06:30 и 18:30 МСК.</div></td></tr>}
+          <td><KmCell km={it.km} /></td>
+          <td className="ell" title={it.cis_product_name || ''}>
+            {it.cis_product_name || <span className="faint">—</span>}</td>
+          <td style={{ fontSize: 12.5 }}>{evLine(it)}</td></tr>)}
+          {pend && !pend.length && <tr><td colSpan={3}><div className="empty"><b>Всё выведено</b>Новые продажи появятся после поллинга WB — 06:30 и 18:30 МСК.</div></td></tr>}
         </tbody></table></div>
       <div className="card-b" style={{ borderTop: '1px solid var(--line)', display: 'flex', justifyContent: 'flex-end' }}>
         <button className="btn pri" onClick={doWithdraw}>Собрать вывод</button></div>
@@ -911,12 +936,68 @@ function AnomalyCard({ it, ctx }) {
   </div>
 }
 
+/* карточка штатного КМ: статус ЧЗ + проверка + ручной люк + сигнал WB */
+function KmCard({ it, ctx }) {
+  const { notify, confirm, bump } = ctx
+  const [st, setSt] = useState(it)
+  const [busy, setBusy] = useState(false)
+  const ev = st.last_event || {}
+  const checkCis = async () => {
+    setBusy(true)
+    try { const r = await api('/v1/journal/cis-sync',
+        { method: 'POST', body: JSON.stringify({ kms: [st.km] }) })
+      const upd = r.items[0] || {}
+      setSt((s) => ({ ...s, ...upd }))
+      notify('Код проверен в ЧЗ', CIS_STATUS[upd.cis_status]?.[0] || upd.cis_status || 'статус неизвестен')
+      bump()
+    } catch (e) { notify('Проверка не удалась', e.message, 'bad') } finally { setBusy(false) } }
+  const markWb = () => confirm('Пометить: код выведен WB?',
+    'Код перейдёт в состояние «выведен» с пометкой «вывел WB» (вывод по чеку ККТ Wildberries, не нашим документом). Действие необратимо.',
+    st.km, 'Выведен WB', async () => {
+      setBusy(true)
+      try { await api(`/v1/journal/${encodeURIComponent(st.km)}/withdraw-source`,
+          { method: 'POST', body: JSON.stringify({ by: 'wb' }) })
+        notify('Код помечен', 'вывел WB · состояние «выведен»')
+        ctx.closeDrawer(); bump()
+      } catch (e) { notify('Не удалось пометить', e.message, 'bad'); setBusy(false) } })
+  return <div>
+    <b style={{ fontSize: 12.5 }}>Честный знак</b>
+    <div className="twrap" style={{ margin: '6px 0 8px' }}><table className="t small"><tbody>
+      <tr><td className="faint" style={{ width: '40%' }}>Статус КИЗ</td>
+        <td>{st.cis_status ? <Badge dict={CIS_STATUS} v={st.cis_status} />
+          : <span className="faint">не проверялся</span>}</td></tr>
+      <tr><td className="faint">Наименование</td><td>{st.cis_product_name || '—'}</td></tr>
+      <tr><td className="faint">Проверено</td><td>{st.cis_checked_at ? fmtD(st.cis_checked_at) : '—'}</td></tr>
+    </tbody></table></div>
+    <div className="row" style={{ gap: 8, marginBottom: 14, flexWrap: 'wrap' }}>
+      <button className="btn" disabled={busy} onClick={checkCis}>Проверить в ЧЗ</button>
+      {st.cis_status === 'retired' && st.state === 'PENDING_WITHDRAW' &&
+        <button className="btn" disabled={busy} onClick={markWb}>Выведен WB</button>}
+    </div>
+    <b style={{ fontSize: 12.5 }}>Последний сигнал WB</b>
+    <div className="twrap" style={{ margin: '6px 0 8px' }}><table className="t small"><tbody>
+      <tr><td className="faint" style={{ width: '40%' }}>Вид события</td><td>{opRu(ev)}</td></tr>
+      <tr><td className="faint">Дата чека</td><td>{fmtDay(ev.fiscal_dt)}</td></tr>
+      <tr><td className="faint">Чек ККТ</td><td className="mono">{ev.fiscal_doc_number ?? '—'}</td></tr>
+      <tr><td className="faint">Цена</td><td>{ev.price ? rub(ev.price) : '—'}</td></tr>
+      <tr><td className="faint">nm_id</td><td className="mono">{ev.nm_id ?? '—'}</td></tr>
+      <tr><td className="faint">Заказ (srid)</td>
+        <td className="mono" style={{ wordBreak: 'break-all' }}>{ev.srid || '—'}</td></tr>
+    </tbody></table></div>
+    <details style={{ marginTop: 10 }}>
+      <summary style={{ fontSize: 12, color: 'var(--muted)', cursor: 'pointer' }}>Сырые данные события</summary>
+      <pre>{JSON.stringify(ev, null, 2)}</pre>
+    </details>
+  </div>
+}
+
 function Journal({ ctx, initial }) {
-  const { openDrawer } = ctx
+  const { openDrawer, notify, confirm, bump } = ctx
   const [rows, setRows] = useState(null)
   const [stats, setStats] = useState({})
   const [state, setState] = useState(initial || '')
   const [q, setQ] = useState('')
+  const [syncBusy, setSyncBusy] = useState(false)
   useEffect(() => { api(`/v1/journal?limit=1000${state && state !== 'ANOMALY' ? `&state=${encodeURIComponent(state)}` : ''}`)
       .then(setRows).catch(() => setRows([]))
     api('/v1/journal/stats').then(setStats).catch(() => {}) }, [ctx.tick, state])
@@ -925,9 +1006,19 @@ function Journal({ ctx, initial }) {
     && (!q || it.km.toLowerCase().includes(q.toLowerCase()) || evLine(it).toLowerCase().includes(q.toLowerCase())))
   const anomalies = Object.entries(stats).filter(([k]) => k.startsWith('ANOMALY')).reduce((a, [, v]) => a + v, 0)
   const total = Object.values(stats).reduce((a, v) => a + v, 0)
+  const doSync = () => confirm('Обновить статусы ЧЗ?',
+    `Все коды журнала (${total}) будут проверены в Честном Знаке. Коды, которые ЧЗ уже считает выведенными и по которым у нас нет поданной заявки на вывод, перейдут в «выведен (WB)» с записью в журнал.`,
+    `${total} КМ`, 'Проверить в ЧЗ', async () => {
+      setSyncBusy(true)
+      try { const r = await api('/v1/journal/cis-sync', { method: 'POST', body: JSON.stringify({}) })
+        notify('Статусы ЧЗ обновлены',
+          `проверено ${r.checked} · переведено «вывел WB» ${r.translated}${r.errors ? ` · ошибок ${r.errors}` : ''}`)
+        bump()
+      } catch (e) { notify('Синхронизация не удалась', e.message, 'bad') } finally { setSyncBusy(false) } })
   return <>
     <Head title="Журнал кодов маркировки" sub="Жизненный цикл каждого КМ: продажа → вывод из оборота → возврат. Красные строки — противоречия в данных: клик по строке объясняет причину и позволяет разобрать."
-      tools={<Sync tick={ctx.tick} />} />
+      tools={<><Sync tick={ctx.tick} />
+        <button className="btn sm" disabled={syncBusy || !total} onClick={doSync}>Обновить статусы ЧЗ</button></>} />
     <div className="chiprow" style={{ marginBottom: 14 }}>
       <button className="chip" aria-pressed={state === ''} onClick={() => setState('')}>все состояния <span className="n">{total}</span></button>
       {anomalies > 0 && <button className="chip alert" aria-pressed={state === 'ANOMALY'} onClick={() => setState('ANOMALY')}>аномалии <span className="n">{anomalies}</span></button>}
@@ -943,7 +1034,7 @@ function Journal({ ctx, initial }) {
     </div>
     <div className="card">
       <div className="twrap"><table className="t">
-        <thead><tr><th>Код маркировки</th><th>Состояние</th><th>Последний сигнал</th><th>Обновлён</th></tr></thead>
+        <thead><tr><th>Код маркировки</th><th>Наименование</th><th>Состояние</th><th>Последний сигнал</th><th>ЧЗ</th><th>Обновлён</th></tr></thead>
         <tbody>{shown.map((it) => { const [lbl] = ITEM_STATES[it.state] || [it.state]
           const anom = it.state.startsWith('ANOMALY')
           return <tr key={it.km} className={anom ? 'rowhot' : ''} style={{ cursor: 'pointer' }}
@@ -951,13 +1042,16 @@ function Journal({ ctx, initial }) {
               style={{ fontSize: 12, color: 'var(--muted)' }}>{it.state}</span></>,
               anom
                 ? <AnomalyCard it={it} ctx={ctx} />
-                : <div><p>Последнее событие по коду (поле last_event в журнале).</p>
-                  <pre>{JSON.stringify(it.last_event, null, 2)}</pre></div>)}>
+                : <KmCard it={it} ctx={ctx} />)}>
             <td><KmCell km={it.km} /></td>
+            <td className="ell" title={it.cis_product_name || ''}>
+              {it.cis_product_name || <span className="faint">—</span>}</td>
             <td><Badge dict={ITEM_STATES} v={it.state} /></td>
             <td style={{ fontSize: 12.5 }}>{evLine(it)}</td>
+            <td>{it.cis_status ? <Badge dict={CIS_STATUS} v={it.cis_status} />
+              : <span className="faint">—</span>}</td>
             <td className="mono">{fmtD(it.updated_at)}</td></tr> })}
-          {rows && !shown.length && <tr><td colSpan={4}><div className="empty"><b>Ничего не найдено</b>Ослабьте фильтр или очистите поиск.</div></td></tr>}
+          {rows && !shown.length && <tr><td colSpan={6}><div className="empty"><b>Ничего не найдено</b>Ослабьте фильтр или очистите поиск.</div></td></tr>}
         </tbody></table></div>
     </div>
   </>

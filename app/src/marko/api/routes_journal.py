@@ -34,6 +34,15 @@ class ResolveBody(BaseModel):
     note: str = Field("", max_length=500)
 
 
+class CisSyncBody(BaseModel):
+    # пусто/None → все позиции журнала; для карточки КМ — список из одного
+    kms: list[str] | None = Field(None, max_length=1000)
+
+
+class WithdrawSourceBody(BaseModel):
+    by: Literal["us", "wb"]
+
+
 class EmitterDefaultsBody(BaseModel):
     fias_id: str = ""
     primary_custom_name: str = ""
@@ -75,7 +84,9 @@ def journal_list(
         q = q.filter_by(state=state)
     return [
         {"km": it.km, "state": it.state, "withdrawn_by": it.withdrawn_by,
-         "updated_at": it.updated_at, "last_event": it.last_event}
+         "updated_at": it.updated_at, "last_event": it.last_event,
+         "cis_status": it.cis_status, "cis_product_name": it.cis_product_name,
+         "cis_checked_at": it.cis_checked_at}
         for it in q.order_by(Item.updated_at.desc()).limit(limit).all()
     ]
 
@@ -121,6 +132,69 @@ def journal_resolve(
                payload={**detail, "withdrawn_by": it.withdrawn_by})
     audit(db, tok.principal_id, "journal.resolve", {"km": km, **detail})
     return {"km": km, "from": src, "to": target}
+
+
+@router.post("/journal/cis-sync")
+def journal_cis_sync(
+    body: CisSyncBody,
+    tok: PlatformToken = Depends(require_scope("docs:submit")),
+    db: Session = Depends(get_db),
+):
+    """Проверка КИЗ в ЧЗ (cises/info): обновляет колонки cis_*; RETIRED без
+    нашей активной претензии → «выведен (WB)». При явных kms возвращает
+    свежие карточки позиций (для карточки КМ в консоли)."""
+    from marko.connector_mt import manager
+    from marko.journal.cis import sync_cis_status
+    try:
+        res = sync_cis_status(db, body.kms, client=manager.default_client())
+    except Exception as e:
+        raise HTTPException(502, f"cis sync failed: {e}")
+    if body.kms:
+        res["items"] = [
+            {"km": it.km, "state": it.state, "withdrawn_by": it.withdrawn_by,
+             "cis_status": it.cis_status, "cis_product_name": it.cis_product_name,
+             "cis_checked_at": it.cis_checked_at}
+            for it in db.query(Item).filter(Item.km.in_(body.kms)).all()
+        ]
+    audit(db, tok.principal_id, "journal.cis_sync",
+          {"kms": len(body.kms) if body.kms else "all", **{
+              k: v for k, v in res.items()
+              if k not in ("statuses", "items")}})   # items несёт datetime
+    return res
+
+
+@router.post("/journal/{km}/withdraw-source")
+def journal_withdraw_source(
+    km: str,
+    body: WithdrawSourceBody,
+    tok: PlatformToken = Depends(require_scope("docs:submit")),
+    db: Session = Depends(get_db),
+):
+    """Ручная пометка источника вывода. by='wb' — «код выведен WB» (переводит
+    «к выводу» → «выведен»); by='us' — аварийный люк против ложного 'wb'
+    (меняет только пометку, состояние не трогает)."""
+    it = db.get(Item, km)
+    if it is None:
+        raise HTTPException(404, "КМ не найден в журнале")
+    src = it.state
+    if body.by == "wb":
+        if it.state != "PENDING_WITHDRAW":
+            raise HTTPException(409, f"ожидалось «к выводу», сейчас: {it.state}")
+        it.state = "WITHDRAWN"
+    else:
+        if it.withdrawn_by != "wb":
+            raise HTTPException(409, f"пометка не 'wb': {it.withdrawn_by!r}")
+        # без нашего LK_RECEIPT ветка 'us' возврата потеряет первичку навсегда
+        if km not in lk_receipts(db):
+            raise HTTPException(409, "нет нашего LK_RECEIPT — возврат по 'us' "
+                                     "уйдёт в вечный blocked")
+    it.withdrawn_by = body.by
+    log_action(db, source="manual", source_event_id=f"wsrc:{int(time.time())}:{km}",
+               kind="resolve", km=km, srid="",
+               payload={"by": body.by, "from_state": src})
+    audit(db, tok.principal_id, "journal.withdraw_source",
+          {"km": km, "by": body.by, "from_state": src})
+    return {"km": km, "state": it.state, "withdrawn_by": it.withdrawn_by}
 
 
 @router.get("/pulse")
@@ -174,9 +248,38 @@ def batches_withdraw(
     tok: PlatformToken = Depends(require_scope("docs:submit")),
     db: Session = Depends(get_db),
 ):
+    # Пре-флайт ЧЗ: кандидаты «к выводу» проверяются через cises/info; уже
+    # «выбывшие» (без нашей активной претензии) переводятся в «вывел WB» и
+    # документ не попадают. Цикл до стабилизации: после переводов сборка
+    # добирает НОВЫЕ непроверенные строки — проверяем и их, иначе документ
+    # соберёт непроверенный хвост (ревью: воспроизводство инцидента 15.09).
+    # ЧЗ недоступен — fail-open: собираем как раньше.
+    from marko.connector_mt import manager
+    from marko.journal.cis import sync_cis_status
+    preflight: dict = {"skipped": True}
+    try:
+        seen: set[str] = set()
+        checked = translated = errors = 0
+        while True:
+            kms = [km for (km,) in db.query(Item.km)
+                   .filter_by(state="PENDING_WITHDRAW").order_by(Item.km)
+                   .limit(body.limit).all()]
+            new = [k for k in kms if k not in seen]
+            if not new:
+                break
+            seen.update(new)
+            r = sync_cis_status(db, new, client=manager.default_client())
+            checked += r["checked"]; translated += r["translated"]; errors += r["errors"]
+            if not r["translated"]:
+                break
+        preflight = {"checked": checked, "translated": translated, "errors": errors}
+    except Exception as e:
+        preflight = {"skipped": True, "reason": str(e)[:200]}
     doc_id = withdraw_batch(db, body.inn, body.limit)
-    audit(db, tok.principal_id, "batch.withdraw", {"inn": body.inn, "result": doc_id})
-    return {"doc_id": doc_id}
+    audit(db, tok.principal_id, "batch.withdraw",
+          {"inn": body.inn, "result": doc_id, "preflight": {
+              k: v for k, v in preflight.items() if k != "statuses"}})
+    return {"doc_id": doc_id, "preflight": preflight}
 
 
 @router.post("/batches/return")
@@ -303,3 +406,64 @@ def check_mt_doc(doc_id: int,
     audit(db, tok.principal_id, "doc.check",
           {"doc_id": doc_id, "mt_status": info.get("status"), "wb_guard": guard_fired})
     return {"status": doc.status, "mt_status": info.get("status"), "wb_guard": guard_fired}
+
+
+@router.delete("/docs/{doc_id}")
+def docs_delete(
+    doc_id: int,
+    tok: PlatformToken = Depends(require_scope("docs:submit")),
+    db: Session = Depends(get_db),
+):
+    """Удаление ЧЕРНОВИКА с откатом журнала: LK_RECEIPT → позиции «к выводу»,
+    LP_RETURN → «к возврату». Позиции, ушедшие дальше по жизни (возврат WB,
+    гвард, повторные батчи), не трогаем — только считаем (skipped)."""
+    doc = db.get(MtDoc, doc_id)
+    if doc is None:
+        raise HTTPException(404, "doc not found")
+    if doc.status != "draft":
+        raise HTTPException(409, f"не черновик: {doc.status}")
+    products = (doc.payload.get("products", []) if doc.type == "LK_RECEIPT"
+                else doc.payload.get("products_list", []))
+    key = "cis" if doc.type == "LK_RECEIPT" else "ki"
+    kms = [p[key] for p in products if p.get(key)]
+    if doc.type == "LK_RECEIPT":
+        # блокируем только если НАШ документ — фактический источник первички
+        # возврата (старейший non-error LK_RECEIPT по возвратному КМ); при
+        # более старом выводе удаление безвредно (ревью: ложный 409)
+        in_return = db.query(Item).filter(
+            Item.km.in_(kms),
+            Item.state.in_(("PENDING_RETURN", "RETURNED"))).all()
+        oldest: dict[str, int] = {}
+        for d in db.query(MtDoc).filter(MtDoc.type == "LK_RECEIPT",
+                                        MtDoc.status != "error") \
+                .order_by(MtDoc.id).all():
+            for pr in d.payload.get("products", []):
+                oldest.setdefault(pr.get("cis"), d.id)
+        blocking = [it.km for it in in_return if oldest.get(it.km) == doc_id]
+        if blocking:
+            raise HTTPException(
+                409, f"{len(blocking)} КМ документа — источник первички "
+                     f"LP_RETURN, удаление сломает возврат")
+    source_state = "WITHDRAWN" if doc.type == "LK_RECEIPT" else "RETURNED"
+    target = "PENDING_WITHDRAW" if doc.type == "LK_RECEIPT" else "PENDING_RETURN"
+    reverted = skipped = 0
+    for km in kms:
+        it = db.get(Item, km)
+        # откатываем только то, что поставил этот батч; 'wb' у выведенного
+        # кода — реальность ЧЗ, её не переписываем
+        if (it is None or it.state != source_state
+                or (doc.type == "LK_RECEIPT" and it.withdrawn_by == "wb")):
+            skipped += 1
+            continue
+        it.state = target
+        if doc.type == "LK_RECEIPT" and it.withdrawn_by == "us":
+            it.withdrawn_by = ""
+        log_action(db, source="manual", source_event_id=f"docdel:{doc_id}:{km}",
+                   kind="revert", km=km, srid="",
+                   payload={"doc_id": doc_id, "from": source_state, "to": target})
+        reverted += 1
+    db.delete(doc)
+    db.commit()
+    audit(db, tok.principal_id, "doc.delete",
+          {"doc_id": doc_id, "type": doc.type, "reverted": reverted, "skipped": skipped})
+    return {"deleted": True, "reverted": reverted, "skipped": skipped}
