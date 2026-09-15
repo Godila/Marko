@@ -8,22 +8,24 @@ const errOf = async (r) => {
     m += ': ' + (typeof j.detail === 'string' ? j.detail : JSON.stringify(j.detail)) } catch {}
   return new Error(m)
 }
-const api = async (path, token, opts = {}) => {
-  const r = await fetch(path, { ...opts, headers: { 'Authorization': `Bearer ${token.trim()}`,
-    'Content-Type': 'application/json', ...(opts.headers || {}) } })
+// сессия живёт в HttpOnly-cookie — браузер прикладывает её сам (same-origin).
+// 401 в любом вызове — единое событие: App вернёт оператора на экран входа.
+const send = async (path, opts = {}) => {
+  const r = await fetch(path, { ...opts, headers: { ...(opts.headers || {}) } })
+  if (r.status === 401) window.dispatchEvent(new Event('marko:unauthorized'))
   if (!r.ok) throw await errOf(r)
   return r.headers.get('content-type')?.includes('json') ? r.json() : r.text()
 }
+const api = (path, opts = {}) => send(path, {
+  ...opts, headers: { 'Content-Type': 'application/json', ...(opts.headers || {}) } })
 // НКМТ: FormData без Content-Type, в ошибке виден {detail} (409/502)
-const nkmt = async (path, token, opts = {}) => {
+const nkmt = (path, opts = {}) => {
   const json = opts.body != null && !(opts.body instanceof FormData)
-  const r = await fetch(path, { ...opts, headers: { 'Authorization': `Bearer ${token.trim()}`,
-    ...(json ? { 'Content-Type': 'application/json' } : {}), ...(opts.headers || {}) } })
-  if (!r.ok) throw await errOf(r)
-  return r.headers.get('content-type')?.includes('json') ? r.json() : r.text()
+  return send(path, { ...opts, headers: json ? { 'Content-Type': 'application/json' } : {} })
 }
-const dl = async (path, token, name) => {   // скачивание с токеном в заголовке, не в URL
-  const r = await fetch(path, { headers: { 'Authorization': `Bearer ${token.trim()}` } })
+const dl = async (path, name) => {   // скачивание через cookie-сессию, не через URL
+  const r = await fetch(path)
+  if (r.status === 401) window.dispatchEvent(new Event('marko:unauthorized'))
   if (!r.ok) throw await errOf(r)
   const b = await r.blob(); const u = URL.createObjectURL(b)
   const a = document.createElement('a'); a.href = u; a.download = name; a.click()
@@ -187,20 +189,20 @@ const Sync = ({ tick }) => <span className="sync">обновлено {Math.max(0
 
 /* ================= документы ЧЗ (общая таблица) ================= */
 function DocTable({ docs, ctx, empty }) {
-  const { token, notify, confirm, openDrawer, bump } = ctx
+  const { notify, confirm, openDrawer, bump } = ctx
   const submitDoc = (d) => confirm(`Подать документ №${d.id} в «Честный знак»?`,
     'Документ уйдёт в ЧЗ и будет подписан УКЭП автоматически (signer). Отменить подачу нельзя — только создать корректировку.',
     `${d.type}`, 'Подать в ЧЗ', async () => {
-      try { const r = await api(`/v1/docs/${d.id}/submit`, token, { method: 'POST' })
+      try { const r = await api(`/v1/docs/${d.id}/submit`, { method: 'POST' })
         notify(`Документ №${d.id} подан`, `uuid ${r.external_id}`); bump()
       } catch (e) { notify('Подача не прошла', e.message, 'bad') }
     })
   const checkDoc = async (d) => { try {
-      const r = await api(`/v1/docs/${d.id}/check`, token, { method: 'POST' })
+      const r = await api(`/v1/docs/${d.id}/check`, { method: 'POST' })
       notify(`Документ №${d.id}: ${DOC_STATUS[r.status]?.[0] || r.status}`, r.mt_status || ''); bump()
     } catch (e) { notify('Проверка не удалась', e.message, 'bad') } }
   const showPayload = async (d) => { try {
-      const full = await api(`/v1/docs/${d.id}`, token)
+      const full = await api(`/v1/docs/${d.id}`)
       openDrawer(`Документ №${d.id} · ${d.type}`,
         <div><p>Так документ уходит в ЧЗ: base64(JSON) в product_document. Правка состава — только пересборкой черновика.</p>
           <pre>{JSON.stringify(full.payload, null, 2)}</pre></div>)
@@ -225,9 +227,9 @@ function DocTable({ docs, ctx, empty }) {
 
 /* ================= обзор ================= */
 function Overview({ ctx, pulse }) {
-  const { token, notify, confirm, bump, inn, go } = ctx
+  const { notify, confirm, bump, inn, go } = ctx
   const [docs, setDocs] = useState(null)
-  useEffect(() => { api('/v1/docs?limit=6', token).then(setDocs).catch(() => setDocs([])) }, [ctx.tick])
+  useEffect(() => { api('/v1/docs?limit=6').then(setDocs).catch(() => setDocs([])) }, [ctx.tick])
   if (!pulse) return null
   const s = pulse.stats || {}
   const mk = pulse.markers || {}
@@ -260,7 +262,7 @@ function Overview({ ctx, pulse }) {
     confirm('Собрать вывод из оборота?',
       `Из ${pendW} КМ будет создан черновик LK_RECEIPT (без фискального чека — отдельным документом). КМ сразу перейдут в «Выведен», подача в ЧЗ — отдельным шагом.`,
       `ИНН ${inn}`, 'Собрать документ', async () => {
-        try { const r = await api('/v1/batches/withdraw', token, { method: 'POST', body: JSON.stringify({ inn }) })
+        try { const r = await api('/v1/batches/withdraw', { method: 'POST', body: JSON.stringify({ inn }) })
           if (r.doc_id === 0) notify('Нет позиций к выводу', '', 'warn')
           else notify(`Создан черновик LK_RECEIPT №${r.doc_id}`, 'Подайте его в разделе «Вывод из оборота».')
           bump()
@@ -354,17 +356,17 @@ function Overview({ ctx, pulse }) {
 
 /* ================= вывод из оборота ================= */
 function Withdraw({ ctx }) {
-  const { token, notify, confirm, bump, inn } = ctx
+  const { notify, confirm, bump, inn } = ctx
   const [pend, setPend] = useState(null)
   const [docs, setDocs] = useState(null)
-  useEffect(() => { api('/v1/journal?state=PENDING_WITHDRAW&limit=1000', token).then(setPend).catch(() => setPend([]))
-    api('/v1/docs?limit=200', token).then(setDocs).catch(() => setDocs([])) }, [ctx.tick])
+  useEffect(() => { api('/v1/journal?state=PENDING_WITHDRAW&limit=1000').then(setPend).catch(() => setPend([]))
+    api('/v1/docs?limit=200').then(setDocs).catch(() => setDocs([])) }, [ctx.tick])
   const doWithdraw = () => { const n = pend ? pend.length : 0
     if (!n) return notify('Нет позиций к выводу', 'Журнал не содержит КМ в статусе «к выводу».', 'warn')
     confirm('Собрать вывод из оборота?',
       `Из ${n} КМ будет создан черновик LK_RECEIPT (позиции без фискального чека уйдут отдельным документом «Иное»). КМ сразу перейдут в «Выведен»; подача в ЧЗ — отдельным шагом.`,
       `ИНН ${inn}`, 'Собрать документ', async () => {
-        try { const r = await api('/v1/batches/withdraw', token, { method: 'POST', body: JSON.stringify({ inn }) })
+        try { const r = await api('/v1/batches/withdraw', { method: 'POST', body: JSON.stringify({ inn }) })
           if (r.doc_id === 0) notify('Нет позиций к выводу', '', 'warn')
           else notify(`Создан черновик LK_RECEIPT №${r.doc_id}`, 'Подайте его в ЧЗ — кнопкой «Подать» ниже.')
           bump()
@@ -400,13 +402,13 @@ function Withdraw({ ctx }) {
 
 /* ================= возвраты ================= */
 function Returns({ ctx, pulse }) {
-  const { token, notify, confirm, bump, inn } = ctx
+  const { notify, confirm, bump, inn } = ctx
   const [rows, setRows] = useState(null)
   const [docs, setDocs] = useState(null)
   const [stats, setStats] = useState(null)
-  useEffect(() => { api('/v1/wb/returns', token).then(setRows).catch(() => setRows([]))
-    api('/v1/docs?limit=200', token).then(setDocs).catch(() => setDocs([]))
-    api('/v1/journal/stats', token).then(setStats).catch(() => {}) }, [ctx.tick])
+  useEffect(() => { api('/v1/wb/returns').then(setRows).catch(() => setRows([]))
+    api('/v1/docs?limit=200').then(setDocs).catch(() => setDocs([]))
+    api('/v1/journal/stats').then(setStats).catch(() => {}) }, [ctx.tick])
   const sorted = (rows || []).slice().sort((a, b) => {
     if (!!a.completed_dt !== !!b.completed_dt) return a.completed_dt ? 1 : -1
     return (a.expired_dt || '').localeCompare(b.expired_dt || '') })
@@ -415,7 +417,7 @@ function Returns({ ctx, pulse }) {
   const poll = () => confirm('Опросить WB goods-return вручную?',
     'Ручной опрос расходует ту же квоту, что и часовой автоматический.',
     'GET goods-return · окно 7 дней', 'Опросить', async () => {
-      try { const r = await api('/v1/wb/returns/poll', token, { method: 'POST' })
+      try { const r = await api('/v1/wb/returns/poll', { method: 'POST' })
         notify('Опрос выполнен', `новых ${r.new}, обновлено ${r.updated}` + (r.alerts ? `, алертов ${r.alerts}` : ''))
         bump()
       } catch (e) { notify('Опрос не удался', e.message, 'bad') } })
@@ -424,7 +426,7 @@ function Returns({ ctx, pulse }) {
     confirm('Собрать возврат продавца?',
       `Из ${n} КМ будет создан черновик LP_RETURN. Первичка — чеки из последних выводов; КМ без вывода будут пропущены.`,
       'LP_RETURN · REMOTE_SALE_RETURN · оплачено', 'Собрать документ', async () => {
-        try { const r = await api('/v1/batches/return', token, { method: 'POST', body: JSON.stringify({ inn }) })
+        try { const r = await api('/v1/batches/return', { method: 'POST', body: JSON.stringify({ inn }) })
           if (!r.docs) notify('Возврат не собран', `${r.blocked} КМ без вывода из оборота`, 'warn')
           else notify('Создан черновик LP_RETURN', r.blocked ? `КМ без вывода пропущено: ${r.blocked}` : '')
           bump()
@@ -473,19 +475,19 @@ function Returns({ ctx, pulse }) {
 // Превью импорта: тот же разбор, что сделает импорт (файл → правило РД → дефолт),
 // без записи; апрув в drawer'е — повторная подача того же файла в /import.
 function ImportPreview({ ctx, file, onDone }) {
-  const { token, notify, closeDrawer, bump } = ctx
+  const { notify, closeDrawer, bump } = ctx
   const [data, setData] = useState(null)
   const [err, setErr] = useState('')
   const [busy, setBusy] = useState(false)
   useEffect(() => {
     const fd = new FormData(); fd.append('file', file)
-    nkmt('/v1/nkmt/import/preview', token, { method: 'POST', body: fd })
+    nkmt('/v1/nkmt/import/preview', { method: 'POST', body: fd })
       .then(setData).catch((e) => setErr(e.message))
   }, [])
   const doImport = () => { if (busy) return
     setBusy(true)
     const fd = new FormData(); fd.append('file', file)
-    nkmt('/v1/nkmt/import', token, { method: 'POST', body: fd })
+    nkmt('/v1/nkmt/import', { method: 'POST', body: fd })
       .then((r) => { notify(`Импорт завершён: батч №${r.batch_id}`, `ok ${r.stats.ok}, ошибок ${r.stats.error}`)
         closeDrawer(); onDone(); bump() })
       .catch((e) => { notify('Импорт не удался', e.message, 'bad'); setBusy(false) }) }
@@ -519,7 +521,7 @@ function ImportPreview({ ctx, file, onDone }) {
 }
 
 function Catalog({ ctx }) {
-  const { token, notify, confirm, bump, openDrawer } = ctx
+  const { notify, confirm, bump, openDrawer } = ctx
   const [batches, setBatches] = useState(null)
   const [stage, setStage] = useState('')
   const [openId, setOpenId] = useState(null)
@@ -527,11 +529,11 @@ function Catalog({ ctx }) {
   const [cardFilter, setCardFilter] = useState('')
   const [file, setFile] = useState(null)
   const fileRef = useRef(null)
-  useEffect(() => { nkmt('/v1/nkmt/batches', token).then(setBatches)
+  useEffect(() => { nkmt('/v1/nkmt/batches').then(setBatches)
     .catch((e) => { setBatches([]); notify('Не удалось загрузить батчи', e.message, 'bad') }) }, [ctx.tick])
   const stageMatch = STAGES.find((x) => x.key === stage)
   useEffect(() => { if (openId != null)
-    nkmt(`/v1/nkmt/batches/${openId}?card_status=${encodeURIComponent(cardFilter)}`, token)
+    nkmt(`/v1/nkmt/batches/${openId}?card_status=${encodeURIComponent(cardFilter)}`)
       .then((r) => setCards(r.cards || []))
       .catch((e) => notify('Не удалось загрузить карточки', e.message, 'bad')) }, [openId, cardFilter])
   const toggle = (id) => { if (openId === id) { setOpenId(null); setCards(null); return }
@@ -540,7 +542,7 @@ function Catalog({ ctx }) {
     kind === 'feed' ? 'Подать фид в Национальный каталог?' : `Выполнить «${kind}» для батча №${id}?`,
     kind === 'feed' ? 'Карточки уйдут в НК; дальше модерация и подпись идут автоматически (воркер).' : 'Ручной прогон того же, что делает автоматика.',
     `/v1/nkmt/batches/${id}/${kind}`, kind === 'feed' ? 'Подать фид' : 'Выполнить',
-    async () => { try { const r = await nkmt(`/v1/nkmt/batches/${id}/${kind}`, token, { method: 'POST' })
+    async () => { try { const r = await nkmt(`/v1/nkmt/batches/${id}/${kind}`, { method: 'POST' })
         notify(okMsg(r), ''); bump()
       } catch (e) { notify('Не удалось', e.message, 'bad') } })
   const showPreview = (f) => { if (!f) return
@@ -561,7 +563,7 @@ function Catalog({ ctx }) {
       <div className="card-h"><h2>Импорт выгрузки</h2>
         <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
           <span className="hint">.xlsx из 1С → предпросмотр → импорт</span>
-          <button className="btn sm" onClick={() => dl('/v1/nkmt/import/template', token, 'nkmt-import-template.xlsx')
+          <button className="btn sm" onClick={() => dl('/v1/nkmt/import/template', 'nkmt-import-template.xlsx')
             .catch((e) => notify('Шаблон не скачался', e.message, 'bad'))}>Шаблон</button>
         </div></div>
       <div className="card-b">
@@ -590,8 +592,8 @@ function Catalog({ ctx }) {
             {b.status === 'new' && <button className="btn sm pri" onClick={() => act(b.id, 'feed', (r) => `Фид отправлен (id ${r.feed_id}) — дальше автоматика`)}>Подать фид</button>}
             {(b.status === 'moderation' || b.status === 'feeding') && <button className="btn sm" onClick={() => act(b.id, 'refresh', () => 'Модерация опрошена')}>Обновить</button>}
             {b.status === 'signing' && <button className="btn sm pri" onClick={() => act(b.id, 'sign', (r) => `Подписано ${r.signed}, ошибок ${r.failed}`)}>Подписать</button>}
-            <button className="btn sm" onClick={() => dl(`/v1/nkmt/batches/${b.id}/report?format=xlsx`, token, `marko-batch-${b.id}.xlsx`).catch((e) => notify('Отчёт не сформирован', e.message, 'bad'))}>Отчёт 1С</button>
-            <button className="btn sm" onClick={() => dl(`/v1/nkmt/batches/${b.id}/report?format=csv`, token, `marko-batch-${b.id}.csv`).catch((e) => notify('Отчёт не сформирован', e.message, 'bad'))}>csv</button>
+            <button className="btn sm" onClick={() => dl(`/v1/nkmt/batches/${b.id}/report?format=xlsx`, `marko-batch-${b.id}.xlsx`).catch((e) => notify('Отчёт не сформирован', e.message, 'bad'))}>Отчёт 1С</button>
+            <button className="btn sm" onClick={() => dl(`/v1/nkmt/batches/${b.id}/report?format=csv`, `marko-batch-${b.id}.csv`).catch((e) => notify('Отчёт не сформирован', e.message, 'bad'))}>csv</button>
           </span>
         </div>
         {openId === b.id && <div className="cards-wrap">
@@ -618,7 +620,7 @@ function Catalog({ ctx }) {
 
 /* ================= справочники ================= */
 function Refs({ ctx }) {
-  const { token, notify, confirm, inn, setInn } = ctx
+  const { notify, confirm, inn, setInn } = ctx
   const [tab, setTab] = useState('fields')
   const [decls, setDecls] = useState(null)
   const [defs, setDefs] = useState(null)
@@ -631,29 +633,29 @@ function Refs({ ctx }) {
   const [rtypes, setRtypes] = useState([]); const [rtypeInput, setRtypeInput] = useState('')
   const [rprod, setRprod] = useState('')
   const [rzBrand, setRzBrand] = useState(''); const [rzType, setRzType] = useState(''); const [rz, setRz] = useState(null)
-  useEffect(() => { nkmt('/v1/nkmt/declarations', token).then(setDecls).catch(() => setDecls([]))
-    nkmt('/v1/nkmt/rules', token).then(setRules).catch(() => setRules([]))
-    nkmt('/v1/nkmt/dicts/hints', token).then(setHints).catch(() => {}) }, [ctx.tick])
+  useEffect(() => { nkmt('/v1/nkmt/declarations').then(setDecls).catch(() => setDecls([]))
+    nkmt('/v1/nkmt/rules').then(setRules).catch(() => setRules([]))
+    nkmt('/v1/nkmt/dicts/hints').then(setHints).catch(() => {}) }, [ctx.tick])
   // формы дефолтов и эмиттера грузятся один раз при входе: 60-секундный тик
   // консоли не должен затирать несохранённые правки оператора
   useEffect(() => {
-    nkmt('/v1/nkmt/defaults', token).then(setDefs)
+    nkmt('/v1/nkmt/defaults').then(setDefs)
       .catch((e) => { setDefs({}); notify('Дефолты не загрузились', e.message, 'bad') })
-    api('/v1/emitter/defaults', token).then(setEm).catch(() => setEm({ fias_id: '', primary_custom_name: '' }))
+    api('/v1/emitter/defaults').then(setEm).catch(() => setEm({ fias_id: '', primary_custom_name: '' }))
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [])
   const addDecl = () => { if (!dnum || !ddate) return notify('Заполните номер и дату', '', 'warn')
-    nkmt('/v1/nkmt/declarations', token, { method: 'POST', body: JSON.stringify({ doc_number: dnum, doc_date: ddate, doc_type: dtype, title: dtitle }) })
+    nkmt('/v1/nkmt/declarations', { method: 'POST', body: JSON.stringify({ doc_number: dnum, doc_date: ddate, doc_type: dtype, title: dtitle }) })
       .then(() => { setDnum(''); setDdate(''); setDtitle(''); notify('Декларация добавлена', ''); ctx.bump() })
       .catch((e) => notify('Не добавлено', e.message, 'bad')) }
   const delDecl = (d) => confirm('Удалить декларацию?', d.doc_number, 'Карточки, где она уже подставлена, не изменятся.', 'Удалить',
-    () => nkmt(`/v1/nkmt/declarations/${d.id}`, token, { method: 'DELETE' })
+    () => nkmt(`/v1/nkmt/declarations/${d.id}`, { method: 'DELETE' })
       .then(() => { notify('Декларация удалена', ''); ctx.bump() })
       .catch((e) => notify('Не удалось удалить', e.message, 'bad')))
   const addRule = () => { if (!rbrand.trim() && !rtypes.length)
       return notify('Заполните бренд или вид товара', 'Правило без условия не создаётся — оно подходило бы всем строкам.', 'warn')
     if (!rdecl) return notify('Выберите декларацию', '', 'warn')
-    nkmt('/v1/nkmt/rules', token, { method: 'POST',
+    nkmt('/v1/nkmt/rules', { method: 'POST',
         body: JSON.stringify({ brand: rbrand, product_types: rtypes, declaration_id: Number(rdecl), producer: rprod }) })
       .then(() => { setRbrand(''); setRtypes([]); setRtypeInput(''); setRprod(''); setRdecl('')
         notify('Правило добавлено', 'Сработает при следующем импорте.'); ctx.bump() })
@@ -664,10 +666,10 @@ function Refs({ ctx }) {
   const delRule = (r) => confirm('Удалить правило РД?',
     `${r.brand || 'любой бренд'} × ${r.product_types?.length ? r.product_types.join(', ') : 'любой вид'}`,
     'Правило перестанет действовать при следующем импорте.', 'Удалить',
-    () => nkmt(`/v1/nkmt/rules/${r.id}`, token, { method: 'DELETE' })
+    () => nkmt(`/v1/nkmt/rules/${r.id}`, { method: 'DELETE' })
       .then(() => { notify('Правило удалено', ''); ctx.bump() })
       .catch((e) => notify('Не удалось удалить', e.message, 'bad')))
-  const saveDefs = () => nkmt('/v1/nkmt/defaults', token, { method: 'PUT', body: JSON.stringify(defs || {}) })
+  const saveDefs = () => nkmt('/v1/nkmt/defaults', { method: 'PUT', body: JSON.stringify(defs || {}) })
     .then(() => notify('Дефолты сохранены', 'Подставятся при следующем импорте.'))
     .catch((e) => notify('Не сохранено', e.message, 'bad'))
   // пара номер+дата: реестр допускает одинаковые номера с разными датами
@@ -689,10 +691,10 @@ function Refs({ ctx }) {
     if (k === 'declaration_number') d.declaration_date = d.declaration_date ?? ''
     if (k === 'declaration_date') d.declaration_number = d.declaration_number ?? ''
     setDefs(d) }
-  const tryResolve = () => nkmt('/v1/nkmt/resolve', token, { method: 'POST',
+  const tryResolve = () => nkmt('/v1/nkmt/resolve', { method: 'POST',
       body: JSON.stringify({ brand: rzBrand, product_type: rzType }) })
     .then(setRz).catch((e) => notify('Проверка не удалась', e.message, 'bad'))
-  const saveEm = () => api('/v1/emitter/defaults', token, { method: 'PUT', body: JSON.stringify(em || {}) })
+  const saveEm = () => api('/v1/emitter/defaults', { method: 'PUT', body: JSON.stringify(em || {}) })
     .then(() => notify('Реквизиты эмиттера сохранены', 'Применятся к следующим черновикам LK_RECEIPT.'))
     .catch((e) => notify('Не сохранено', e.message, 'bad'))
   const tabs = [['fields', 'Поля'], ['decls', 'Декларации'],
@@ -870,7 +872,7 @@ function Refs({ ctx }) {
 /* ================= журнал КМ ================= */
 /* карточка разбора аномалии: объяснение + факты события + пресеты разрешения */
 function AnomalyCard({ it, ctx }) {
-  const { token, notify, confirm, closeDrawer, bump } = ctx
+  const { notify, confirm, closeDrawer, bump } = ctx
   const help = ANOMALY_HELP[it.state] || {}
   const ev = it.last_event || {}
   const [busy, setBusy] = useState(false)
@@ -880,7 +882,7 @@ function AnomalyCard({ it, ctx }) {
     it.km, p.label, async () => {
       setBusy(true)
       try {
-        await api(`/v1/journal/${encodeURIComponent(it.km)}/resolve`, token,
+        await api(`/v1/journal/${encodeURIComponent(it.km)}/resolve`,
           { method: 'POST', body: JSON.stringify({ target: p.target, note: p.note }) })
         notify('Аномалия разобрана', `${p.note} · код → «${ITEM_STATES[p.target][0]}»`)
         closeDrawer(); bump()
@@ -914,14 +916,14 @@ function AnomalyCard({ it, ctx }) {
 }
 
 function Journal({ ctx, initial }) {
-  const { token, openDrawer } = ctx
+  const { openDrawer } = ctx
   const [rows, setRows] = useState(null)
   const [stats, setStats] = useState({})
   const [state, setState] = useState(initial || '')
   const [q, setQ] = useState('')
-  useEffect(() => { api(`/v1/journal?limit=1000${state && state !== 'ANOMALY' ? `&state=${encodeURIComponent(state)}` : ''}`, token)
+  useEffect(() => { api(`/v1/journal?limit=1000${state && state !== 'ANOMALY' ? `&state=${encodeURIComponent(state)}` : ''}`)
       .then(setRows).catch(() => setRows([]))
-    api('/v1/journal/stats', token).then(setStats).catch(() => {}) }, [ctx.tick, state])
+    api('/v1/journal/stats').then(setStats).catch(() => {}) }, [ctx.tick, state])
   const shown = (rows || []).filter((it) =>
     (state !== 'ANOMALY' || it.state.startsWith('ANOMALY'))
     && (!q || it.km.toLowerCase().includes(q.toLowerCase()) || evLine(it).toLowerCase().includes(q.toLowerCase())))
@@ -975,7 +977,7 @@ const NAV = [
   ['journal', 'Журнал КМ', I.list],
 ]
 
-function Console({ token, me, logout }) {
+function Console({ me, logout }) {
   const [view, setView] = useState('overview')
   const [jInit, setJInit] = useState('')
   const [pulse, setPulse] = useState(null)
@@ -992,8 +994,8 @@ function Console({ token, me, logout }) {
   const openDrawer = (title, node) => setDrawer({ title, node })
   const go = (v, jf) => { if (jf != null) setJInit(jf); setView(v); window.scrollTo(0, 0) }
   useEffect(() => { const i = setInterval(bump, 60000); return () => clearInterval(i) }, [])
-  useEffect(() => { api('/v1/pulse', token).then(setPulse).catch(() => {}) }, [tick])
-  const ctx = { token, notify, confirm, openDrawer, closeDrawer: () => setDrawer(null),
+  useEffect(() => { api('/v1/pulse').then(setPulse).catch(() => {}) }, [tick])
+  const ctx = { notify, confirm, openDrawer, closeDrawer: () => setDrawer(null),
     bump, tick, inn, setInn, go, pulse }
   const s = pulse?.stats || {}
   const navCnt = { overview: null, withdraw: s.PENDING_WITHDRAW || 0,
@@ -1053,27 +1055,52 @@ function Console({ token, me, logout }) {
 
 /* ================= вход ================= */
 export default function App() {
-  const [token, setToken] = useState(localStorage.getItem('tok') || '')
   const [me, setMe] = useState(null)
   const [err, setErr] = useState('')
-  const tryToken = (t, quiet) => api('/v1/me', t)
-    .then((m) => { localStorage.setItem('tok', t); setMe(m); setErr('') })
-    .catch((e) => { if (!quiet) setErr(`Токен не принят: ${e.message}. Проверьте значение или выдайте новый.`) })
-  useEffect(() => { if (token) tryToken(token, true) }, [])
-  const login = () => { if (!token.trim()) return setErr('Введите токен доступа платформы.'); tryToken(token, false) }
-  const logout = () => { localStorage.removeItem('tok'); setToken(''); setMe(null) }
+  const [busy, setBusy] = useState(false)
+  const [user, setUser] = useState('')
+  const [pass, setPass] = useState('')
+  useEffect(() => {   // живая cookie-сессия? — сразу консоль (тихая проба:
+    localStorage.removeItem('tok')   // без marko:unauthorized, 401 здесь — норма)
+    fetch('/v1/me')
+      .then(async (r) => { if (r.ok) setMe(await r.json()) })
+      .catch(() => {})
+  }, [])
+  useEffect(() => {   // истёкшая сессия в любом из ~40 вызовов → экран входа
+    const lost = () => { setMe(null); setErr('Сессия истекла — войдите заново.') }
+    window.addEventListener('marko:unauthorized', lost)
+    return () => window.removeEventListener('marko:unauthorized', lost)
+  }, [])
+  const login = () => { if (busy) return
+    if (!user.trim() || !pass) return setErr('Введите логин и пароль.')
+    setBusy(true)
+    fetch('/v1/auth/login', { method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ username: user.trim(), password: pass }) })
+      .then(async (r) => {
+        if (r.status === 429) return setErr('Слишком много попыток. Подождите минуту и попробуйте снова.')
+        if (!r.ok) return setErr('Неверный логин или пароль. Проверьте раскладку и повторите.')
+        setMe(await r.json()); setErr('') })
+      .catch(() => setErr('Сервер недоступен. Попробуйте ещё раз.'))
+      .finally(() => setBusy(false)) }
+  const logout = () => fetch('/v1/auth/logout', { method: 'POST' })
+    .catch(() => {}).finally(() => setMe(null))
   if (!me) return <div id="auth" role="dialog" aria-label="Вход в консоль">
     <div className="auth-card">
       <div className="brandline"><Mark size={40} fg="#17242B" accent="#C81E36" />
         <div><h1>МАРКО</h1><div style={{ fontSize: 11, color: 'var(--faint)' }}>МАРкировка + КОды · консоль оператора</div></div></div>
-      <p className="sub">Введите токен доступа платформы. Он выдаётся администратором и хранится только в этом браузере.</p>
-      <div className="field"><label>Токен доступа</label>
-        <input type="password" autoComplete="off" className="mono" value={token}
-          onChange={(e) => setToken(e.target.value)}
+      <p className="sub">Войдите с учёткой оператора. Сессия на 7 дней живёт в защищённой cookie этого браузера.</p>
+      <div className="field"><label>Логин</label>
+        <input autoComplete="username" autoFocus value={user}
+          onChange={(e) => setUser(e.target.value)} /></div>
+      <div className="field"><label>Пароль</label>
+        <input type="password" autoComplete="current-password" value={pass}
+          onChange={(e) => setPass(e.target.value)}
           onKeyDown={(e) => { if (e.key === 'Enter') login() }} /></div>
-      <button className="btn pri" style={{ width: '100%', justifyContent: 'center', padding: 9 }} onClick={login}>Войти</button>
+      <button className="btn pri" disabled={busy}
+        style={{ width: '100%', justifyContent: 'center', padding: 9 }}
+        onClick={login}>Войти</button>
       <div className="auth-err">{err}</div>
-      <p className="auth-foot">Права токена видны в левой панели после входа; проверка — GET /v1/me (имя и scopes).</p>
+      <p className="auth-foot">Учётку выдаёт администратор платформы. Права видны в левой панели после входа.</p>
     </div></div>
-  return <Console token={token} me={me} logout={logout} />
+  return <Console me={me} logout={logout} />
 }
