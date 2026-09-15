@@ -124,10 +124,16 @@ const fmtLeft = (iso) => { const ms = new Date(iso) - Date.now(); if (isNaN(ms))
   return `${Math.max(1, Math.round(ms / 6e4))} мин` }
 const leftCls = (iso) => { const ms = new Date(iso) - Date.now()
   return ms <= 0 ? 'over' : ms <= 864e5 ? 'danger' : ms <= 1728e5 ? 'warn' : 'ok' }
+const plural = (n, [one, few, many]) => { const a = n % 10, b = n % 100
+  return b >= 11 && b <= 14 ? many : a === 1 ? one : a >= 2 && a <= 4 ? few : many }
 const rub = (n) => `${Number(n || 0).toLocaleString('ru-RU')} ₽`
+const fmtDay = (s) => {   // date-only fiscal_dt: без времени (UTC-полночь не показывать как 03:00)
+  if (!s) return '—'
+  if (typeof s === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(s)) return `${s.slice(8, 10)}.${s.slice(5, 7)}`
+  return fmtD(s) }
 const evLine = (it) => { const ev = it.last_event || {}
   const base = opRu(ev)
-  return base + (ev.fiscal_dt ? ` · ${fmtD(ev.fiscal_dt)}` : '')
+  return base + (ev.fiscal_dt ? ` · ${fmtDay(ev.fiscal_dt)}` : '')
     + (ev.fiscal_doc_number ? ` · чек ${ev.fiscal_doc_number}` : '')
     + (ev.price ? ` · ${rub(ev.price)}` : '') }
 
@@ -279,7 +285,7 @@ function Overview({ ctx, pulse }) {
       <div>
         <div className="card">
           <div className="card-h"><h2>Требует решения</h2>
-            <span className="hint">{openPts} пунктов</span></div>
+            <span className="hint">{openPts} {plural(openPts, ['пункт', 'пункта', 'пунктов'])}</span></div>
           <div>
             {dlHot && <div className="act urg"><div className="bar" />
               <div className="tx"><b>Дедлайн забора возврата: через {fmtLeft(dl)}</b>
@@ -890,7 +896,7 @@ function AnomalyCard({ it, ctx }) {
     <b style={{ fontSize: 12.5 }}>Событие, создавшее аномалию</b>
     <div className="twrap" style={{ margin: '6px 0 14px' }}><table className="t small"><tbody>
       <tr><td className="faint" style={{ width: '40%' }}>Вид события</td><td>{kindRu}</td></tr>
-      <tr><td className="faint">Дата чека</td><td>{ev.fiscal_dt ? fmtD(ev.fiscal_dt) : '—'}</td></tr>
+      <tr><td className="faint">Дата чека</td><td>{fmtDay(ev.fiscal_dt)}</td></tr>
       <tr><td className="faint">Чек ККТ</td><td className="mono">{ev.fiscal_doc_number ?? '—'}</td></tr>
       <tr><td className="faint">Цена</td><td>{ev.price ? rub(ev.price) : '—'}</td></tr>
       <tr><td className="faint">nm_id</td><td className="mono">{ev.nm_id ?? '—'}</td></tr>
@@ -934,7 +940,7 @@ function Journal({ ctx, initial }) {
     </div>
     <div className="frow" style={{ marginBottom: 14 }}>
       <div className="search">{I.search}
-        <input value={q} placeholder="Поиск по коду КМ или событию…" onChange={(e) => setQ(e.target.value)} /></div>
+        <input value={q} placeholder="Поиск по КМ или событию…" onChange={(e) => setQ(e.target.value)} /></div>
       <span className="faint" style={{ fontSize: 12 }}>показано <span className="mono">{shown.length}</span></span>
     </div>
     <div className="card">
@@ -943,7 +949,8 @@ function Journal({ ctx, initial }) {
         <tbody>{shown.map((it) => { const [lbl] = ITEM_STATES[it.state] || [it.state]
           const anom = it.state.startsWith('ANOMALY')
           return <tr key={it.km} className={anom ? 'rowhot' : ''} style={{ cursor: 'pointer' }}
-            onClick={() => openDrawer(`КМ · ${lbl} · ${it.state}`,
+            onClick={() => openDrawer(<>КМ · {lbl} ·&nbsp;<span className="mono"
+              style={{ fontSize: 12, color: 'var(--muted)' }}>{it.state}</span></>,
               anom
                 ? <AnomalyCard it={it} ctx={ctx} />
                 : <div><p>Последнее событие по коду (поле last_event в журнале).</p>
