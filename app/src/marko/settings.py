@@ -14,5 +14,6 @@ class Settings(BaseSettings):
     tg_chat_id: str = ""
     poll_excise_cron: list[str] = ["06:30", "18:30"]   # МСК, ровно 2 запроса/24ч
     excise_days_back: int = 7
+    session_cookie_secure: bool = True   # прод за TLS Caddy; локальный http-dev — 0
 
 settings = Settings()

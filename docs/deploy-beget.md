@@ -118,3 +118,22 @@ docker compose logs --tail 20 worker        # no exceptions
 - Compose postgres publishes no ports; only Caddy exposes 80/443.
 - Backups land in `repo/backups/` (host dir bind-mounted to `/backups`), daily via `backup.sh`.
 - Caddyfile must use multi-line blocks; Caddy rejects one-line `handle ... { ... }`.
+
+## Вход в консоль по паролю (после миграции 0013_console_auth)
+
+Сессия консоли — HttpOnly-cookie на 7 дней (скользящее продление); Bearer-токены
+(platform.tokens) продолжают работать для signer-агента и скриптов.
+
+1. Завести учётку оператора (пароль вводится в терминал дважды, минимум 10 символов,
+   нигде не печатается и не попадает в history — команда без аргументов):
+   ```
+   cd /opt/marko/repo/deploy && docker compose exec -T api python -m marko.create_operator
+   ```
+   Логин: Enter (= operator) или своё имя; затем пароль два раза.
+2. Смена пароля — повторный запуск той же команды (активные сессии не инвалидируются;
+   при необходимости: `DELETE FROM platform.sessions WHERE principal_id = ...`).
+3. Вход: marko.adel-factory.ru → логин/пароль. Неудачные попытки логируются; после
+   3-й подряд — экспоненциальная пауза до 30 с (429 + Retry-After).
+
+До шага 1 вход в консоль невозможен (форма есть, валидных учёток нет);
+signer-агент и API-скрипты с Bearer-токенами работают независимо.
