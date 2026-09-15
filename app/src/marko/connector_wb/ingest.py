@@ -30,7 +30,13 @@ def excise_rows_to_events(rows: list[dict]) -> list[dict]:
 def ingest_excise(db: Session, rows: list[dict], *, fbw_docs: set[str],
                   known_docs: set[str]) -> dict:
     stats = {"sale": 0, "return": 0, "skipped_fbw": 0, "duplicates": 0, "fbs_unknown": 0}
-    for ev in excise_rows_to_events(rows):
+    events = excise_rows_to_events(rows)
+    # порядок применения — по fiscal_dt: WB выдаёт строки не по датам (возвраты
+    # отстают от продаж на 0–2 дня), применение в порядке выдачи порождает
+    # ложные ANOMALY_NO_RECEIPT/UNKNOWN; сортировка восстанавливает хронологию.
+    # Бездатовые строки — в конец (как NULLS LAST в repair)
+    events.sort(key=lambda ev: str(ev["payload"].get("fiscal_dt") or "9999-12-31"))
+    for ev in events:
         if order_doc(ev["srid"]) in fbw_docs:
             # FBW — вне контура FBS: только аудит-событие, позиция в журнале
             # НЕ создаётся (журнал = жизненный цикл наших КМ)

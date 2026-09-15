@@ -34,9 +34,9 @@ const dl = async (path, token, name) => {   // скачивание с токе�
 const ITEM_STATES = {
   NEW: ['новый', 'grey'], PENDING_WITHDRAW: ['к выводу', 'amber'], WITHDRAWN: ['выведен', 'green'],
   PENDING_RETURN: ['к возврату', 'blue'], RETURNED: ['возвращён', 'green'],
-  ANOMALY_NO_RECEIPT: ['аномалия: нет чека', 'red'], ANOMALY_RESALE: ['аномалия: перепродажа', 'red'],
+  ANOMALY_NO_RECEIPT: ['аномалия: возврат без продажи', 'red'], ANOMALY_RESALE: ['аномалия: вторичная продажа', 'red'],
   ANOMALY_RERETURN: ['аномалия: повторный возврат', 'red'],
-  ANOMALY_UNKNOWN_TRANSITION: ['аномалия: неизвестный переход', 'red'],
+  ANOMALY_UNKNOWN_TRANSITION: ['аномалия: неопознанное событие', 'red'],
 }
 const CHIP_ORDER = ['PENDING_WITHDRAW', 'PENDING_RETURN', 'WITHDRAWN', 'RETURNED',
   'ANOMALY_RESALE', 'ANOMALY_NO_RECEIPT', 'ANOMALY_RERETURN', 'ANOMALY_UNKNOWN_TRANSITION',
@@ -68,8 +68,48 @@ const DEF_FIELDS = [
   ['target_gender', 'Пол'], ['size_system', 'Система размеров'], ['country', 'Страна'],
   ['producer', 'Производитель'], ['declaration_number', 'Номер декларации'],
   ['declaration_date', 'Дата декларации']]
-const KIND_RU = { sale: 'продажа', return: 'возврат', withdraw: 'вывод',
-  return_apply: 'возврат проведён' }
+// эксайз-payload не несёт kind — вид события выводим из operation_type_id
+const opRu = (ev) => ev.operation_type_id === 2 ? 'возврат'
+  : ev.operation_type_id === 1 ? 'продажа' : '—'
+// карточки разбора аномалий: что это / почему бывает / что делать + пресеты
+// ручного разрешения (target — штатное состояние, новых статусов не вводим)
+const ANOMALY_HELP = {
+  ANOMALY_NO_RECEIPT: {
+    what: 'WB сообщил возврат этого кода, но продажу его мы не видели. Вернуть непроданное физически невозможно — значит, событие продажи до нас не дошло.',
+    why: ['продажа была до запуска контура (до сентября 2026);', 'строка продажи приехала позже 7-дневного окна опроса WB;', 'код ввели в оборот и продали мимо нашей интеграции.'],
+    todo: 'Если товар реально продавался и вернулся — переведите код «к возврату»: LP_RETURN вернёт его в оборот. Если код не ваш или строки в ЛК WB нет — признайте строку ошибочной.',
+    presets: [
+      { label: 'Продажа была до запуска', target: 'PENDING_RETURN', note: 'продажа до запуска контура' },
+      { label: 'Строка ошибочна', target: 'NEW', note: 'возврат ошибочен: дубль или чужая строка' },
+    ],
+  },
+  ANOMALY_RESALE: {
+    what: 'Код продан второй раз, пока первая продажа ждала вывода из оборота. Чаще всего это не подделка, а порядок событий: возврат покупателя приезжает в отчётах WB на 0–2 дня позже продажи.',
+    why: ['возврат первой продажи ещё в пути (лаг отчёта WB 0–2 дня);', 'WB отдал ту же продажу повторно под другим номером;', 'редко: реальная переклейка кода — это вопрос к ЧЗ, не к «разобрать».'],
+    todo: 'Проверьте код в карточке товара на WB: если это та же единица после возврата покупателя — примите событие, код снова уйдёт «к выводу». При подозрении на переклейку не разрешайте — разберите с ЧЗ.',
+    presets: [
+      { label: 'Принять перепродажу', target: 'PENDING_WITHDRAW', note: 'перепродажа принята: возврат в пути или дубль WB' },
+    ],
+  },
+  ANOMALY_RERETURN: {
+    what: 'Возврат этого кода пришёл дважды. Единица товара не может вернуться с ПВЗ два раза — почти всегда это дубль строки в отчёте WB.',
+    why: ['WB отдал возврат повторно под новым номером документа;', 'повторная отдача после «зависшего» возврата без чека.'],
+    todo: 'Обычно достаточно признать дубль — код останется «к возврату», документ LP_RETURN построится по нему один раз.',
+    presets: [
+      { label: 'Признать дублем', target: 'PENDING_RETURN', note: 'повторный возврат — дубль WB' },
+    ],
+  },
+  ANOMALY_UNKNOWN_TRANSITION: {
+    what: 'Событие пришло в состоянии, где машина состояний не знает, что с ним делать: например, продажа уже выведенного кода или событие поверх другой аномалии. Нужен взгляд человека.',
+    why: ['продажа/возврат приехали после того, как код уже выведен или возвращён;', 'событие поверх неразобранной аномалии — исходная причина затёрта, история осталась в таблице событий.'],
+    todo: 'Сверьте судьбу кода в ЛК ЧЗ (в обороте / выведен / выбыл) и выберите корректное состояние вручную.',
+    presets: [
+      { label: 'К выводу', target: 'PENDING_WITHDRAW', note: 'ручное решение: ожидает вывода' },
+      { label: 'К возврату', target: 'PENDING_RETURN', note: 'ручное решение: ожидает возврата' },
+      { label: 'Уже выведен', target: 'WITHDRAWN', note: 'ручное решение: событие проигнорировано' },
+    ],
+  },
+}
 
 /* ================= формат ================= */
 const pad2 = (n) => String(n).padStart(2, '0')
@@ -86,7 +126,7 @@ const leftCls = (iso) => { const ms = new Date(iso) - Date.now()
   return ms <= 0 ? 'over' : ms <= 864e5 ? 'danger' : ms <= 1728e5 ? 'warn' : 'ok' }
 const rub = (n) => `${Number(n || 0).toLocaleString('ru-RU')} ₽`
 const evLine = (it) => { const ev = it.last_event || {}
-  const base = KIND_RU[ev.kind] || ev.kind || '—'
+  const base = opRu(ev)
   return base + (ev.fiscal_dt ? ` · ${fmtD(ev.fiscal_dt)}` : '')
     + (ev.fiscal_doc_number ? ` · чек ${ev.fiscal_doc_number}` : '')
     + (ev.price ? ` · ${rub(ev.price)}` : '') }
@@ -822,6 +862,51 @@ function Refs({ ctx }) {
 }
 
 /* ================= журнал КМ ================= */
+/* карточка разбора аномалии: объяснение + факты события + пресеты разрешения */
+function AnomalyCard({ it, ctx }) {
+  const { token, notify, confirm, closeDrawer, bump } = ctx
+  const help = ANOMALY_HELP[it.state] || {}
+  const ev = it.last_event || {}
+  const [busy, setBusy] = useState(false)
+  const kindRu = opRu(ev)
+  const resolve = (p) => confirm(`Разобрать: ${p.label}?`,
+    `Код перейдёт в состояние «${ITEM_STATES[p.target][0]}», решение зафиксируется в журнале (кто, когда, почему). Действие необратимо.`,
+    it.km, p.label, async () => {
+      setBusy(true)
+      try {
+        await api(`/v1/journal/${encodeURIComponent(it.km)}/resolve`, token,
+          { method: 'POST', body: JSON.stringify({ target: p.target, note: p.note }) })
+        notify('Аномалия разобрана', `${p.note} · код → «${ITEM_STATES[p.target][0]}»`)
+        closeDrawer(); bump()
+      } catch (e) { notify('Не удалось разобрать', e.message, 'bad'); setBusy(false) } })
+  return <div>
+    <p>{help.what}</p>
+    {help.why?.length ? <>
+      <b style={{ fontSize: 12.5 }}>Почему бывает</b>
+      <ul style={{ margin: '6px 0 12px', paddingLeft: 18, fontSize: 12.5, color: 'var(--muted)' }}>
+        {help.why.map((w) => <li key={w} style={{ marginBottom: 2 }}>{w}</li>)}
+      </ul></> : null}
+    <div className="note" style={{ marginBottom: 12 }}>{help.todo}</div>
+    <b style={{ fontSize: 12.5 }}>Событие, создавшее аномалию</b>
+    <div className="twrap" style={{ margin: '6px 0 14px' }}><table className="t small"><tbody>
+      <tr><td className="faint" style={{ width: '40%' }}>Вид события</td><td>{kindRu}</td></tr>
+      <tr><td className="faint">Дата чека</td><td>{ev.fiscal_dt ? fmtD(ev.fiscal_dt) : '—'}</td></tr>
+      <tr><td className="faint">Чек ККТ</td><td className="mono">{ev.fiscal_doc_number ?? '—'}</td></tr>
+      <tr><td className="faint">Цена</td><td>{ev.price ? rub(ev.price) : '—'}</td></tr>
+      <tr><td className="faint">nm_id</td><td className="mono">{ev.nm_id ?? '—'}</td></tr>
+    </tbody></table></div>
+    <b style={{ fontSize: 12.5 }}>Разобрать</b>
+    <div className="row" style={{ gap: 8, marginTop: 8, flexWrap: 'wrap' }}>
+      {(help.presets || []).map((p) => (
+        <button key={p.label} className="btn" disabled={busy} onClick={() => resolve(p)}>{p.label}</button>))}
+    </div>
+    <details style={{ marginTop: 14 }}>
+      <summary style={{ fontSize: 12, color: 'var(--muted)', cursor: 'pointer' }}>Сырые данные события</summary>
+      <pre>{JSON.stringify(ev, null, 2)}</pre>
+    </details>
+  </div>
+}
+
 function Journal({ ctx, initial }) {
   const { token, openDrawer } = ctx
   const [rows, setRows] = useState(null)
@@ -831,12 +916,13 @@ function Journal({ ctx, initial }) {
   useEffect(() => { api(`/v1/journal?limit=1000${state && state !== 'ANOMALY' ? `&state=${encodeURIComponent(state)}` : ''}`, token)
       .then(setRows).catch(() => setRows([]))
     api('/v1/journal/stats', token).then(setStats).catch(() => {}) }, [ctx.tick, state])
-  const shown = (rows || []).filter((it) => state === 'ANOMALY' ? it.state.startsWith('ANOMALY')
-    : q ? it.km.toLowerCase().includes(q.toLowerCase()) || evLine(it).toLowerCase().includes(q.toLowerCase()) : true)
+  const shown = (rows || []).filter((it) =>
+    (state !== 'ANOMALY' || it.state.startsWith('ANOMALY'))
+    && (!q || it.km.toLowerCase().includes(q.toLowerCase()) || evLine(it).toLowerCase().includes(q.toLowerCase())))
   const anomalies = Object.entries(stats).filter(([k]) => k.startsWith('ANOMALY')).reduce((a, [, v]) => a + v, 0)
   const total = Object.values(stats).reduce((a, v) => a + v, 0)
   return <>
-    <Head title="Журнал кодов маркировки" sub="Жизненный цикл каждого КМ: продажа → вывод из оборота → возврат. Аномалии требуют ручного разбора — автоматика их не трогает."
+    <Head title="Журнал кодов маркировки" sub="Жизненный цикл каждого КМ: продажа → вывод из оборота → возврат. Красные строки — противоречия в данных: клик по строке объясняет причину и позволяет разобрать."
       tools={<Sync tick={ctx.tick} />} />
     <div className="chiprow" style={{ marginBottom: 14 }}>
       <button className="chip" aria-pressed={state === ''} onClick={() => setState('')}>все состояния <span className="n">{total}</span></button>
@@ -858,8 +944,10 @@ function Journal({ ctx, initial }) {
           const anom = it.state.startsWith('ANOMALY')
           return <tr key={it.km} className={anom ? 'rowhot' : ''} style={{ cursor: 'pointer' }}
             onClick={() => openDrawer(`КМ · ${lbl} · ${it.state}`,
-              <div><p>Последнее событие по коду (поле last_event в журнале).</p>
-                <pre>{JSON.stringify(it.last_event, null, 2)}</pre></div>)}>
+              anom
+                ? <AnomalyCard it={it} ctx={ctx} />
+                : <div><p>Последнее событие по коду (поле last_event в журнале).</p>
+                  <pre>{JSON.stringify(it.last_event, null, 2)}</pre></div>)}>
             <td><KmCell km={it.km} /></td>
             <td><Badge dict={ITEM_STATES} v={it.state} /></td>
             <td style={{ fontSize: 12.5 }}>{evLine(it)}</td>

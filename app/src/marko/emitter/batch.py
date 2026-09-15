@@ -114,6 +114,20 @@ def wb_withdraw_guard(db: Session, doc_id: int, info: dict) -> bool:
     return True
 
 
+def lk_receipts(db: Session) -> dict[str, tuple[str, str]]:
+    """КМ → (номер, дата) по нашим LK_RECEIPT без error; первое вхождение
+    (старейший вывод) выигрывает."""
+    receipts: dict[str, tuple[str, str]] = {}
+    for d in db.query(MtDoc).filter(MtDoc.type == "LK_RECEIPT",
+                                    MtDoc.status != "error") \
+            .order_by(MtDoc.id).all():
+        for pr in d.payload.get("products", []):
+            receipts.setdefault(pr["cis"],
+                                (d.payload.get("document_number", ""),
+                                 d.payload.get("document_date", "")))
+    return receipts
+
+
 def return_batch(db: Session, inn: str, limit: int = 100) -> tuple[int, int]:
     """PENDING_RETURN → draft LP_RETURN; возвращает (создано_документов, blocked_no_primary).
 
@@ -126,14 +140,7 @@ def return_batch(db: Session, inn: str, limit: int = 100) -> tuple[int, int]:
     items = db.query(Item).filter_by(state="PENDING_RETURN").limit(limit).all()
     if not items:
         return 0, 0
-    receipts: dict[str, tuple[str, str]] = {}   # km -> (document_number, document_date)
-    for d in db.query(MtDoc).filter(MtDoc.type == "LK_RECEIPT",
-                                    MtDoc.status != "error") \
-            .order_by(MtDoc.id).all():   # первое вхождение КМ (старейший вывод) выигрывает
-        for pr in d.payload.get("products", []):
-            receipts.setdefault(pr["cis"],
-                                (d.payload.get("document_number", ""),
-                                 d.payload.get("document_date", "")))
+    receipts: dict[str, tuple[str, str]] = lk_receipts(db)
     groups: dict[str, list[Item]] = {"us": [], "wb": []}
     blocked = 0
     for it in items:

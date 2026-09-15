@@ -1,5 +1,6 @@
 import time
 from datetime import datetime
+from typing import Literal
 
 from fastapi import APIRouter, Depends, HTTPException, Query
 from fastapi.responses import PlainTextResponse
@@ -12,7 +13,8 @@ from marko.api.deps import audit, get_db, require_scope
 from marko.connector_wb.client import WBClient, WbHttpError, WbLimitError, load_wb_token
 from marko.connector_wb.models import WbReturn
 from marko.connector_wb.returns import _parse_iso, run_returns_once
-from marko.emitter.batch import return_batch, to_csv, withdraw_batch
+from marko.emitter.batch import lk_receipts, return_batch, to_csv, withdraw_batch
+from marko.journal import log_action
 from marko.journal.models import Item
 from marko.mt.models import MtDoc
 from marko.nkmt.models import Batch
@@ -25,6 +27,11 @@ router = APIRouter(prefix="/v1")
 class BatchBody(BaseModel):
     inn: str
     limit: int = Field(100, ge=1, le=1000)
+
+
+class ResolveBody(BaseModel):
+    target: Literal["NEW", "PENDING_WITHDRAW", "PENDING_RETURN", "WITHDRAWN", "RETURNED"]
+    note: str = Field("", max_length=500)
 
 
 class EmitterDefaultsBody(BaseModel):
@@ -80,6 +87,40 @@ def journal_stats(
 ):
     rows = db.query(Item.state, func.count()).group_by(Item.state).all()
     return {state: count for state, count in rows}
+
+
+@router.post("/journal/{km}/resolve")
+def journal_resolve(
+    km: str,
+    body: ResolveBody,
+    tok: PlatformToken = Depends(require_scope("docs:submit")),
+    db: Session = Depends(get_db),
+):
+    """Ручной разбор аномалии: перевод в осмысленное состояние + аудит manual/resolve.
+
+    Resolve — событие, а не новый статус: словарь состояний не расширяется,
+    last_event (WB-первичка для LK_RECEIPT/LP_RETURN) не затирается.
+    """
+    it = db.get(Item, km)
+    if it is None:
+        raise HTTPException(404, "КМ не найден в журнале")
+    if not it.state.startswith("ANOMALY_"):
+        raise HTTPException(409, f"не аномалия: {it.state}")
+    src, target = it.state, body.target
+    # «к возврату»/«выведен» требуют источника вывода для первички LP_RETURN:
+    # наш LK_RECEIPT ('us') либо чек ККТ WB ('wb'); без этого return_batch
+    # уйдёт в blocked (ревью фичи: «продажа до запуска» вешала код навечно)
+    if target in ("PENDING_RETURN", "WITHDRAWN") and not it.withdrawn_by:
+        it.withdrawn_by = "us" if km in lk_receipts(db) else "wb"
+    # state ДО log_action — паттерн emitter: commit внутри log_action
+    # оставляет консистентный снапшот
+    it.state = target
+    detail = {"from": src, "to": target, "note": body.note}
+    log_action(db, source="manual", source_event_id=f"resolve:{int(time.time())}:{km}",
+               kind="resolve", km=km, srid="",
+               payload={**detail, "withdrawn_by": it.withdrawn_by})
+    audit(db, tok.principal_id, "journal.resolve", {"km": km, **detail})
+    return {"km": km, "from": src, "to": target}
 
 
 @router.get("/pulse")

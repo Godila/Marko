@@ -168,3 +168,77 @@ def test_pulse_aggregate(db, client):
     assert body["quota"] == {"goods_return_used": 1, "goods_return_limit": 2}
     assert set(body["markers"]) == {"wb_last_poll", "signer_last_seen",
                                     "nkmt_loop_last", "returns_loop_last"}
+
+
+def _anomaly(db, km=KM):
+    apply_event(db, source="wb_excise", source_event_id="ret-early", kind="return",
+                km=km, srid="s1",
+                payload={"price": 1793, "fiscal_dt": "2026-09-01", "fiscal_doc_number": 77})
+
+
+def test_resolve_anomaly(db, client):
+    from marko.journal.models import Event
+    from marko.platform.models import PlatformAudit
+    _anomaly(db)
+    assert client.get("/v1/journal?state=ANOMALY_NO_RECEIPT", headers=AUTH).json()[0]["km"] == KM
+    r = client.post(f"/v1/journal/{KM}/resolve", headers=AUTH,
+                    json={"target": "PENDING_RETURN", "note": "продажа до запуска контура"})
+    assert r.status_code == 200
+    assert r.json() == {"km": KM, "from": "ANOMALY_NO_RECEIPT", "to": "PENDING_RETURN"}
+    # позиция перешла; last_event (WB-первичка для LP_RETURN) не затёрт
+    row = client.get("/v1/journal?state=PENDING_RETURN", headers=AUTH).json()[0]
+    assert row["km"] == KM and row["last_event"]["fiscal_doc_number"] == 77
+    # аудит: событие manual/resolve + строка audit_log
+    ev = db.query(Event).filter_by(kind="resolve").one()
+    assert ev.source == "manual" and ev.km == KM
+    assert ev.payload["from"] == "ANOMALY_NO_RECEIPT" and "контура" in ev.payload["note"]
+    assert "journal.resolve" in [a.action for a in db.query(PlatformAudit).all()]
+    # повторный resolve — уже не аномалия
+    assert client.post(f"/v1/journal/{KM}/resolve", headers=AUTH,
+                       json={"target": "NEW"}).status_code == 409
+
+
+def test_resolve_guards(db, client):
+    _sale(db)                                    # KM → PENDING_WITHDRAW, не аномалия
+    assert client.post(f"/v1/journal/{KM}/resolve", headers=AUTH,
+                       json={"target": "PENDING_RETURN"}).status_code == 409
+    assert client.post("/v1/journal/0104630520676025215NOPE001/resolve", headers=AUTH,
+                       json={"target": "PENDING_RETURN"}).status_code == 404
+    assert client.post(f"/v1/journal/{KM}/resolve", headers=AUTH_RO,
+                       json={"target": "PENDING_RETURN"}).status_code == 403
+    # целевое состояние — только «нормальные», не аномалии
+    assert client.post(f"/v1/journal/{KM}/resolve", headers=AUTH,
+                       json={"target": "ANOMALY_RESALE"}).status_code == 422
+    assert client.post(f"/v1/journal/{KM}/resolve", headers=AUTH,
+                       json={"target": "NEW", "note": "x" * 501}).status_code == 422
+
+
+def test_resolve_no_receipt_feeds_return_batch(db, client):
+    # регресс ревью: «продажа была до запуска» → PENDING_RETURN обязан
+    # превращаться в LP_RETURN (RETAIL_RETURN из чека), а не виснуть blocked:
+    # resolve проставляет withdrawn_by='wb', когда нашего LK_RECEIPT нет
+    from marko.journal.models import Item
+    from marko.mt.models import MtDoc
+    _anomaly(db)
+    r = client.post(f"/v1/journal/{KM}/resolve", headers=AUTH,
+                    json={"target": "PENDING_RETURN", "note": "продажа до запуска контура"})
+    assert r.status_code == 200
+    assert db.get(Item, KM).withdrawn_by == "wb"
+    rr = client.post("/v1/batches/return", headers=AUTH, json={"inn": INN})
+    assert rr.status_code == 200 and rr.json() == {"docs": 1, "blocked": 0}
+    doc = db.query(MtDoc).filter(MtDoc.type == "LP_RETURN").one()
+    assert doc.payload["return_type"] == "RETAIL_RETURN"
+    assert doc.payload["primary_document_number"] == "77"
+
+
+def test_resolve_withdrawn_sets_source(db, client):
+    from marko.journal.models import Item
+    apply_event(db, source="wb_excise", source_event_id="s-1", kind="sale",
+                km=KM, srid="s1", payload={"price": 1})
+    apply_event(db, source="wb_excise", source_event_id="s-2", kind="sale",
+                km=KM, srid="s2", payload={"price": 1})       # → ANOMALY_RESALE
+    r = client.post(f"/v1/journal/{KM}/resolve", headers=AUTH,
+                    json={"target": "WITHDRAWN", "note": "уже выведен"})
+    assert r.status_code == 200
+    it = db.get(Item, KM)
+    assert it.state == "WITHDRAWN" and it.withdrawn_by == "wb"

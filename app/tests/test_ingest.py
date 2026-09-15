@@ -83,6 +83,56 @@ def test_ingest_fixture_split(db):
     assert db.query(Event).filter_by(kind="skip_fbw").count() == expected["skipped_fbw"]
 
 
+def test_ingest_sorts_rows_by_fiscal_dt(db):
+    # профилактика ложных аномалий: строки WB приходят не по датам (возвраты
+    # отстают на 0–2 дня), применение в порядке выдачи даёт ложный
+    # NO_RECEIPT; сортировка по fiscal_dt восстанавливает хронологию
+    km = "0104630520676025215SORT001"
+    rows = [
+        {"excise_short": km, "srid": "eS.r1.0.0", "operation_type_id": 2,
+         "price": 1793, "nm_id": 1, "fiscal_dt": "2026-09-05"},
+        {"excise_short": km, "srid": "eS.s1.0.0", "operation_type_id": 1,
+         "price": 1793, "nm_id": 1, "fiscal_dt": "2026-09-01"},
+    ]
+    stats = ingest_excise(db, rows, fbw_docs=set(), known_docs={"eS.r1", "eS.s1"})
+    assert stats == {"sale": 1, "return": 1, "skipped_fbw": 0, "duplicates": 0, "fbs_unknown": 0}
+    from marko.journal.models import Item
+    assert db.get(Item, km).state == "PENDING_RETURN"
+
+
+def test_ingest_sort_fixes_out_of_order_resale(db):
+    # полный цикл s1 → r1 → s2, выданный WB задом-наперёд (r1, s2, s1):
+    # без сортировки возврат лёг бы на NEW (NO_RECEIPT), продажи — в UNKNOWN
+    km = "0104630520676025215SORT002"
+    rows = [
+        {"excise_short": km, "srid": "eO.r1.0.0", "operation_type_id": 2,
+         "price": 1, "nm_id": 1, "fiscal_dt": "2026-09-07"},
+        {"excise_short": km, "srid": "eO.s2.0.0", "operation_type_id": 1,
+         "price": 1, "nm_id": 1, "fiscal_dt": "2026-09-10"},
+        {"excise_short": km, "srid": "eO.s1.0.0", "operation_type_id": 1,
+         "price": 1, "nm_id": 1, "fiscal_dt": "2026-09-05"},
+    ]
+    stats = ingest_excise(db, rows, fbw_docs=set(), known_docs={"eO.r1", "eO.s1", "eO.s2"})
+    assert stats == {"sale": 2, "return": 1, "skipped_fbw": 0, "duplicates": 0, "fbs_unknown": 0}
+    from marko.journal.models import Item
+    assert db.get(Item, km).state == "PENDING_WITHDRAW"
+
+
+def test_ingest_missing_fiscal_dt_applies_last(db):
+    # бездатовое событие — в конец очереди (как NULLS LAST в repair):
+    # продажа с датой применяется раньше бездатовозврата возврата
+    km = "0104630520676025215SORT003"
+    rows = [
+        {"excise_short": km, "srid": "eM.x.0.0", "operation_type_id": 2,
+         "price": 1, "nm_id": 1},
+        {"excise_short": km, "srid": "eM.s.0.0", "operation_type_id": 1,
+         "price": 1, "nm_id": 1, "fiscal_dt": "2026-09-01"},
+    ]
+    ingest_excise(db, rows, fbw_docs=set(), known_docs={"eM.x", "eM.s"})
+    from marko.journal.models import Item
+    assert db.get(Item, km).state == "PENDING_RETURN"
+
+
 def test_ingest_idempotent_rerun(db):
     docs = {order_doc(r["srid"]) for r in FIXT}
     ingest_excise(db, FIXT, fbw_docs=set(), known_docs=docs)
