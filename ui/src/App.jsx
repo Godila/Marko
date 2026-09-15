@@ -909,6 +909,7 @@ function AnomalyCard({ it, ctx }) {
         closeDrawer(); bump()
       } catch (e) { notify('Не удалось разобрать', e.message, 'bad'); setBusy(false) } })
   return <div>
+    <div style={{ marginBottom: 12 }}><KmCell km={it.km} /></div>
     <p>{help.what}</p>
     {help.why?.length ? <>
       <b style={{ fontSize: 12.5 }}>Почему бывает</b>
@@ -961,6 +962,7 @@ function KmCard({ it, ctx }) {
         ctx.closeDrawer(); bump()
       } catch (e) { notify('Не удалось пометить', e.message, 'bad'); setBusy(false) } })
   return <div>
+    <div style={{ marginBottom: 12 }}><KmCell km={st.km} /></div>
     <b style={{ fontSize: 12.5 }}>Честный знак</b>
     <div className="twrap" style={{ margin: '6px 0 8px' }}><table className="t small"><tbody>
       <tr><td className="faint" style={{ width: '40%' }}>Статус КИЗ</td>
