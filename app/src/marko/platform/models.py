@@ -3,10 +3,12 @@ import hmac
 import os
 from datetime import datetime, timezone
 
-from sqlalchemy import DateTime, ForeignKey, Integer, String, Text, func
+from sqlalchemy import DateTime, ForeignKey, Index, Integer, String, Text, func
 from sqlalchemy.dialects.postgresql import JSON
 from sqlalchemy.orm import Mapped, mapped_column
 from marko.db import Base
+
+USER_SCOPES = "read,docs:submit,nkmt:import"   # права консольного оператора (без admin/signer)
 
 
 def hash_token(token: str) -> str:
@@ -86,7 +88,7 @@ class PlatformUser(Base):
     principal_id: Mapped[int] = mapped_column(ForeignKey("platform.principals.id"), unique=True)
     username: Mapped[str] = mapped_column(String(64), unique=True)
     password_hash: Mapped[str] = mapped_column(String(255))
-    scopes: Mapped[str] = mapped_column(Text, default="read,docs:submit,nkmt:import")
+    scopes: Mapped[str] = mapped_column(Text, default=USER_SCOPES)
     fail_count: Mapped[int] = mapped_column(Integer, default=0)
     fail_until: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now())
@@ -95,11 +97,12 @@ class PlatformUser(Base):
 class PlatformSession(Base):
     """Серверная сессия консоли; сырой секрет живёт только в HttpOnly-cookie."""
     __tablename__ = "sessions"
-    __table_args__ = {"schema": "platform"}
+    __table_args__ = (Index("ix_sessions_expires_at", "expires_at"),
+                      {"schema": "platform"})
     id: Mapped[int] = mapped_column(primary_key=True)
     principal_id: Mapped[int] = mapped_column(ForeignKey("platform.principals.id"))
     token_hash: Mapped[str] = mapped_column(String(64), unique=True)
-    scopes: Mapped[str] = mapped_column(Text, default="read,docs:submit,nkmt:import")
+    scopes: Mapped[str] = mapped_column(Text, default=USER_SCOPES)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=_utcnow)
     last_seen_at: Mapped[datetime] = mapped_column(DateTime, default=_utcnow)
     expires_at: Mapped[datetime] = mapped_column(DateTime)

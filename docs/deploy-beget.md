@@ -125,9 +125,10 @@ docker compose logs --tail 20 worker        # no exceptions
 (platform.tokens) продолжают работать для signer-агента и скриптов.
 
 1. Завести учётку оператора (пароль вводится в терминал дважды, минимум 10 символов,
-   нигде не печатается и не попадает в history — команда без аргументов):
+   нигде не печатается и не попадает в history — команда без аргументов; БЕЗ флага -T,
+   иначе getpass не скроет ввод):
    ```
-   cd /opt/marko/repo/deploy && docker compose exec -T api python -m marko.create_operator
+   cd /opt/marko/repo/deploy && docker compose exec api python -m marko.create_operator
    ```
    Логин: Enter (= operator) или своё имя; затем пароль два раза.
 2. Смена пароля — повторный запуск той же команды (активные сессии не инвалидируются;

@@ -14,7 +14,7 @@ from datetime import timedelta
 from sqlalchemy.orm import Session
 
 from marko.platform.models import (
-    PlatformPrincipal, PlatformSession, PlatformUser,
+    USER_SCOPES, PlatformPrincipal, PlatformSession, PlatformUser,
     _utcnow, hash_password, hash_token, verify_password,
 )
 
@@ -53,21 +53,24 @@ def start_session(db: Session, principal_id: int, scopes: str) -> str:
     return raw
 
 
-def resolve_session(db: Session, raw: str) -> PlatformSession | None:
-    """Живая сессия или None; просроченная удаляется (ленивая чистка),
-    при остатке < RENEW_AFTER — скользящее продление expires_at."""
+def resolve_session(db: Session, raw: str) -> tuple[PlatformSession | None, bool]:
+    """Живая сессия + флаг «продлена» (нужен пере-Set-Cookie в браузере) или
+    (None, False); просроченная удаляется (ленивая чистка), при остатке
+    < RENEW_AFTER — скользящее продление expires_at."""
     sess = db.query(PlatformSession).filter_by(token_hash=hash_token(raw)).first()
     if sess is None:
-        return None
+        return None, False
     now = _utcnow()
     if sess.expires_at < now:
         db.delete(sess)
         db.commit()
-        return None
+        return None, False
+    renewed = False
     if SESSION_TTL - (sess.expires_at - now) > RENEW_AFTER:
         sess.last_seen_at, sess.expires_at = now, now + SESSION_TTL
         db.commit()
-    return sess
+        renewed = True
+    return sess, renewed
 
 
 def close_session(db: Session, raw: str) -> PlatformSession | None:
@@ -89,7 +92,7 @@ def verify_login(db: Session, username: str, password: str) -> PlatformUser:
     """Логин+пароль → user. Гейт блокировки — ДО scrypt; при неизвестном
     username — холостой scrypt (анти-timing); неудача наращивает fail_until
     экспоненциально (2**N сек, потолок 30с)."""
-    user = db.query(PlatformUser).filter_by(username=username).first()
+    user = db.query(PlatformUser).filter_by(username=username).with_for_update().first()
     now = _utcnow()
     if user is not None and user.fail_until and user.fail_until > now:
         raise LoginThrottled(int((user.fail_until - now).total_seconds()) + 1)

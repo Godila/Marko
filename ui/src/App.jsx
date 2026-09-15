@@ -11,18 +11,14 @@ const errOf = async (r) => {
 // сессия живёт в HttpOnly-cookie — браузер прикладывает её сам (same-origin).
 // 401 в любом вызове — единое событие: App вернёт оператора на экран входа.
 const send = async (path, opts = {}) => {
-  const r = await fetch(path, { ...opts, headers: { ...(opts.headers || {}) } })
+  const r = await fetch(path, opts)
   if (r.status === 401) window.dispatchEvent(new Event('marko:unauthorized'))
   if (!r.ok) throw await errOf(r)
   return r.headers.get('content-type')?.includes('json') ? r.json() : r.text()
 }
-const api = (path, opts = {}) => send(path, {
-  ...opts, headers: { 'Content-Type': 'application/json', ...(opts.headers || {}) } })
-// НКМТ: FormData без Content-Type, в ошибке виден {detail} (409/502)
-const nkmt = (path, opts = {}) => {
-  const json = opts.body != null && !(opts.body instanceof FormData)
-  return send(path, { ...opts, headers: json ? { 'Content-Type': 'application/json' } : {} })
-}
+// JSON-телу ставим Content-Type; FormData (импорт НКМТ) — нет, boundary ставит браузер
+const api = (path, opts = {}) => send(path, { ...opts,
+  headers: opts.body instanceof FormData ? {} : { 'Content-Type': 'application/json' } })
 const dl = async (path, name) => {   // скачивание через cookie-сессию, не через URL
   const r = await fetch(path)
   if (r.status === 401) window.dispatchEvent(new Event('marko:unauthorized'))
@@ -481,13 +477,13 @@ function ImportPreview({ ctx, file, onDone }) {
   const [busy, setBusy] = useState(false)
   useEffect(() => {
     const fd = new FormData(); fd.append('file', file)
-    nkmt('/v1/nkmt/import/preview', { method: 'POST', body: fd })
+    api('/v1/nkmt/import/preview', { method: 'POST', body: fd })
       .then(setData).catch((e) => setErr(e.message))
   }, [])
   const doImport = () => { if (busy) return
     setBusy(true)
     const fd = new FormData(); fd.append('file', file)
-    nkmt('/v1/nkmt/import', { method: 'POST', body: fd })
+    api('/v1/nkmt/import', { method: 'POST', body: fd })
       .then((r) => { notify(`Импорт завершён: батч №${r.batch_id}`, `ok ${r.stats.ok}, ошибок ${r.stats.error}`)
         closeDrawer(); onDone(); bump() })
       .catch((e) => { notify('Импорт не удался', e.message, 'bad'); setBusy(false) }) }
@@ -529,11 +525,11 @@ function Catalog({ ctx }) {
   const [cardFilter, setCardFilter] = useState('')
   const [file, setFile] = useState(null)
   const fileRef = useRef(null)
-  useEffect(() => { nkmt('/v1/nkmt/batches').then(setBatches)
+  useEffect(() => { api('/v1/nkmt/batches').then(setBatches)
     .catch((e) => { setBatches([]); notify('Не удалось загрузить батчи', e.message, 'bad') }) }, [ctx.tick])
   const stageMatch = STAGES.find((x) => x.key === stage)
   useEffect(() => { if (openId != null)
-    nkmt(`/v1/nkmt/batches/${openId}?card_status=${encodeURIComponent(cardFilter)}`)
+    api(`/v1/nkmt/batches/${openId}?card_status=${encodeURIComponent(cardFilter)}`)
       .then((r) => setCards(r.cards || []))
       .catch((e) => notify('Не удалось загрузить карточки', e.message, 'bad')) }, [openId, cardFilter])
   const toggle = (id) => { if (openId === id) { setOpenId(null); setCards(null); return }
@@ -542,7 +538,7 @@ function Catalog({ ctx }) {
     kind === 'feed' ? 'Подать фид в Национальный каталог?' : `Выполнить «${kind}» для батча №${id}?`,
     kind === 'feed' ? 'Карточки уйдут в НК; дальше модерация и подпись идут автоматически (воркер).' : 'Ручной прогон того же, что делает автоматика.',
     `/v1/nkmt/batches/${id}/${kind}`, kind === 'feed' ? 'Подать фид' : 'Выполнить',
-    async () => { try { const r = await nkmt(`/v1/nkmt/batches/${id}/${kind}`, { method: 'POST' })
+    async () => { try { const r = await api(`/v1/nkmt/batches/${id}/${kind}`, { method: 'POST' })
         notify(okMsg(r), ''); bump()
       } catch (e) { notify('Не удалось', e.message, 'bad') } })
   const showPreview = (f) => { if (!f) return
@@ -633,29 +629,29 @@ function Refs({ ctx }) {
   const [rtypes, setRtypes] = useState([]); const [rtypeInput, setRtypeInput] = useState('')
   const [rprod, setRprod] = useState('')
   const [rzBrand, setRzBrand] = useState(''); const [rzType, setRzType] = useState(''); const [rz, setRz] = useState(null)
-  useEffect(() => { nkmt('/v1/nkmt/declarations').then(setDecls).catch(() => setDecls([]))
-    nkmt('/v1/nkmt/rules').then(setRules).catch(() => setRules([]))
-    nkmt('/v1/nkmt/dicts/hints').then(setHints).catch(() => {}) }, [ctx.tick])
+  useEffect(() => { api('/v1/nkmt/declarations').then(setDecls).catch(() => setDecls([]))
+    api('/v1/nkmt/rules').then(setRules).catch(() => setRules([]))
+    api('/v1/nkmt/dicts/hints').then(setHints).catch(() => {}) }, [ctx.tick])
   // формы дефолтов и эмиттера грузятся один раз при входе: 60-секундный тик
   // консоли не должен затирать несохранённые правки оператора
   useEffect(() => {
-    nkmt('/v1/nkmt/defaults').then(setDefs)
+    api('/v1/nkmt/defaults').then(setDefs)
       .catch((e) => { setDefs({}); notify('Дефолты не загрузились', e.message, 'bad') })
     api('/v1/emitter/defaults').then(setEm).catch(() => setEm({ fias_id: '', primary_custom_name: '' }))
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [])
   const addDecl = () => { if (!dnum || !ddate) return notify('Заполните номер и дату', '', 'warn')
-    nkmt('/v1/nkmt/declarations', { method: 'POST', body: JSON.stringify({ doc_number: dnum, doc_date: ddate, doc_type: dtype, title: dtitle }) })
+    api('/v1/nkmt/declarations', { method: 'POST', body: JSON.stringify({ doc_number: dnum, doc_date: ddate, doc_type: dtype, title: dtitle }) })
       .then(() => { setDnum(''); setDdate(''); setDtitle(''); notify('Декларация добавлена', ''); ctx.bump() })
       .catch((e) => notify('Не добавлено', e.message, 'bad')) }
   const delDecl = (d) => confirm('Удалить декларацию?', d.doc_number, 'Карточки, где она уже подставлена, не изменятся.', 'Удалить',
-    () => nkmt(`/v1/nkmt/declarations/${d.id}`, { method: 'DELETE' })
+    () => api(`/v1/nkmt/declarations/${d.id}`, { method: 'DELETE' })
       .then(() => { notify('Декларация удалена', ''); ctx.bump() })
       .catch((e) => notify('Не удалось удалить', e.message, 'bad')))
   const addRule = () => { if (!rbrand.trim() && !rtypes.length)
       return notify('Заполните бренд или вид товара', 'Правило без условия не создаётся — оно подходило бы всем строкам.', 'warn')
     if (!rdecl) return notify('Выберите декларацию', '', 'warn')
-    nkmt('/v1/nkmt/rules', { method: 'POST',
+    api('/v1/nkmt/rules', { method: 'POST',
         body: JSON.stringify({ brand: rbrand, product_types: rtypes, declaration_id: Number(rdecl), producer: rprod }) })
       .then(() => { setRbrand(''); setRtypes([]); setRtypeInput(''); setRprod(''); setRdecl('')
         notify('Правило добавлено', 'Сработает при следующем импорте.'); ctx.bump() })
@@ -666,10 +662,10 @@ function Refs({ ctx }) {
   const delRule = (r) => confirm('Удалить правило РД?',
     `${r.brand || 'любой бренд'} × ${r.product_types?.length ? r.product_types.join(', ') : 'любой вид'}`,
     'Правило перестанет действовать при следующем импорте.', 'Удалить',
-    () => nkmt(`/v1/nkmt/rules/${r.id}`, { method: 'DELETE' })
+    () => api(`/v1/nkmt/rules/${r.id}`, { method: 'DELETE' })
       .then(() => { notify('Правило удалено', ''); ctx.bump() })
       .catch((e) => notify('Не удалось удалить', e.message, 'bad')))
-  const saveDefs = () => nkmt('/v1/nkmt/defaults', { method: 'PUT', body: JSON.stringify(defs || {}) })
+  const saveDefs = () => api('/v1/nkmt/defaults', { method: 'PUT', body: JSON.stringify(defs || {}) })
     .then(() => notify('Дефолты сохранены', 'Подставятся при следующем импорте.'))
     .catch((e) => notify('Не сохранено', e.message, 'bad'))
   // пара номер+дата: реестр допускает одинаковые номера с разными датами
@@ -691,7 +687,7 @@ function Refs({ ctx }) {
     if (k === 'declaration_number') d.declaration_date = d.declaration_date ?? ''
     if (k === 'declaration_date') d.declaration_number = d.declaration_number ?? ''
     setDefs(d) }
-  const tryResolve = () => nkmt('/v1/nkmt/resolve', { method: 'POST',
+  const tryResolve = () => api('/v1/nkmt/resolve', { method: 'POST',
       body: JSON.stringify({ brand: rzBrand, product_type: rzType }) })
     .then(setRz).catch((e) => notify('Проверка не удалась', e.message, 'bad'))
   const saveEm = () => api('/v1/emitter/defaults', { method: 'PUT', body: JSON.stringify(em || {}) })
@@ -1077,13 +1073,18 @@ export default function App() {
     fetch('/v1/auth/login', { method: 'POST', headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ username: user.trim(), password: pass }) })
       .then(async (r) => {
-        if (r.status === 429) return setErr('Слишком много попыток. Подождите минуту и попробуйте снова.')
+        if (r.status === 429) {
+          const wait = parseInt(r.headers.get('Retry-After') || '60', 10)
+          return setErr(`Слишком много попыток. Подождите ${wait} с и попробуйте снова.`) }
+        if (r.status >= 500) return setErr('Сервер недоступен. Попробуйте ещё раз.')
         if (!r.ok) return setErr('Неверный логин или пароль. Проверьте раскладку и повторите.')
-        setMe(await r.json()); setErr('') })
+        setMe(await r.json()); setUser(''); setPass(''); setErr('') })
       .catch(() => setErr('Сервер недоступен. Попробуйте ещё раз.'))
       .finally(() => setBusy(false)) }
   const logout = () => fetch('/v1/auth/logout', { method: 'POST' })
-    .catch(() => {}).finally(() => setMe(null))
+    .then((r) => { if (!r.ok) throw new Error() })
+    .then(() => setMe(null))
+    .catch(() => { setErr('Не удалось выйти: сервер недоступен. Проверьте сеть — до подтверждённого выхода консоль откроется и перезагрузкой.'); setMe(null) })
   if (!me) return <div id="auth" role="dialog" aria-label="Вход в консоль">
     <div className="auth-card">
       <div className="brandline"><Mark size={40} fg="#17242B" accent="#C81E36" />
