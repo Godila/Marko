@@ -42,6 +42,13 @@ const CHIP_ORDER = ['PENDING_WITHDRAW', 'PENDING_RETURN', 'WITHDRAWN', 'RETURNED
 // статус КИЗ по данным Честного ЗНАКа (cises/info); пусто → «—» (не проверялся)
 const CIS_STATUS = { introduced: ['в обороте', 'blue'], in_circulation: ['в обороте', 'blue'],
   retired: ['выбыл', 'green'], written_off: ['списан', 'grey'] }
+// состояние lookup заказа WB (журнал): пояснение для пустых/пограничных случаев
+const ORDER_LOOKUP_STATUS = {
+  found: 'Коды маркировки по заказу найдены в журнале.',
+  lag: 'Заказ есть в реестре WB, но строки продаж по нему в журнал ещё не приходили. WB отдаёт их с лагом до ~2 недель — проверьте позже.',
+  fbw: 'Заказ вне контура FBS: строки по нему приходили, но в журнал не попадают (FBW-остатки на складе WB).',
+  unknown: 'Такого заказа нет ни в реестре WB, ни в журнале. Проверьте номер — возможно, это заказ другого кабинета или опечатка.',
+}
 const DOC_STATUS = { draft: ['черновик', 'grey'], signing: ['подписывается', 'blue'],
   submitted: ['подан', 'blue'], checked_ok: ['принят ЧЗ', 'green'], error: ['ошибка', 'red'] }
 const CARD_STATUS = { ok: ['новая', 'grey'], fed: ['подана', 'blue'], moderation: ['модерация', 'amber'],
@@ -177,6 +184,18 @@ const KmCell = ({ km }) => (
   <span className="km">{km}
     <button title="Скопировать" onClick={(e) => { e.stopPropagation()
       navigator.clipboard?.writeText(km).catch(() => {}) }}>{I.copy}</button></span>)
+
+// раскрытые ell-ячейки: клик/Enter показывает текст целиком; клик не
+// открывает карточку строки (stopPropagation против onClick у <tr>)
+const EllCell = ({ title, mono, children }) => {
+  const [open, setOpen] = useState(false)
+  return <td tabIndex={0}
+    className={`ell${open ? ' ell-open' : ''}${mono ? ' mono' : ''}`}
+    title={open ? undefined : title || undefined}
+    onClick={(e) => { e.stopPropagation(); setOpen(!open) }}
+    onKeyDown={(e) => { if (e.key === 'Enter') { e.stopPropagation(); setOpen(!open) } }}>
+    {children}</td>
+}
 
 const Head = ({ title, sub, tools }) => (
   <div className="view-head">
@@ -406,8 +425,8 @@ function Withdraw({ ctx }) {
         <thead><tr><th>Код маркировки</th><th>Наименование</th><th>Последний сигнал</th></tr></thead>
         <tbody>{(pend || []).map((it) => <tr key={it.km}>
           <td><KmCell km={it.km} /></td>
-          <td className="ell" title={it.cis_product_name || ''}>
-            {it.cis_product_name || <span className="faint">—</span>}</td>
+          <EllCell title={it.cis_product_name || ''}>
+            {it.cis_product_name || <span className="faint">—</span>}</EllCell>
           <td style={{ fontSize: 12.5 }}>{evLine(it)}</td></tr>)}
           {pend && !pend.length && <tr><td colSpan={3}><div className="empty"><b>Всё выведено</b>Новые продажи появятся после поллинга WB — 06:30 и 18:30 МСК.</div></td></tr>}
         </tbody></table></div>
@@ -924,6 +943,8 @@ function AnomalyCard({ it, ctx }) {
       <tr><td className="faint">Чек ККТ</td><td className="mono">{ev.fiscal_doc_number ?? '—'}</td></tr>
       <tr><td className="faint">Цена</td><td>{ev.price ? rub(ev.price) : '—'}</td></tr>
       <tr><td className="faint">nm_id</td><td className="mono">{ev.nm_id ?? '—'}</td></tr>
+      <tr><td className="faint">Заказ (srid)</td>
+        <td className="mono" style={{ wordBreak: 'break-all' }}>{ev.srid || '—'}</td></tr>
     </tbody></table></div>
     <b style={{ fontSize: 12.5 }}>Разобрать</b>
     <div className="row" style={{ gap: 8, marginTop: 8, flexWrap: 'wrap' }}>
@@ -993,6 +1014,69 @@ function KmCard({ it, ctx }) {
   </div>
 }
 
+/* карточка заказа WB (результат lookup из поиска журнала) */
+function OrderCard({ data, ctx }) {
+  const { openDrawer } = ctx
+  const o = data.order
+  const D = { fbs: 'FBS (наша отгрузка)', fbo: 'FBW (склад WB)' }
+  return <div>
+    <div style={{ marginBottom: 12 }}><KmCell km={data.order_doc} /></div>
+    <div className="note" style={{ marginBottom: 12 }}>{ORDER_LOOKUP_STATUS[data.status] || ''}</div>
+    {data.status === 'found' && !o &&
+      <p style={{ fontSize: 12.5, color: 'var(--muted)', margin: '0 0 14px' }}>
+        Сам заказ уже ушёл из снапшота WB: выкупленные заказы исчезают из него
+        на 1–3 дня раньше, чем приходят строки продаж. На данные журнала это не влияет.</p>}
+    {o ? <><b style={{ fontSize: 12.5 }}>Реестр WB</b>
+      <div className="twrap" style={{ margin: '6px 0 14px' }}><table className="t small"><tbody>
+        <tr><td className="faint" style={{ width: '40%' }}>Тип доставки</td>
+          <td>{D[o.delivery_type] || o.delivery_type || '—'}</td></tr>
+        <tr><td className="faint">nm_id</td><td className="mono">{o.nm_id ?? '—'}</td></tr>
+        <tr><td className="faint">Создан</td>
+          <td className="mono">{o.order_created_at ? fmtDay(o.order_created_at) : '—'}</td></tr>
+        <tr><td className="faint">Видели в реестре</td><td className="mono">{fmtD(o.last_seen)}</td></tr>
+      </tbody></table></div></>
+      : <p style={{ fontSize: 12.5, color: 'var(--muted)', margin: '0 0 14px' }}>В реестре WB этого заказа нет.</p>}
+    <b style={{ fontSize: 12.5 }}>Коды маркировки ({data.items.length})</b>
+    {data.items.length ? <div className="twrap" style={{ margin: '6px 0 8px' }}>
+      <table className="t small">
+        <thead><tr><th>Код</th><th>Состояние</th><th>Последний сигнал</th></tr></thead>
+        <tbody>{data.items.map((it) => { const [lbl] = ITEM_STATES[it.state] || [it.state]
+          return <tr key={it.km} style={{ cursor: 'pointer' }}
+            onClick={() => openDrawer(<>КМ · {lbl} ·&nbsp;<span className="mono"
+              style={{ fontSize: 12, color: 'var(--muted)' }}>{it.state}</span></>,
+              <KmCard it={it} ctx={ctx} />)}>
+            <td><KmCell km={it.km} /></td>
+            <td><Badge dict={ITEM_STATES} v={it.state} /></td>
+            <td style={{ fontSize: 12.5 }}>{evLine(it)}</td></tr> })}
+        </tbody></table></div>
+      : <div className="empty"><b>Кодов по заказу нет</b>Пояснение выше — почему их нет и что делать.</div>}
+  </div>
+}
+
+/* декларативный конфиг колонок журнала — фундамент под будущее управление
+   составом колонок (переключатели пока не делаем): ell — обрезка с
+   кликом-раскрытием, mono — кодовая колонка (DESIGN.md 11), text — tooltip */
+const JOURNAL_COLUMNS = [
+  { key: 'km', label: 'Код маркировки', render: (it) => <KmCell km={it.km} /> },
+  { key: 'name', label: 'Наименование', ell: true, text: (it) => it.cis_product_name || '',
+    render: (it) => it.cis_product_name || <span className="faint">—</span> },
+  { key: 'state', label: 'Состояние', render: (it) => <Badge dict={ITEM_STATES} v={it.state} /> },
+  { key: 'sig', label: 'Последний сигнал', render: (it) => <span style={{ fontSize: 12.5 }}>{evLine(it)}</span> },
+  { key: 'order', label: 'Заказ WB', ell: true, mono: true, text: (it) => it.last_event?.srid || '',
+    render: (it) => it.last_event?.srid || <span className="faint">—</span> },
+  { key: 'cz', label: 'ЧЗ', render: (it) => it.cis_status ? <Badge dict={CIS_STATUS} v={it.cis_status} /> : <span className="faint">—</span> },
+  { key: 'upd', label: 'Обновлён', mono: true, render: (it) => fmtD(it.updated_at) },
+]
+
+// ID заказа WB: [префикс.]тело[.n.m]. Тела реальных rid двух видов (фикстура
+// эксайза): 32–33 alnum (маркер i/r + hex) и uuid с дефисами; префикс бывает
+// 'eBQ' и служебный 'WH_RO_SRN_MW'. КМ не матчится (КМ начинается с '01',
+// содержит GS-разделитель '!' и ':'-криптогруппы не из этого алфавита)
+const RID_BODY = '(?:[0-9a-z]{32,33}|[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12})'
+const ORDER_ID_RE = new RegExp(`^(?:[0-9a-z_]{1,16}\\.)?${RID_BODY}(?:\\.\\d+\\.\\d+)?$`, 'i')
+const isOrderId = (s) => { const v = (s || '').trim().toLowerCase()
+  return !v.startsWith('01') && !v.includes('!') && ORDER_ID_RE.test(v) }
+
 function Journal({ ctx, initial }) {
   const { openDrawer, notify, confirm, bump } = ctx
   const [rows, setRows] = useState(null)
@@ -1000,14 +1084,29 @@ function Journal({ ctx, initial }) {
   const [state, setState] = useState(initial || '')
   const [q, setQ] = useState('')
   const [syncBusy, setSyncBusy] = useState(false)
+  const lastLookup = useRef('')
   useEffect(() => { api(`/v1/journal?limit=1000${state && state !== 'ANOMALY' ? `&state=${encodeURIComponent(state)}` : ''}`)
       .then(setRows).catch(() => setRows([]))
     api('/v1/journal/stats').then(setStats).catch(() => {}) }, [ctx.tick, state])
+  const qv = q.trim().toLowerCase()
+  // вставка ID заказа — фильтр по документу (без хвоста '.n.m'): строка с
+  // любым суффиксом этого заказа остаётся видимой под открывшейся карточкой
+  const qDoc = isOrderId(q) ? qv.replace(/\.\d+\.\d+$/, '') : null
   const shown = (rows || []).filter((it) =>
     (state !== 'ANOMALY' || it.state.startsWith('ANOMALY'))
-    && (!q || it.km.toLowerCase().includes(q.toLowerCase()) || evLine(it).toLowerCase().includes(q.toLowerCase())))
+    && (!qv || it.km.toLowerCase().includes(qv) || evLine(it).toLowerCase().includes(qv)
+      || (qDoc && (it.last_event?.srid || '').toLowerCase().startsWith(qDoc))))
   const anomalies = Object.entries(stats).filter(([k]) => k.startsWith('ANOMALY')).reduce((a, [, v]) => a + v, 0)
   const total = Object.values(stats).reduce((a, v) => a + v, 0)
+  const lookupOrder = async (val) => { const rid = val.trim()
+    lastLookup.current = rid
+    try { const r = await api(`/v1/wb/lookup?rid=${encodeURIComponent(rid)}`)
+      openDrawer(<>Заказ WB ·&nbsp;<span className="mono"
+        style={{ fontSize: 12, color: 'var(--muted)' }}>{r.order_doc}</span></>,
+        <OrderCard data={r} ctx={ctx} />)
+    } catch (e) { lastLookup.current = ''; notify('Lookup не удался', e.message, 'bad') } }
+  const onQ = (e) => { const v = e.target.value; setQ(v)
+    if (isOrderId(v) && v.trim() !== lastLookup.current) lookupOrder(v) }
   const doSync = () => confirm('Обновить статусы ЧЗ?',
     `Все коды журнала (${total}) будут проверены в Честном Знаке. Коды, которые ЧЗ уже считает выведенными и по которым у нас нет поданной заявки на вывод, перейдут в «выведен (WB)» с записью в журнал.`,
     `${total} КМ`, 'Проверить в ЧЗ', async () => {
@@ -1030,13 +1129,16 @@ function Journal({ ctx, initial }) {
           onClick={() => setState(s)}>{lbl} <span className="n">{stats[s] || 0}</span></button> })}
     </div>
     <div className="frow" style={{ marginBottom: 14 }}>
-      <div className="search">{I.search}
-        <input value={q} placeholder="Поиск по КМ или событию…" onChange={(e) => setQ(e.target.value)} /></div>
-      <span className="faint" style={{ fontSize: 12 }}>показано <span className="mono">{shown.length}</span></span>
+      <div className="search" style={{ flex: '1 1 380px', maxWidth: 560 }}>{I.search}
+        <input value={q} placeholder="Поиск по КМ, событию или ID заказа WB…"
+          onChange={onQ}
+          onKeyDown={(e) => { if (e.key === 'Enter' && isOrderId(q)) lookupOrder(q) }} /></div>
+      <span className="faint" style={{ fontSize: 12 }}>показано <span className="mono">{shown.length}</span>
+        {isOrderId(q) && <> · Enter — карточка заказа WB</>}</span>
     </div>
     <div className="card">
       <div className="twrap"><table className="t">
-        <thead><tr><th>Код маркировки</th><th>Наименование</th><th>Состояние</th><th>Последний сигнал</th><th>ЧЗ</th><th>Обновлён</th></tr></thead>
+        <thead><tr>{JOURNAL_COLUMNS.map((c) => <th key={c.key}>{c.label}</th>)}</tr></thead>
         <tbody>{shown.map((it) => { const [lbl] = ITEM_STATES[it.state] || [it.state]
           const anom = it.state.startsWith('ANOMALY')
           return <tr key={it.km} className={anom ? 'rowhot' : ''} style={{ cursor: 'pointer' }}
@@ -1045,15 +1147,11 @@ function Journal({ ctx, initial }) {
               anom
                 ? <AnomalyCard it={it} ctx={ctx} />
                 : <KmCard it={it} ctx={ctx} />)}>
-            <td><KmCell km={it.km} /></td>
-            <td className="ell" title={it.cis_product_name || ''}>
-              {it.cis_product_name || <span className="faint">—</span>}</td>
-            <td><Badge dict={ITEM_STATES} v={it.state} /></td>
-            <td style={{ fontSize: 12.5 }}>{evLine(it)}</td>
-            <td>{it.cis_status ? <Badge dict={CIS_STATUS} v={it.cis_status} />
-              : <span className="faint">—</span>}</td>
-            <td className="mono">{fmtD(it.updated_at)}</td></tr> })}
-          {rows && !shown.length && <tr><td colSpan={6}><div className="empty"><b>Ничего не найдено</b>Ослабьте фильтр или очистите поиск.</div></td></tr>}
+            {JOURNAL_COLUMNS.map((c) => c.ell
+              ? <EllCell key={c.key} title={c.text(it)} mono={c.mono}>{c.render(it)}</EllCell>
+              : <td key={c.key} className={c.mono ? 'mono' : undefined}>{c.render(it)}</td>)}
+          </tr> })}
+          {rows && !shown.length && <tr><td colSpan={JOURNAL_COLUMNS.length}><div className="empty"><b>Ничего не найдено</b>Ослабьте фильтр или очистите поиск.</div></td></tr>}
         </tbody></table></div>
     </div>
   </>

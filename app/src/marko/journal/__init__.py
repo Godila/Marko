@@ -26,6 +26,14 @@ def apply_event(db: Session, *, source: str, source_event_id: str, kind: str,
     return new_state, True
 
 
+def item_row(it: Item) -> dict:
+    """Сериализация позиции журнала для консольных API (/v1/journal, wb-lookup)."""
+    return {"km": it.km, "state": it.state, "withdrawn_by": it.withdrawn_by,
+            "updated_at": it.updated_at, "last_event": it.last_event,
+            "cis_status": it.cis_status, "cis_product_name": it.cis_product_name,
+            "cis_checked_at": it.cis_checked_at}
+
+
 def log_action(db: Session, *, source: str, source_event_id: str, kind: str,
                km: str, srid: str, payload: dict) -> bool:
     """Тот же UPSERT по (source, source_event_id), что apply_event, но БЕЗ стейт-перехода.

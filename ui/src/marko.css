@@ -269,3 +269,7 @@ table.t td.ell{max-width:220px;overflow:hidden;text-overflow:ellipsis;white-spac
   .grid2{grid-template-columns:1fr}
   .formgrid{grid-template-columns:1fr}
 }
+/* раскрытие обрезанных ячеек: клик по td.ell показывает текст целиком */
+table.t td.ell{cursor:pointer}
+table.t td.ell-open{max-width:none;overflow:visible;white-space:normal;word-break:break-word}
+table.t td.ell-open.mono{word-break:break-all}

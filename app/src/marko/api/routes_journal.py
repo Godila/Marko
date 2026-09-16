@@ -14,7 +14,8 @@ from marko.connector_wb.client import WBClient, WbHttpError, WbLimitError, load_
 from marko.connector_wb.models import WbReturn
 from marko.connector_wb.returns import _parse_iso, run_returns_once
 from marko.emitter.batch import lk_receipts, return_batch, to_csv, withdraw_batch
-from marko.journal import log_action
+from marko.journal import item_row, log_action
+from marko.journal.lookup import order_lookup
 from marko.journal.models import Item
 from marko.mt.models import MtDoc
 from marko.nkmt.models import Batch
@@ -82,13 +83,22 @@ def journal_list(
     q = db.query(Item)
     if state:
         q = q.filter_by(state=state)
-    return [
-        {"km": it.km, "state": it.state, "withdrawn_by": it.withdrawn_by,
-         "updated_at": it.updated_at, "last_event": it.last_event,
-         "cis_status": it.cis_status, "cis_product_name": it.cis_product_name,
-         "cis_checked_at": it.cis_checked_at}
-        for it in q.order_by(Item.updated_at.desc()).limit(limit).all()
-    ]
+    return [item_row(it)
+            for it in q.order_by(Item.updated_at.desc()).limit(limit).all()]
+
+
+@router.get("/wb/lookup")
+def wb_lookup(
+    rid: str = Query(..., min_length=3, max_length=128),
+    tok: PlatformToken = Depends(require_scope("read")),
+    db: Session = Depends(get_db),
+):
+    """Lookup заказа WB для журнала: реестр wb.orders + все КМ журнала по
+    документу заказа (rid принимается с хвостом '.n.m' и без)."""
+    try:
+        return order_lookup(db, rid.strip())
+    except ValueError as e:
+        raise HTTPException(422, str(e))
 
 
 @router.get("/journal/stats")

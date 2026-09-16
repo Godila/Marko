@@ -2,7 +2,7 @@ import pytest
 from fastapi.testclient import TestClient
 from marko.api.app import create_app
 from marko.platform.models import PlatformPrincipal, PlatformToken, hash_token
-from marko.journal import apply_event
+from marko.journal import apply_event, log_action
 from marko.journal.models import Event, Item
 
 KM = "0104630520676025215TEST123"
@@ -462,3 +462,120 @@ def test_resolve_withdrawn_sets_source(db, client):
     assert r.status_code == 200
     it = db.get(Item, KM)
     assert it.state == "WITHDRAWN" and it.withdrawn_by == "wb"
+
+
+# --- lookup заказа WB (маппинг КМ ↔ ID заказа для отладки) ---
+WB_UUID = "i9ba767bf5642be309fb036281a0ecda7"
+WB_DOC = f"eBQ.{WB_UUID}"
+
+
+def _wb_order(db, doc=WB_DOC, delivery_type="fbs", nm_id=412477053):
+    from marko.connector_wb.models import WbOrder
+    db.add(WbOrder(order_doc=doc, delivery_type=delivery_type, nm_id=nm_id,
+                   order_created_at="2026-09-11T15:34:06Z"))
+    db.commit()
+
+
+def _wb_sale(db, km, srid, ev=None):
+    apply_event(db, source="wb_excise", source_event_id=ev or f"{srid}:{km}",
+                kind="sale", km=km, srid=srid, payload={"price": 1793, "srid": srid})
+
+
+def test_wb_lookup_found_tail_mismatch(db, client):
+    # хвосты '.n.m' расходятся между вводом юзера и строкой эксайза —
+    # совпадение по документу без хвоста
+    _wb_order(db)
+    _wb_sale(db, KM, f"{WB_DOC}.0.0")
+    _wb_sale(db, "0104630520676025215TEST789", f"{WB_DOC}.3.0")
+    r = client.get(f"/v1/wb/lookup?rid={WB_DOC}.7.0", headers=AUTH)
+    assert r.status_code == 200
+    body = r.json()
+    assert body["order_doc"] == WB_DOC and body["status"] == "found"
+    assert body["order"]["delivery_type"] == "fbs"
+    assert body["order"]["nm_id"] == 412477053
+    assert {it["km"] for it in body["items"]} == {KM, "0104630520676025215TEST789"}
+    assert set(body["items"][0]) == {"km", "state", "withdrawn_by", "updated_at",
+                                     "last_event", "cis_status", "cis_product_name",
+                                     "cis_checked_at"}
+
+
+def test_wb_lookup_doc_without_tail_and_bare_uuid(db, client):
+    # без хвоста и голый uuid32 (префикс неизвестен — контейнмент-поиск)
+    _wb_order(db)
+    _wb_sale(db, KM, f"{WB_DOC}.0.0")
+    for rid in (WB_DOC, WB_UUID):
+        r = client.get(f"/v1/wb/lookup?rid={rid}", headers=AUTH)
+        assert r.status_code == 200 and r.json()["status"] == "found", rid
+        assert r.json()["items"][0]["km"] == KM
+
+
+def test_wb_lookup_status_lag(db, client):
+    # заказ в реестре есть, строк эксайза ещё нет — типичный живой кейс
+    _wb_order(db)
+    r = client.get(f"/v1/wb/lookup?rid={WB_DOC}", headers=AUTH)
+    assert r.json()["status"] == "lag" and r.json()["items"] == []
+
+
+def test_wb_lookup_status_fbw(db, client):
+    # skip_fbw не создаёт Item: события есть, позиций нет — не «лаг»
+    _wb_order(db, delivery_type="fbo")
+    log_action(db, source="wb_excise", source_event_id="fbw1", kind="skip_fbw",
+               km=KM, srid=f"{WB_DOC}.0.0", payload={})
+    r = client.get(f"/v1/wb/lookup?rid={WB_DOC}", headers=AUTH)
+    assert r.json()["status"] == "fbw" and r.json()["items"] == []
+
+
+def test_wb_lookup_status_unknown_and_neighbour_doc(db, client):
+    r = client.get("/v1/wb/lookup?rid=eQ.ffffffffffffffffffffffffffffffff", headers=AUTH)
+    assert r.json()["status"] == "unknown" and r.json()["order"] is None
+    # соседний числовой документ не должен матчиться префиксом ('12345' vs '123456')
+    _wb_sale(db, KM, "eN.123456.0.0")
+    r = client.get("/v1/wb/lookup?rid=eN.12345", headers=AUTH)
+    assert r.json()["status"] == "unknown"
+
+
+def test_wb_lookup_found_without_registry_row(db, client):
+    # выкупленный заказ мог уйти из снапшота WB до прогрева реестра —
+    # события и позиции валидны и без строки wb.orders
+    _wb_sale(db, KM, f"{WB_DOC}.0.0")
+    r = client.get(f"/v1/wb/lookup?rid={WB_DOC}", headers=AUTH)
+    assert r.json()["status"] == "found" and r.json()["order"] is None
+
+
+def test_wb_lookup_scopes_and_validation(db, client):
+    assert client.get(f"/v1/wb/lookup?rid={WB_DOC}", headers=AUTH_RO).status_code == 200
+    assert client.get(f"/v1/wb/lookup?rid={WB_DOC}").status_code == 401
+    assert client.get("/v1/wb/lookup", headers=AUTH).status_code == 422
+    for bad in ("  ", ".1.0", "x"):
+        assert client.get(f"/v1/wb/lookup?rid={bad}", headers=AUTH).status_code == 422, bad
+
+
+def test_wb_lookup_prefixed_input_finds_legacy_bare_srid(db, client):
+    # легаси-строки с голым uuid в srid (без префикса) должен находить и
+    # ввод в текущем формате WB 'eBQ.<uuid>' — контейнмент по телу документа
+    _wb_order(db)
+    _wb_sale(db, KM, WB_UUID)
+    r = client.get(f"/v1/wb/lookup?rid={WB_DOC}.0.0", headers=AUTH)
+    assert r.json()["status"] == "found" and r.json()["items"][0]["km"] == KM
+
+
+def test_wb_lookup_like_metacharacters_literal(db, client):
+    # '%', '_', '\' в rid — литералы, не wildcards; чужой заказ не матчится
+    # (rid с '%' в query требует кодирования — идём через params)
+    weird = "eQ.a%b_c%704f48e1a65d4843837f4e20ae3d1d9"
+    _wb_sale(db, KM, f"{weird}.0.0")
+    r = client.get("/v1/wb/lookup", params={"rid": weird}, headers=AUTH)
+    assert r.json()["status"] == "found"          # сам себя находит (эскейп работает)
+    r = client.get("/v1/wb/lookup", params={"rid": "eQ.abbXc"}, headers=AUTH)
+    assert r.json()["status"] == "unknown"        # % и _ не раскрылись в wildcard
+
+
+def test_wb_lookup_found_wins_over_fbw(db, client):
+    # если по документу есть и позиции, и skip_fbw-шум — приоритет found
+    _wb_order(db)
+    _wb_sale(db, KM, f"{WB_DOC}.0.0")
+    log_action(db, source="wb_excise", source_event_id="fbw-x", kind="skip_fbw",
+               km="0104630520676025215TESTFBW", srid=f"{WB_DOC}.1.0", payload={})
+    r = client.get(f"/v1/wb/lookup?rid={WB_DOC}", headers=AUTH)
+    assert r.json()["status"] == "found"
+    assert {it["km"] for it in r.json()["items"]} == {KM}
