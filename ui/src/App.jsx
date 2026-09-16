@@ -421,13 +421,14 @@ function Withdraw({ ctx }) {
     </div>
     <div className="card">
       <div className="card-h"><h2>Готовы к выводу</h2><span className="hint">шт: {pend ? pend.length : '…'} · ИНН из «Справочников»</span></div>
-      <div className="twrap"><table className="t">
+      <div className="twrap"><table className="t fit" style={{ minWidth: 760 }}>
+        <colgroup><col style={{ width: 248 }} /><col /><col style={{ width: 205 }} /></colgroup>
         <thead><tr><th>Код маркировки</th><th>Наименование</th><th>Последний сигнал</th></tr></thead>
         <tbody>{(pend || []).map((it) => <tr key={it.km}>
           <td><KmCell km={it.km} /></td>
           <EllCell title={it.cis_product_name || ''}>
             {it.cis_product_name || <span className="faint">—</span>}</EllCell>
-          <td style={{ fontSize: 12.5 }}>{evLine(it)}</td></tr>)}
+          <EllCell title={evLine(it)}><span style={{ fontSize: 12.5 }}>{evLine(it)}</span></EllCell></tr>)}
           {pend && !pend.length && <tr><td colSpan={3}><div className="empty"><b>Всё выведено</b>Новые продажи появятся после поллинга WB — 06:30 и 18:30 МСК.</div></td></tr>}
         </tbody></table></div>
       <div className="card-b" style={{ borderTop: '1px solid var(--line)', display: 'flex', justifyContent: 'flex-end' }}>
@@ -1054,18 +1055,20 @@ function OrderCard({ data, ctx }) {
 }
 
 /* декларативный конфиг колонок журнала — фундамент под будущее управление
-   составом колонок (переключатели пока не делаем): ell — обрезка с
-   кликом-раскрытием, mono — кодовая колонка (DESIGN.md 11), text — tooltip */
+   составом колонок (переключатели пока не делаем): w — ширина col в px
+   (фиксированный лейаут; без w — колонка забирает остаток), ell — однострочная
+   обрезка с кликом-раскрытием, mono — кодовая колонка (DESIGN.md 11) */
 const JOURNAL_COLUMNS = [
-  { key: 'km', label: 'Код маркировки', render: (it) => <KmCell km={it.km} /> },
+  { key: 'km', label: 'Код маркировки', w: 248, render: (it) => <KmCell km={it.km} /> },
   { key: 'name', label: 'Наименование', ell: true, text: (it) => it.cis_product_name || '',
     render: (it) => it.cis_product_name || <span className="faint">—</span> },
-  { key: 'state', label: 'Состояние', render: (it) => <Badge dict={ITEM_STATES} v={it.state} /> },
-  { key: 'sig', label: 'Последний сигнал', render: (it) => <span style={{ fontSize: 12.5 }}>{evLine(it)}</span> },
-  { key: 'order', label: 'Заказ WB', ell: true, mono: true, text: (it) => it.last_event?.srid || '',
+  { key: 'state', label: 'Состояние', w: 104, render: (it) => <Badge dict={ITEM_STATES} v={it.state} /> },
+  { key: 'sig', label: 'Последний сигнал', w: 205, ell: true, text: (it) => evLine(it),
+    render: (it) => evLine(it) },
+  { key: 'order', label: 'Заказ WB', w: 235, ell: true, mono: true, text: (it) => it.last_event?.srid || '',
     render: (it) => it.last_event?.srid || <span className="faint">—</span> },
-  { key: 'cz', label: 'ЧЗ', render: (it) => it.cis_status ? <Badge dict={CIS_STATUS} v={it.cis_status} /> : <span className="faint">—</span> },
-  { key: 'upd', label: 'Обновлён', mono: true, render: (it) => fmtD(it.updated_at) },
+  { key: 'cz', label: 'ЧЗ', w: 88, render: (it) => it.cis_status ? <Badge dict={CIS_STATUS} v={it.cis_status} /> : <span className="faint">—</span> },
+  { key: 'upd', label: 'Обновлён', w: 92, mono: true, render: (it) => fmtD(it.updated_at) },
 ]
 
 // ID заказа WB: [префикс.]тело[.n.m]. Тела реальных rid двух видов (фикстура
@@ -1137,7 +1140,8 @@ function Journal({ ctx, initial }) {
         {isOrderId(q) && <> · Enter — карточка заказа WB</>}</span>
     </div>
     <div className="card">
-      <div className="twrap"><table className="t">
+      <div className="twrap"><table className="t fit" style={{ minWidth: 1230 }}>
+        <colgroup>{JOURNAL_COLUMNS.map((c) => <col key={c.key} style={c.w ? { width: c.w } : undefined} />)}</colgroup>
         <thead><tr>{JOURNAL_COLUMNS.map((c) => <th key={c.key}>{c.label}</th>)}</tr></thead>
         <tbody>{shown.map((it) => { const [lbl] = ITEM_STATES[it.state] || [it.state]
           const anom = it.state.startsWith('ANOMALY')

@@ -146,6 +146,11 @@ a{color:var(--info)}
 /* ============ таблицы ============ */
 .twrap{overflow-x:auto}
 table.t{width:100%;border-collapse:collapse;font-size:13px}
+/* плотные табличные формы: фиксированный лейаут — ширины колонок заданы
+   colgroup и не дёргаются при обновлении данных; ячейки однострочные,
+   ell-обрезку правит col, а не max-width */
+table.t.fit{table-layout:fixed}
+table.t.fit td.ell{max-width:none}
 table.t th{font-size:11px;letter-spacing:.06em;text-transform:uppercase;color:var(--faint);font-weight:500;text-align:left;padding:10px 14px;border-bottom:1px solid var(--line);white-space:nowrap}
 table.t td{padding:10px 14px;border-bottom:1px solid var(--line);vertical-align:top}
 table.t tr:last-child td{border-bottom:0}
