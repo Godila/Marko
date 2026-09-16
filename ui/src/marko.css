@@ -47,7 +47,7 @@ a{color:var(--info)}
 .rail-foot button{color:var(--rail-mut);text-align:left;padding:0}
 .rail-foot button:hover{color:var(--rail-ink);text-decoration:underline}
 .rail-foot .sys{font-family:var(--mono);font-size:10.5px}
-.content{padding:26px 34px 60px;max-width:1160px;width:100%}
+.content{padding:26px 34px 60px;max-width:1440px;width:100%}
 .topnav{display:none}
 
 /* ============ шапка раздела ============ */
