@@ -153,7 +153,7 @@ table.t tbody tr:hover{background:var(--surface-2)}
 table.t td.mono{font-family:var(--mono);font-size:12px}
 table.t .num{font-family:var(--mono);font-variant-numeric:tabular-nums}
 tr.rowhot,table.t tbody tr.rowhot:hover{background:var(--stamp-bg)}
-.km{font-family:var(--mono);font-size:12px;display:inline-flex;align-items:center;gap:6px;word-break:break-all}
+.km{font-family:var(--mono);font-size:12px;display:inline-flex;align-items:center;gap:6px;white-space:nowrap}
 .km button{color:var(--faint);display:inline-flex;padding:2px;border-radius:4px}
 .km button:hover{color:var(--info);background:var(--info-bg)}
 td.actions{white-space:nowrap;text-align:right}
