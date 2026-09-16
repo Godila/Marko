@@ -121,16 +121,20 @@ const ANOMALY_HELP = {
 
 /* ================= формат ================= */
 const pad2 = (n) => String(n).padStart(2, '0')
-const fmtD = (s) => { if (!s) return '—'; const d = new Date(s); return isNaN(d) ? s :
+// БД/бэкенд хранят naive-UTC; без суффикса зоны браузер считает строку
+// локальным временем — приписываем Z, показываем в зоне пользователя (МСК)
+const parseUtc = (s) => (typeof s === 'string' && /Z|[+-]\d\d:?\d\d$/.test(s) || s instanceof Date
+  ? new Date(s) : new Date(s + 'Z'))
+const fmtD = (s) => { if (!s) return '—'; const d = parseUtc(s); return isNaN(d) ? s :
   `${pad2(d.getDate())}.${pad2(d.getMonth() + 1)} ${pad2(d.getHours())}:${pad2(d.getMinutes())}` }
 const fmtAgo = (ts) => { if (!ts) return '—'; const m = Math.round((Date.now() / 1000 - ts) / 60)
   if (m < 1) return 'только что'; if (m < 60) return `${m} мин назад`
   const h = Math.round(m / 60); if (h < 36) return `${h} ч назад`; return `${Math.round(h / 24)} дн назад` }
-const fmtLeft = (iso) => { const ms = new Date(iso) - Date.now(); if (isNaN(ms)) return ''
+const fmtLeft = (iso) => { const ms = parseUtc(iso) - Date.now(); if (isNaN(ms)) return ''
   if (ms <= 0) return 'просрочен'; const h = ms / 36e5
   if (h >= 48) return `${Math.round(h / 24)} дн`; if (h >= 1) return `${Math.round(h)} ч`
   return `${Math.max(1, Math.round(ms / 6e4))} мин` }
-const leftCls = (iso) => { const ms = new Date(iso) - Date.now()
+const leftCls = (iso) => { const ms = parseUtc(iso) - Date.now()
   return ms <= 0 ? 'over' : ms <= 864e5 ? 'danger' : ms <= 1728e5 ? 'warn' : 'ok' }
 const plural = (n, [one, few, many]) => { const a = n % 10, b = n % 100
   return b >= 11 && b <= 14 ? many : a === 1 ? one : a >= 2 && a <= 4 ? few : many }
@@ -288,7 +292,7 @@ function Overview({ ctx, pulse }) {
     .reduce((a, [, v]) => a + v, 0)
   const pendW = s.PENDING_WITHDRAW || 0
   const dl = pulse.returns.nearest_deadline
-  const dlHot = dl && new Date(dl) - Date.now() <= 48 * 36e5
+  const dlHot = dl && parseUtc(dl) - Date.now() <= 48 * 36e5
   const doWithdraw = () => { if (!pendW) return notify('Нет позиций к выводу', 'Журнал не содержит КМ в статусе «к выводу».', 'warn')
     confirm('Собрать вывод из оборота?',
       `Из ${pendW} КМ будет создан черновик LK_RECEIPT (без фискального чека — отдельным документом). КМ сразу перейдут в «Выведен», подача в ЧЗ — отдельным шагом.`,
@@ -454,7 +458,7 @@ function Returns({ ctx, pulse }) {
     if (!!a.completed_dt !== !!b.completed_dt) return a.completed_dt ? 1 : -1
     return (a.expired_dt || '').localeCompare(b.expired_dt || '') })
   const nearest = sorted.find((r) => !r.completed_dt && r.expired_dt)
-  const hot = nearest && new Date(nearest.expired_dt) - Date.now() <= 48 * 36e5
+  const hot = nearest && parseUtc(nearest.expired_dt) - Date.now() <= 48 * 36e5
   const poll = () => confirm('Опросить WB goods-return вручную?',
     'Ручной опрос расходует ту же квоту, что и часовой автоматический.',
     'GET goods-return · окно 7 дней', 'Опросить', async () => {
