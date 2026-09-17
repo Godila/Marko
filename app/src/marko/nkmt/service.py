@@ -18,6 +18,7 @@ from marko.connector_mt.manager import _sign_via_gateway
 from marko.nkmt import resolve as _resolve
 from marko.nkmt.client import NkHttpError
 from marko.nkmt.models import Batch, Card
+from marko.nkmt.parse import PROV_KEYS
 from marko.nkmt.validate import GTIN_RE
 
 FEED_CHUNK = 500  # /nk/feed: не более 500 карточек за запрос
@@ -116,17 +117,19 @@ def preview_batch(db, data: bytes, client, token) -> dict:
     for p, s, rule_id in zip(planned, res["src"], res["matched"]):
         attrs = p["attributes"]   # итоговые значения: дата декларации уже из реестра
         decl = attrs.get("23557") or {}
+        size = attrs.get("35") or {}
         rows.append({
             "article": p["article"], "name": p["name"], "tnved": p["tnved"],
             "gtin": p["gtin_final"], "gtin_status": p["gtin_status"],
             "brand": attrs.get("2504", ""), "product_type": attrs.get("12", ""),
+            "size": size.get("value", ""), "color": attrs.get("36", ""),
+            "composition": attrs.get("2483", ""),
             "declaration_number": decl.get("number", ""),
             "declaration_date": decl.get("date", ""),
             "producer": attrs.get("2503", ""), "cat_id": p["cat_id"],
             "ok": p["dup"] is False and p["error"] == "",
             "error": p["error"], "dup": p["dup"],
-            "rule_id": rule_id, "src": {k: s[k] for k in
-                                        ("declaration_number", "producer", "brand")},
+            "rule_id": rule_id, "src": {k: s[k] for k in PROV_KEYS},
         })
     stats = {"ok": sum(1 for r in rows if r["ok"]),
              "error": sum(1 for r in rows if not r["ok"]),

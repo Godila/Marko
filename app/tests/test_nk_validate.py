@@ -30,6 +30,17 @@ def test_bad_preset_and_short_tnved(model):
     assert not out[1]["ok"] and "ТНВЭД" in out[1]["error"]
 
 
+def test_preset_values_canonicalized_casefold(model):
+    """Регистр значения не валит preset-проверку: «футболка»/«женский» →
+    канонические написания справочника НК в атрибутах карточки."""
+    out = validate.validate_rows(None, None, None,
+                                 [_row(product_type="футболка",
+                                       target_gender="женский")])[0]
+    assert out["ok"]
+    assert out["attributes"]["12"] == "ФУТБОЛКА"
+    assert out["attributes"]["14013"] == "ЖЕНСКИЙ"
+
+
 def test_unicode_filter(model):
     out = validate.validate_rows(None, None, None, [_row(name="Футболка ☺")])[0]
     assert not out["ok"] and "запрещённые символы" in out["error"]

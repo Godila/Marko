@@ -8,12 +8,14 @@
 подсказка оператора.
 """
 import time
+from datetime import datetime, timezone
 
 from sqlalchemy import func, select
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.orm import Session
 
 from marko.nkmt.models import BrandCache, Declaration, Rule
+from marko.nkmt.parse import RULE_FIELDS, SPEC
 from marko.platform.models import PlatformKV
 
 TTL = 24 * 3600
@@ -27,13 +29,20 @@ DEFAULTS = {"brand": "YCPB", "techreg": 'ТР ТС 017/2011 "О безопасн
 def dict_hints(db: Session, defaults: dict) -> dict:
     """Подсказки для условий правил РД из уже закэшированных справочников НК:
     product_types — union пресетов атрибута 12 «Вид товара» по всем nk_attrs:{tnved};
+    size_systems/genders — размерные системы (attr_value_type 35) и пол (14013);
     brands — имена из brand_cache + дефолтный бренд. Сеть не трогается."""
     pts: set[str] = set()
+    size_systems: set[str] = set()
+    genders: set[str] = set()
     for kv in db.query(PlatformKV).filter(PlatformKV.key.like("nk_attrs:%")).all():
         for a in (kv.value or {}).get("m", []) + (kv.value or {}).get("r", []):
             if a.get("attr_id") == 12:
                 pts.update(p for p in (a.get("attr_preset") or [])
                            if p and p != "НЕТ В СПРАВОЧНИКЕ")
+            if a.get("attr_id") == 35:
+                size_systems.update(s for s in (a.get("attr_value_type") or []) if s)
+            if a.get("attr_id") == 14013:
+                genders.update(g for g in (a.get("attr_preset") or []) if g)
     # casefold-дедуп: кэш хранит и «YCPB», и «ycpb» — в подсказках один вариант,
     # написание дефолтного бренда приоритетнее
     brands_map: dict[str, str] = {}
@@ -41,7 +50,8 @@ def dict_hints(db: Session, defaults: dict) -> dict:
         brands_map.setdefault(b.name.casefold(), b.name)
     if defaults.get("brand"):
         brands_map[defaults["brand"].casefold()] = defaults["brand"]
-    return {"product_types": sorted(pts), "brands": sorted(brands_map.values())}
+    return {"product_types": sorted(pts), "brands": sorted(brands_map.values()),
+            "size_systems": sorted(size_systems), "genders": sorted(genders)}
 
 
 class UnknownBrand(Exception):
@@ -125,10 +135,40 @@ def set_defaults(db: Session, value: dict) -> None:
 def get_rules(db: Session) -> list[dict]:
     """Активные правила РД с реквизитами декларации (join; FK RESTRICT гарантирует
     существование) — чистые dict'ы для resolve.match_rule, id по возрастанию."""
-    rows = db.execute(select(Rule, Declaration.doc_number, Declaration.doc_date)
+    rows = db.execute(select(Rule, Declaration.doc_number, Declaration.doc_date,
+                             Declaration.title)
                       .join(Declaration, Rule.declaration_id == Declaration.id)
                       .order_by(Rule.id)).all()
     return [{"id": r.id, "brand": r.brand, "product_types": r.product_types,
              "declaration_id": r.declaration_id, "declaration_number": doc_number,
-             "declaration_date": doc_date, "producer": r.producer}
-            for r, doc_number, doc_date in rows]
+             "declaration_date": doc_date, "declaration_title": title or "",
+             "producer": r.producer, "fields": r.fields or {}}
+            for r, doc_number, doc_date, title in rows]
+
+
+def agent_context(db: Session) -> dict:
+    """Self-describing контур НК для внешних агентов (GET /v1/nkmt/context):
+    колонки шаблона с флагами, приоритет подстановок, дефолты, правила
+    с реквизитами деклараций, справочники и карта эндпоинтов. Без сети —
+    агент понимает контекст и может подсказывать оператору."""
+    defaults = get_defaults(db)
+    return {
+        "generated_at": datetime.now(timezone.utc).isoformat(),
+        "priority": ["file", "rule", "default"],
+        "template": {
+            "columns": [{"title": s.title, "key": s.key, "required": s.required,
+                         "defaultable": s.defaultable, "rule_field": s.key in RULE_FIELDS,
+                         "hint": s.hint} for s in SPEC],
+            "download": "/v1/nkmt/import/template",
+        },
+        "defaults": defaults,
+        "rules": get_rules(db),
+        "dicts": dict_hints(db, defaults),
+        "endpoints": {
+            "preview": "POST /v1/nkmt/import/preview (multipart file, dry-run)",
+            "import": "POST /v1/nkmt/import (multipart file)",
+            "resolve_check": "POST /v1/nkmt/resolve {brand, product_type}",
+            "hints": "GET /v1/nkmt/dicts/hints",
+            "declarations": "GET /v1/nkmt/declarations",
+        },
+    }

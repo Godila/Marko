@@ -47,3 +47,23 @@ def test_apply_defaults_product_type():
     rows = [{"product_type": ""}, {"product_type": "ШАПКА"}]
     out = apply_defaults(rows, {"product_type": "ФУТБОЛКА"})
     assert out[0]["product_type"] == "ФУТБОЛКА" and out[1]["product_type"] == "ШАПКА"
+
+
+def test_parse_producer_country_from_file():
+    """Производитель и страна читаются из файла по заголовку (колонки появились
+    в шаблоне); порядок колонок файла не важен — заголовки словарные."""
+    from marko.nkmt.parse import parse_xlsx
+    hdr = [*HDR, "Производитель", "Страна производства"]
+    row = [*ROW, "ИП Байкулов", "RU"]
+    out = parse_xlsx(make_xlsx(hdr, [row]))[0]
+    assert out["producer"] == "ИП Байкулов" and out["country"] == "RU"
+
+
+def test_prov_keys_cover_defaulted_and_rule_fields():
+    """PROV_KEYS = дефолтуемые + правило-поля без дублей: provenance-карта
+    превью/подстановок покрывает и размер, и цвет, и состав."""
+    from marko.nkmt.parse import DEFAULTED_KEYS, PROV_KEYS, RULE_FIELDS
+    assert PROV_KEYS == list(dict.fromkeys(DEFAULTED_KEYS + RULE_FIELDS))
+    for k in ("size", "color", "composition", "model", "brand", "producer"):
+        assert k in PROV_KEYS
+    assert len(PROV_KEYS) == len(set(PROV_KEYS))

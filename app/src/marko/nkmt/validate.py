@@ -56,6 +56,17 @@ def _check_preset(amap: dict, attr_id: int, value: str, errors: list) -> None:
         errors.append(f"{attr['attr_name']}: значение «{value}» отсутствует в справочнике")
 
 
+def _canonical(attr: dict | None, list_key: str, value: str) -> str:
+    """casefold-совпадение → каноническое написание справочника (регистр файла/правила
+    не должен валить preset-проверку и расходиться с НК); нет совпадения — как есть,
+    _check_preset честно скажет «отсутствует в справочнике»."""
+    low = value.casefold()
+    for preset in ((attr or {}).get(list_key) or []):
+        if preset.casefold() == low:
+            return preset
+    return value
+
+
 def _normalize_color(amap: dict, color: str) -> str:
     """Цвет не preset_only: совпадение без учёта регистра → точное написание preset;
     отсутствующий в справочнике цвет оставляем как есть (предупреждение, не блок)."""
@@ -97,13 +108,19 @@ def _validate_row(db, client, token: str, row: dict, errors: list,
                 errors.append(f"модель атрибутов ТНВЭД {tnved}: {e}")
         amap = models.get(tnved, {})
 
-    # 4. preset-справочники
-    product_type = str(row.get("product_type", ""))
+    # 4. preset-справочники (регистр значения не важен: канонизируем к написанию НК)
+    product_type = _canonical(amap.get(ATTR_PRODUCT_TYPE), "attr_preset",
+                              str(row.get("product_type", "")))
     _check_preset(amap, ATTR_PRODUCT_TYPE, product_type, errors)
-    _check_preset(amap, ATTR_TECHREG, str(row.get("techreg", "")), errors)
-    _check_preset(amap, ATTR_GENDER, str(row.get("target_gender", "")), errors)
-    size_system = str(row.get("size_system", ""))
+    techreg = _canonical(amap.get(ATTR_TECHREG), "attr_preset",
+                         str(row.get("techreg", "")))
+    _check_preset(amap, ATTR_TECHREG, techreg, errors)
+    target_gender = _canonical(amap.get(ATTR_GENDER), "attr_preset",
+                               str(row.get("target_gender", "")))
+    _check_preset(amap, ATTR_GENDER, target_gender, errors)
     attr_size = amap.get(ATTR_SIZE)
+    size_system = _canonical(attr_size, "attr_value_type",
+                             str(row.get("size_system", "")))
     if attr_size and size_system not in (attr_size.get("attr_value_type") or []):
         errors.append(f"{attr_size['attr_name']}: значение «{size_system}» отсутствует в справочнике")
 
@@ -153,13 +170,13 @@ def _validate_row(db, client, token: str, row: dict, errors: list,
 
     attributes = {
         "2478": str(row.get("name", "")),           # Полное наименование товара
-        "12": product_type,                          # Вид товара
+        "12": product_type,                          # Вид товара (канонический)
         "36": color,                                 # Цвет (нормализованный)
         "2483": str(row.get("composition", "")),     # Состав
-        "14013": str(row.get("target_gender", "")),  # Целевой пол
+        "14013": target_gender,                      # Целевой пол (канонический)
         "35": {"type": size_system, "value": str(row.get("size", ""))},
         "13914": {"type": "Модель", "value": str(row.get("model") or row.get("article") or "")},
-        "13836": [str(row.get("techreg", ""))],      # списочный атрибут
+        "13836": [techreg],                          # списочный атрибут
         "2504": brand,                              # Товарный знак — имя ТМ строкой (дамп /nk/feed)
         "2630": str(row.get("country", "")),         # Страна производства
         "2503": str(row.get("producer", "")),        # Производитель

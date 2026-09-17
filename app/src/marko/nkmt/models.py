@@ -1,4 +1,4 @@
-from sqlalchemy import CheckConstraint, DateTime, ForeignKey, Integer, String, UniqueConstraint, func
+from sqlalchemy import CheckConstraint, DateTime, ForeignKey, Integer, String, UniqueConstraint, func, text
 from sqlalchemy.dialects.postgresql import JSON, JSONB
 from sqlalchemy.orm import Mapped, mapped_column
 from marko.db import Base
@@ -51,10 +51,13 @@ class Rule(Base):
 
     Условие — точный бренд и/или список видов товара (хотя бы одно непустое,
     CHECK); пустое поле условия = «любой». Вид товара — СПИСОК: правило
-    срабатывает, если вид строки входит в него. Из подошедших правил выигрывает
-    то, у кого больше непустых условий, при равенстве — больший id
-    (resolve.match_rule). Приоритет значений: файл > правило > дефолт.
+    срабатывает, если вид строки входит в него (бренд и вид — casefold).
+    Из подошедших правил выигрывает то, у кого больше непустых условий, при
+    равенстве — больший id (resolve.match_rule). Приоритет значений:
+    файл > правило > дефолт. fields — дополнительные поля карточки
+    (whitelist = parse.RULE_FIELDS, например {"size": "ONE SIZE"} для шапок).
     """
+
     __tablename__ = "rules"
     __table_args__ = (
         CheckConstraint("btrim(brand) <> '' OR jsonb_array_length(product_types) > 0",
@@ -67,6 +70,8 @@ class Rule(Base):
     declaration_id: Mapped[int] = mapped_column(
         ForeignKey("nkmt.declarations.id", ondelete="RESTRICT"))
     producer: Mapped[str] = mapped_column(String, default="")
+    fields: Mapped[dict] = mapped_column(JSONB, default=dict,
+                                         server_default=text("'{}'::jsonb"))
 
 
 class BrandCache(Base):

@@ -1,6 +1,7 @@
 """Парсер выгрузки xlsx для деклараций НК: первый лист, строка 1 — заголовки.
 
-Нераспознанные колонки игнорируются, пустые строки пропускаются, все значения
+Нераспознанные колонки игнорируются (порядок колонок в файле не важен —
+заголовки словарные), пустые строки пропускаются, все значения
 нормализуются в str().strip() (дата-ячейки — date/datetime от openpyxl —
 в ISO-дату 'YYYY-MM-DD', иначе str(datetime) «2026-01-01 00:00:00» валит
 DATE_RE валидатора). apply_defaults подставляет платформенные дефолты в
@@ -17,8 +18,8 @@ import openpyxl
 class ColumnSpec:
     """Колонка выгрузки: единый источник для parse_xlsx, шаблона и «Инструкции».
 
-    title "" — колонки в файле нет (значение приходит только из дефолтов/правил).
-    Порядок SPEC = порядок колонок в шаблоне (как в тестовой HDR-фикстуре).
+    Порядок SPEC = порядок колонок в шаблоне (группы: идентификация →
+    классификация → атрибуты → документы → производство).
     """
     title: str
     key: str
@@ -30,34 +31,45 @@ class ColumnSpec:
 SPEC: list[ColumnSpec] = [
     ColumnSpec("Артикул", "article", required=True,
                hint="уникальный ключ; повторный импорт обновляет карточку"),
-    ColumnSpec("ТНВЭД", "tnved", required=True, hint="ровно 10 цифр"),
     ColumnSpec("Наименование", "name", required=True),
-    ColumnSpec("Вид товара", "product_type", required=True, defaultable=True,
-               hint="точное значение из справочника НК; пусто — подставится дефолт; участвует в правилах РД"),
-    ColumnSpec("Цвет", "color", required=True),
-    ColumnSpec("Состав", "composition", required=True),
-    ColumnSpec("Размер", "size", required=True, hint="например «M», «one size»"),
-    ColumnSpec("Модель/артикул", "model", hint="пусто — подставится артикул"),
     ColumnSpec("Бренд", "brand", defaultable=True,
                hint="точное имя ТМ из НК; иначе правило РД, затем дефолт"),
-    ColumnSpec("Пол", "target_gender", defaultable=True),
+    ColumnSpec("Модель/артикул", "model", hint="пусто — подставится артикул"),
+    ColumnSpec("ТНВЭД", "tnved", required=True, hint="ровно 10 цифр"),
+    ColumnSpec("Вид товара", "product_type", required=True, defaultable=True,
+               hint="точное значение из справочника НК; пусто — подставится дефолт; участвует в правилах РД"),
+    ColumnSpec("Категория", "category_hint",
+               hint="подсказка при неоднозначной категории НК"),
+    ColumnSpec("Цвет", "color", required=True),
+    ColumnSpec("Состав", "composition", required=True),
+    ColumnSpec("Размер", "size", required=True, defaultable=True,
+               hint="например «M», «one size»; пусто — подставится правилом РД"),
     ColumnSpec("Размерная система", "size_system", defaultable=True),
+    ColumnSpec("Пол", "target_gender", defaultable=True),
     ColumnSpec("Декларация", "declaration_number", defaultable=True,
                hint="номер из реестра; иначе правило РД, затем дефолт"),
     ColumnSpec("Дата декларации", "declaration_date", defaultable=True,
                hint="ГГГГ-ММ-ДД; пустая — дата из реестра"),
-    ColumnSpec("Категория", "category_hint",
-               hint="подсказка при неоднозначной категории НК"),
     ColumnSpec("GTIN", "gtin", hint="14 цифр; пустой — сгенерируется при подаче фида"),
-    ColumnSpec("", "producer", defaultable=True,
-               hint="производитель: файл → правило РД → дефолт; колонки в файле нет"),
-    ColumnSpec("", "country", defaultable=True,
-               hint="код страны («RU»); колонки в файле нет"),
+    ColumnSpec("Производитель", "producer", defaultable=True,
+               hint="можно пусто — подставится правило РД или дефолт"),
+    ColumnSpec("Страна производства", "country", defaultable=True,
+               hint="код страны ISO («RU»); можно пусто — подставится дефолт"),
 ]
 
 COLUMNS = {s.title.casefold(): s.key for s in SPEC if s.title}
 REQUIRED_ROW_KEYS = [s.key for s in SPEC if s.required]
 DEFAULTED_KEYS = [s.key for s in SPEC if s.defaultable]
+
+# Поля, которые правило РД может подставить сверх декларации/производителя
+# (единственный источник whitelist: роут правил и apply_rules). Идентификация
+# (article/tnved/name/gtin/category_hint), условия матчинга (brand,
+# product_type), пара декларации (реестр), techreg (системный) и producer
+# (отдельная колонка правила) сюда не входят.
+RULE_FIELDS = ["size", "color", "composition", "model",
+               "target_gender", "size_system", "country"]
+# Ключи provenance-карты: дефолтуемые + правила-поля, без дублей, порядок стабилен
+PROV_KEYS = list(dict.fromkeys(DEFAULTED_KEYS + RULE_FIELDS))
 
 
 def _cell(value) -> str:

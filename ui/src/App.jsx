@@ -1,4 +1,4 @@
-import React, { useEffect, useRef, useState } from 'react'
+import React, { useCallback, useEffect, useRef, useState } from 'react'
 import './marko.css'
 
 /* ================= http ================= */
@@ -75,7 +75,16 @@ const DEF_FIELDS = [
   ['brand', 'Бренд'], ['product_type', 'Вид товара'], ['techreg', 'Техрегламент'],
   ['target_gender', 'Пол'], ['size_system', 'Система размеров'], ['country', 'Страна'],
   ['producer', 'Производитель'], ['declaration_number', 'Номер декларации'],
-  ['declaration_date', 'Дата декларации']]
+  ['declaration_date', 'Дата декларации'], ['size', 'Размер']]
+// дополнительные поля, которые правило РД может подставить в пустые ячейки
+// (зеркало бэкенд-константы RULE_FIELDS; размер — общая для дефолта и правила)
+const RULE_FIELD_LABELS = { size: 'Размер', color: 'Цвет', composition: 'Состав',
+  model: 'Модель/артикул', target_gender: 'Пол', size_system: 'Система размеров',
+  country: 'Страна (ISO-код)' }
+// порядок показа «Проверки подстановок»: дефолты + правило-поля без дефолтов
+const RZ_FIELDS = [...DEF_FIELDS.filter(([k]) => k !== 'techreg'),
+  ['color', 'Цвет'], ['composition', 'Состав'], ['model', 'Модель/артикул'],
+  ['techreg', 'Техрегламент']]
 // эксайз-payload не несёт kind — вид события выводим из operation_type_id
 const opRu = (ev) => ev.operation_type_id === 2 ? 'возврат'
   : ev.operation_type_id === 1 ? 'продажа' : '—'
@@ -517,52 +526,89 @@ function Returns({ ctx, pulse }) {
 }
 
 /* ================= каталог НК ================= */
+// маркер источника подстановки: компактная строка под значением ячейки
+const SrcMark = ({ v, src, extra }) => (v && src && src !== 'file'
+  ? <div className="faint" style={{ fontSize: 11 }}>← {SRC_RU[src] || src}{extra || ''}</div> : null)
+
+// декларативный конфиг колонок предпросмотра (паттерн JOURNAL_COLUMNS):
+// подстановочные поля несут маркер источника — правило видно до импорта
+const PREVIEW_COLUMNS = [
+  { key: 'article', label: 'Артикул', w: 104, mono: true,
+    text: (r) => r.article, render: (r) => r.article },
+  { key: 'name', label: 'Наименование', ell: true,
+    text: (r) => r.name, render: (r) => r.name || <span className="faint">—</span> },
+  { key: 'pt', label: 'Вид', w: 118, ell: true,
+    text: (r) => r.product_type, render: (r) => r.product_type || <span className="faint">—</span> },
+  { key: 'brand', label: 'Бренд', w: 104,
+    text: (r) => r.brand, render: (r) => <>{r.brand || '—'}<SrcMark v={r.brand} src={r.src.brand} /></> },
+  { key: 'tnved', label: 'ТН ВЭД', w: 96, mono: true,
+    text: (r) => r.tnved, render: (r) => r.tnved },
+  { key: 'size', label: 'Размер', w: 92,
+    text: (r) => r.size, render: (r) => <>{r.size || <span className="faint">—</span>}<SrcMark v={r.size} src={r.src.size} /></> },
+  { key: 'decl', label: 'Декларация', w: 196,
+    text: (r) => r.declaration_number, render: (r) => <>
+      {r.declaration_number || '—'}
+      {r.declaration_date && <div className="faint mono" style={{ fontSize: 11 }}>{r.declaration_date}</div>}
+      <SrcMark v={r.declaration_number} src={r.src.declaration_number}
+        extra={r.src.declaration_number === 'rule' && r.rule_id ? ` №${r.rule_id}` : ''} /></> },
+  { key: 'producer', label: 'Производитель', w: 164,
+    text: (r) => r.producer, render: (r) => <>{r.producer || '—'}<SrcMark v={r.producer} src={r.src.producer} /></> },
+  { key: 'gtin', label: 'GTIN', w: 118, mono: true,
+    text: (r) => r.gtin, render: (r) => <>{r.gtin || '—'} {r.gtin_status && <Badge dict={GTIN_STATUS} v={r.gtin_status} />}</> },
+  { key: 'res', label: 'Итог', w: 82,
+    render: (r) => r.ok ? <span className="bdg green">ok</span> : <span className="bdg red">ошибка</span> },
+  { key: 'err', label: 'Ошибка', w: 196, ell: true,
+    text: (r) => r.error || '', render: (r) => r.error ? <span className="err-tx">{r.error}</span> : '' },
+]
+
 // Превью импорта: тот же разбор, что сделает импорт (файл → правило РД → дефолт),
-// без записи; апрув в drawer'е — повторная подача того же файла в /import.
+// без записи; апрув в широкой модалке — повторная подача того же файла в /import.
 function ImportPreview({ ctx, file, onDone }) {
-  const { notify, closeDrawer, bump } = ctx
+  const { notify, closeWide, bump } = ctx
   const [data, setData] = useState(null)
   const [err, setErr] = useState('')
   const [busy, setBusy] = useState(false)
-  useEffect(() => {
+  const load = useCallback(() => {
+    setErr(''); setData(null)
     const fd = new FormData(); fd.append('file', file)
     api('/v1/nkmt/import/preview', { method: 'POST', body: fd })
       .then(setData).catch((e) => setErr(e.message))
-  }, [])
+  }, [file])
+  useEffect(load, [load])
   const doImport = () => { if (busy) return
     setBusy(true)
     const fd = new FormData(); fd.append('file', file)
     api('/v1/nkmt/import', { method: 'POST', body: fd })
       .then((r) => { notify(`Импорт завершён: батч №${r.batch_id}`, `ok ${r.stats.ok}, ошибок ${r.stats.error}`)
-        closeDrawer(); onDone(); bump() })
+        closeWide(); onDone(); bump() })
       .catch((e) => { notify('Импорт не удался', e.message, 'bad'); setBusy(false) }) }
-  if (err) return <div className="empty"><b>Предпросмотр не удался</b>{err}</div>
+  if (err) return <div className="empty"><b>Предпросмотр не удался</b>{err}
+    <div style={{ marginTop: 12 }}><button className="btn sm" onClick={load}>Повторить</button></div></div>
   if (!data) return <div className="empty"><b>Разбираем файл…</b>Валидация строк, правила РД и справочники НК.</div>
   const s = data.stats
-  const sub = (v, src) => v && src !== 'file'
-    ? <div className="faint" style={{ fontSize: 11 }}>← {SRC_RU[src] || src}</div> : null
-  return <>
-    <p style={{ fontSize: 12.5, color: 'var(--muted)', marginTop: 0 }}>
-      Подстановка: значение из файла → правило РД → дефолты. Импорт повторит ровно этот разбор.</p>
-    <div className="twrap"><table className="t small">
-      <thead><tr><th>Артикул</th><th>Наименование</th><th>Бренд</th><th>Декларация</th><th>Производитель</th><th>GTIN</th><th>Итог</th><th>Ошибка</th></tr></thead>
-      <tbody>{data.rows.map((r, i) => <tr key={i}>
-        <td className="mono">{r.article}</td>
-        <td>{r.name}</td>
-        <td>{r.brand}{sub(r.brand, r.src.brand)}</td>
-        <td>{r.declaration_number || '—'}{sub(r.declaration_number, r.src.declaration_number)}</td>
-        <td>{r.producer || '—'}{sub(r.producer, r.src.producer)}</td>
-        <td className="mono">{r.gtin || '—'} {r.gtin_status && <Badge dict={GTIN_STATUS} v={r.gtin_status} />}</td>
-        <td>{r.ok ? <span className="bdg green">ok</span> : <span className="bdg red">ошибка</span>}</td>
-        <td className="err-tx">{r.error || ''}</td></tr>)}
+  return <div className="wide-fill">
+    <div className="wide-scroll">
+      <p style={{ fontSize: 12.5, color: 'var(--muted)', marginTop: 0 }}>
+        Подстановка: значение из файла → правило РД → дефолты. Под каждым значением —
+        источник, у правила его номер. Импорт повторит ровно этот разбор.</p>
+      <div className="twrap"><table className="t small fit" style={{ minWidth: 1180 }}>
+        <colgroup>{PREVIEW_COLUMNS.map((c) => <col key={c.key} style={c.w ? { width: c.w } : undefined} />)}</colgroup>
+        <thead><tr>{PREVIEW_COLUMNS.map((c) => <th key={c.key}>{c.label}</th>)}</tr></thead>
+        <tbody>{data.rows.map((r, i) => <tr key={i} className={r.ok ? undefined : 'rowhot'}>
+          {PREVIEW_COLUMNS.map((c) => c.ell
+            ? <EllCell key={c.key} title={c.text(r)} mono={c.mono}>{c.render(r)}</EllCell>
+            : <td key={c.key} className={c.mono ? 'mono' : undefined}>{c.render(r)}</td>)}
+        </tr>)}
       </tbody></table></div>
-    <div className="card-b" style={{ borderTop: '1px solid var(--line)', display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 10, flexWrap: 'wrap' }}>
+    </div>
+    <div className="modal-f">
       <span className="hint">ok {s.ok} · ошибок {s.error} · GTIN: новых {s.new}, обновится {s.update}, конфликтов {s.conflict}</span>
       <span style={{ display: 'flex', gap: 8 }}>
-        <button className="btn sm" onClick={closeDrawer}>Отмена</button>
+        <button className="btn sm" onClick={closeWide}>Отмена</button>
         <button className="btn sm pri" disabled={busy || !s.ok} onClick={doImport}>Импортировать</button>
-      </span></div>
-  </>
+      </span>
+    </div>
+  </div>
 }
 
 function Catalog({ ctx }) {
@@ -573,6 +619,7 @@ function Catalog({ ctx }) {
   const [cards, setCards] = useState(null)
   const [cardFilter, setCardFilter] = useState('')
   const [file, setFile] = useState(null)
+  const [dragOn, setDragOn] = useState(false)
   const fileRef = useRef(null)
   useEffect(() => { api('/v1/nkmt/batches').then(setBatches)
     .catch((e) => { setBatches([]); notify('Не удалось загрузить батчи', e.message, 'bad') }) }, [ctx.tick])
@@ -591,9 +638,13 @@ function Catalog({ ctx }) {
         notify(okMsg(r), ''); bump()
       } catch (e) { notify('Не удалось', e.message, 'bad') } })
   const showPreview = (f) => { if (!f) return
-    openDrawer(`Предпросмотр · ${f.name}`,
+    ctx.openWide(`Предпросмотр импорта · ${f.name}`,
       <ImportPreview ctx={ctx} file={f}
         onDone={() => { setFile(null); if (fileRef.current) fileRef.current.value = '' }} />) }
+  // один вход и для выбора в проводнике, и для перетаскивания: не-xlsx отсекаем
+  const pickFile = (f) => { if (!f) return
+    if (!/\.xlsx$/i.test(f.name)) return notify('Нужен файл .xlsx', f.name, 'warn')
+    setFile(f); showPreview(f) }
   const shown = (batches || []).filter((b) => stage === '' || (stageMatch?.match || [stage]).includes(b.status))
   return <>
     <Head title="Каталог НК" sub="Карточки Национального каталога: импорт выгрузки 1С → фид → модерация → подпись УКЭП → публикация → отчёт для 1С."
@@ -612,10 +663,15 @@ function Catalog({ ctx }) {
             .catch((e) => notify('Шаблон не скачался', e.message, 'bad'))}>Шаблон</button>
         </div></div>
       <div className="card-b">
-        <label className="drop" style={{ display: 'block' }}>
+        <label className={`drop${dragOn ? ' on' : ''}`} style={{ display: 'block' }}
+          onDragOver={(e) => { e.preventDefault(); setDragOn(true) }}
+          onDragLeave={(e) => { if (!e.currentTarget.contains(e.relatedTarget)) setDragOn(false) }}
+          onDrop={(e) => { e.preventDefault(); setDragOn(false); pickFile(e.dataTransfer.files[0]) }}>
           <input ref={fileRef} type="file" accept=".xlsx" style={{ display: 'none' }}
-            onChange={(e) => { const f = e.target.files[0] || null; setFile(f); showPreview(f) }} />
-          <b>Выберите выгрузку .xlsx</b>
+            onChange={(e) => { const f = e.target.files[0] || null
+              e.target.value = ''   // повторный выбор того же файла тоже даст change
+              pickFile(f) }} />
+          <b>Выберите или перетащите выгрузку .xlsx</b>
           <div style={{ fontSize: 12.5, marginTop: 2 }}>покажем предпросмотр: подстановки, правила РД и ошибки — до записи в базу</div>
           {file && <div className="file">{file.name}</div>}
         </label>
@@ -677,6 +733,8 @@ function Refs({ ctx }) {
   const [rbrand, setRbrand] = useState(''); const [rdecl, setRdecl] = useState('')
   const [rtypes, setRtypes] = useState([]); const [rtypeInput, setRtypeInput] = useState('')
   const [rprod, setRprod] = useState('')
+  const [rfields, setRfields] = useState({}); const [rfKey, setRfKey] = useState('size')
+  const [rfVal, setRfVal] = useState('')
   const [rzBrand, setRzBrand] = useState(''); const [rzType, setRzType] = useState(''); const [rz, setRz] = useState(null)
   useEffect(() => { api('/v1/nkmt/declarations').then(setDecls).catch(() => setDecls([]))
     api('/v1/nkmt/rules').then(setRules).catch(() => setRules([]))
@@ -698,16 +756,19 @@ function Refs({ ctx }) {
       .then(() => { notify('Декларация удалена', ''); ctx.bump() })
       .catch((e) => notify('Не удалось удалить', e.message, 'bad')))
   const addRule = () => { if (!rbrand.trim() && !rtypes.length)
-      return notify('Заполните бренд или вид товара', 'Правило без условия не создаётся — оно подходило бы всем строкам.', 'warn')
+    return notify('Заполните бренд или вид товара', 'Правило без условия не создаётся — оно подходило бы всем строкам.', 'warn')
     if (!rdecl) return notify('Выберите декларацию', '', 'warn')
     api('/v1/nkmt/rules', { method: 'POST',
-        body: JSON.stringify({ brand: rbrand, product_types: rtypes, declaration_id: Number(rdecl), producer: rprod }) })
-      .then(() => { setRbrand(''); setRtypes([]); setRtypeInput(''); setRprod(''); setRdecl('')
+        body: JSON.stringify({ brand: rbrand, product_types: rtypes, declaration_id: Number(rdecl), producer: rprod, fields: rfields }) })
+      .then(() => { setRbrand(''); setRtypes([]); setRtypeInput(''); setRprod(''); setRfields({}); setRfVal(''); setRdecl('')
         notify('Правило добавлено', 'Сработает при следующем импорте.'); ctx.bump() })
       .catch((e) => notify('Не добавлено', e.message, 'bad')) }
   const addRtype = () => { const t = rtypeInput.trim()
-    if (t && !rtypes.includes(t)) setRtypes([...rtypes, t])
+    if (t && !rtypes.some((x) => x.toLowerCase() === t.toLowerCase())) setRtypes([...rtypes, t])
     setRtypeInput('') }
+  const addRField = () => { const v = rfVal.trim()
+    if (v && rfKey) setRfields({ ...rfields, [rfKey]: v })
+    setRfVal('') }
   const delRule = (r) => confirm('Удалить правило РД?',
     `${r.brand || 'любой бренд'} × ${r.product_types?.length ? r.product_types.join(', ') : 'любой вид'}`,
     'Правило перестанет действовать при следующем импорте.', 'Удалить',
@@ -790,7 +851,7 @@ function Refs({ ctx }) {
             <button className="btn pri" style={{ alignSelf: 'flex-end' }}
               onClick={saveDefs}>Сохранить дефолты</button>
           </div>
-          <div className="note">Убранное поле перестанет подставляться по умолчанию — значение должно прийти из файла или правила (состав применяется кнопкой «Сохранить дефолты»). Техрегламент системный: НК требует его всегда.</div>
+          <div className="note">Убранное поле перестанет подставляться по умолчанию — значение должно прийти из файла или правила (состав применяется кнопкой «Сохранить дефолты»). Техрегламент системный: НК требует его всегда. Подстановку по условию (например, размер ONE SIZE только для шапок) делайте правилом РД на вкладке «Правила».</div>
         </div>
       </div>
       <div className="card">
@@ -808,13 +869,13 @@ function Refs({ ctx }) {
           </div>
           {rz
             ? <ul className="loops" style={{ marginTop: 6 }}>
-                {DEF_FIELDS.filter(([k]) => k in rz).map(([k, label]) => { const cell = rz[k]
+                {RZ_FIELDS.filter(([k]) => k in rz).map(([k, label]) => { const cell = rz[k]
                   return <li key={k}><span className="nm">{label}</span>
                     <span className="int" style={{ textAlign: 'right' }}>{cell.value || '—'}
-                      <span style={{ display: 'block', fontSize: 11, color: 'var(--faint)' }}>
-                        ← {RZ_SRC[cell.src] || cell.src}</span></span></li> })}
+                      {cell.src && <span style={{ display: 'block', fontSize: 11, color: 'var(--faint)' }}>
+                        ← {RZ_SRC[cell.src] || cell.src}</span>}</span></li> })}
               </ul>
-            : <div className="note">Введите бренд и вид товара и нажмите «Проверить» — увидите, какие декларация и производитель получит карточка ещё до импорта файла. Удобно проверять правила сразу после их настройки.</div>}
+            : <div className="note">Введите бренд и вид товара и нажмите «Проверить» — увидите, какие декларация, производитель и поля карточки (например, размер для шапок) получит строка ещё до импорта файла. Удобно проверять правила сразу после их настройки.</div>}
         </div>
       </div>
     </>}
@@ -858,16 +919,18 @@ function Refs({ ctx }) {
             <input list="hint-brands" value={rbrand} placeholder="вводите — будут подсказки"
               onChange={(e) => setRbrand(e.target.value)} /></div>
           <div className="field" style={{ flex: 2 }}><label>Виды товара — можно несколько (пусто = любой)</label>
-            <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6, alignItems: 'center' }}>
-              {rtypes.map((t) => <span key={t} className="bdg blue" style={{ cursor: 'default' }}>{t}
-                <a title="Убрать вид" style={{ marginLeft: 5, cursor: 'pointer' }}
-                  onClick={() => setRtypes(rtypes.filter((x) => x !== t))}>×</a></span>)}
-              <input list="hint-ptypes" style={{ flex: 1, minWidth: 160 }} value={rtypeInput}
+            <div style={{ display: 'flex', gap: 6 }}>
+              <input list="hint-ptypes" style={{ flex: 1, minWidth: 0 }} value={rtypeInput}
                 placeholder="например, ШАПКА — Enter или +"
                 onChange={(e) => setRtypeInput(e.target.value)}
                 onKeyDown={(e) => { if (e.key === 'Enter') { e.preventDefault(); addRtype() } }} />
               <button className="btn sm" title="Добавить вид" onClick={addRtype}>+</button>
-            </div></div>
+            </div>
+            {rtypes.length > 0 && <div className="chiprow" style={{ marginTop: 8 }}>
+              {rtypes.map((t) => <span key={t} className="bdg blue" style={{ cursor: 'default' }}>{t}
+                <a title="Убрать вид" style={{ marginLeft: 5, cursor: 'pointer' }}
+                  onClick={() => setRtypes(rtypes.filter((x) => x !== t))}>×</a></span>)}
+            </div>}</div>
         </div>
         <div className="faint" style={{ fontSize: 11, textTransform: 'uppercase', letterSpacing: '.06em', margin: '12px 0 8px' }}>Что подставить</div>
         <div className="frow">
@@ -879,19 +942,44 @@ function Refs({ ctx }) {
             </select></div>
           <div className="field" style={{ flex: 1 }}><label>Производитель (опционально)</label>
             <input value={rprod} onChange={(e) => setRprod(e.target.value)} /></div>
+        </div>
+        <div className="frow">
+          <div className="field" style={{ flex: 2, minWidth: 260 }}><label>Поле карточки (опционально — например, размер «one size» для шапок)</label>
+            <div style={{ display: 'flex', gap: 6 }}>
+              <select style={{ maxWidth: 170 }} value={rfKey} onChange={(e) => setRfKey(e.target.value)}>
+                {Object.entries(RULE_FIELD_LABELS).map(([k, l]) => <option key={k} value={k}>{l}</option>)}
+              </select>
+              <input style={{ flex: 1, minWidth: 0 }} value={rfVal} placeholder="значение — например, ONE SIZE"
+                onChange={(e) => setRfVal(e.target.value)}
+                onKeyDown={(e) => { if (e.key === 'Enter') { e.preventDefault(); addRField() } }} />
+              <button className="btn sm" title="Добавить поле" onClick={addRField}>+</button>
+            </div>
+            {Object.keys(rfields).length > 0 && <div className="chiprow" style={{ marginTop: 8 }}>
+              {Object.entries(rfields).map(([k, v]) => <span key={k} className="bdg blue" style={{ cursor: 'default' }}>
+                {RULE_FIELD_LABELS[k] || k}: {v}
+                <a title="Убрать поле" style={{ marginLeft: 5, cursor: 'pointer' }}
+                  onClick={() => { const f = { ...rfields }; delete f[k]; setRfields(f) }}>×</a></span>)}
+            </div>}
+            <span className="hint">подставится в строку, только если ячейка в файле пустая</span></div>
           <button className="btn pri" style={{ alignSelf: 'flex-end' }} onClick={addRule}>Добавить правило</button>
         </div>
-        <div className="note" style={{ marginTop: 10 }}>Как применяется: у строки файла берётся эффективный бренд и вид (из файла или дефолтов); правило подходит, если бренд совпал (без учёта регистра) и вид входит в список. Из подошедших побеждает правило с большим числом условий. Подстановка действует только там, где значение не задано файлом.</div>
+        <div className="note" style={{ marginTop: 10 }}>Как применяется: у строки файла берётся эффективный бренд и вид (из файла или дефолтов); правило подходит, если бренд и вид совпали (без учёта регистра) и вид входит в список. Из подошедших побеждает правило с большим числом условий. Подстановка действует только там, где значение не задано файлом — проверяйте её в «Проверке подстановок» ниже и в предпросмотре импорта.</div>
       </div>
       <div className="twrap"><table className="t small">
-        <thead><tr><th>Бренд</th><th>Виды товара</th><th>Декларация</th><th>Производитель</th><th></th></tr></thead>
-        <tbody>{(rules || []).map((r) => <tr key={r.id}>
+        <thead><tr><th>Бренд</th><th>Виды товара</th><th>Декларация</th><th>Производитель</th><th>Поля</th><th></th></tr></thead>
+        <tbody>{(rules || []).map((r) => { const fs = Object.entries(r.fields || {})
+          .map(([k, v]) => `${RULE_FIELD_LABELS[k] || k}: ${v}`).join(' · ')
+          return <tr key={r.id}>
           <td>{r.brand || 'любой'}</td>
-          <td style={{ fontSize: 12.5 }}>{r.product_types?.length ? r.product_types.join(', ') : 'любой'}</td>
-          <td style={{ fontSize: 12.5 }}>{r.declaration_number}</td>
+          <td className="ell" style={{ fontSize: 12.5 }} title={r.product_types?.join(', ')}>
+            {r.product_types?.length ? r.product_types.join(', ') : 'любой'}</td>
+          <td className="ell" style={{ fontSize: 12.5 }} title={r.declaration_title
+            ? `${r.declaration_title} · ${r.declaration_number}` : r.declaration_number}>
+            {r.declaration_number}</td>
           <td>{r.producer || '—'}</td>
-          <td className="actions"><button className="btn sm" onClick={() => delRule(r)}>Удалить</button></td></tr>)}
-          {rules && !rules.length && <tr><td colSpan={5}><div className="empty"><b>Правил нет</b>Пример: бренд Adel + виды «ШАПКА, КЕПКА» → декларация №… и производитель. Правило без бренда и видов не создаётся — оно подходило бы всем строкам.</div></td></tr>}
+          <td className="ell" style={{ fontSize: 12.5 }} title={fs}>{fs || '—'}</td>
+          <td className="actions"><button className="btn sm" onClick={() => delRule(r)}>Удалить</button></td></tr> })}
+          {rules && !rules.length && <tr><td colSpan={6}><div className="empty"><b>Правил нет</b>Пример: вид «ШАПКА» → декларация №…, производитель и размер ONE SIZE. Правило без бренда и видов не создаётся — оно подходило бы всем строкам.</div></td></tr>}
         </tbody></table></div>
     </div>}
     {tab === 'emitter' && <div className="card">
@@ -1184,16 +1272,28 @@ function Console({ me, logout }) {
   const [toasts, setToasts] = useState([])
   const [modal, setModal] = useState(null)
   const [drawer, setDrawer] = useState(null)
+  const [wide, setWide] = useState(null)
   const bump = () => setTick(Date.now())
   const notify = (title, text = '', kind = '') => { const id = Math.random()
     setToasts((t) => [...t, { id, title, text, kind }])
     setTimeout(() => setToasts((t) => t.filter((x) => x.id !== id)), 4500) }
   const confirm = (title, text, detail, okLabel, action) => setModal({ title, text, detail, okLabel, action })
   const openDrawer = (title, node) => setDrawer({ title, node })
+  const openWide = (title, node) => setWide({ title, node })
   const go = (v, jf) => { if (jf != null) setJInit(jf); setView(v); window.scrollTo(0, 0) }
   useEffect(() => { const i = setInterval(bump, 60000); return () => clearInterval(i) }, [])
   useEffect(() => { api('/v1/pulse').then(setPulse).catch(() => {}) }, [tick])
+  // Esc закрывает верхний слой: confirm → широкая модалка → drawer (DESIGN.md 7)
+  useEffect(() => {
+    const onKey = (e) => { if (e.key !== 'Escape') return
+      if (modal) setModal(null)
+      else if (wide) setWide(null)
+      else if (drawer) setDrawer(null) }
+    window.addEventListener('keydown', onKey)
+    return () => window.removeEventListener('keydown', onKey)
+  }, [modal, wide, drawer])
   const ctx = { notify, confirm, openDrawer, closeDrawer: () => setDrawer(null),
+    openWide, closeWide: () => setWide(null),
     bump, tick, inn, setInn, go, pulse }
   const s = pulse?.stats || {}
   const navCnt = { overview: null, withdraw: s.PENDING_WITHDRAW || 0,
@@ -1240,7 +1340,13 @@ function Console({ me, logout }) {
         <h3>{modal.title}</h3><p>{modal.text}</p>
         {modal.detail && <div className="mono-s">{modal.detail}</div>}
         <div className="row"><button className="btn" onClick={() => setModal(null)}>Отмена</button>
-          <button className="btn pri" onClick={() => { const m = modal; setModal(null); m.action() }}>{modal.okLabel}</button></div>
+        <button className="btn pri" onClick={() => { const m = modal; setModal(null); m.action() }}>{modal.okLabel}</button></div>
+      </div></div>}
+    {wide && <div className="veil" onClick={(e) => { if (e.target === e.currentTarget) setWide(null) }}>
+      <div className="modal wide" role="dialog" aria-modal="true">
+        <div className="modal-h"><h3>{wide.title}</h3>
+          <button className="btn sm" onClick={() => setWide(null)}>Закрыть</button></div>
+        <div className="modal-b">{wide.node}</div>
       </div></div>}
     {drawer && <><div className="drawer-veil" onClick={() => setDrawer(null)} />
       <aside className="drawer">

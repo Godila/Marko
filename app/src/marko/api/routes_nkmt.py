@@ -14,13 +14,13 @@ import zipfile
 import openpyxl
 from fastapi import APIRouter, Depends, File, HTTPException, Query, Response, UploadFile
 from pydantic import BaseModel
-from sqlalchemy import func
 from sqlalchemy.orm import Session
 
 from marko.api.deps import audit, get_db, require_scope
-from marko.nkmt.dicts import (attrs_model, dict_hints, get_defaults, get_rules,
-                              set_defaults)
+from marko.nkmt.dicts import (agent_context, attrs_model, dict_hints,
+                              get_defaults, get_rules, set_defaults)
 from marko.nkmt.models import Batch, Card, Declaration, Rule
+from marko.nkmt.parse import RULE_FIELDS
 from marko.nkmt.validate import DATE_RE
 from marko.platform.models import PlatformToken
 
@@ -45,6 +45,7 @@ class RuleBody(BaseModel):
     product_types: list[str] = []
     declaration_id: int
     producer: str = ""
+    fields: dict[str, str] = {}
 
 
 class ResolveBody(BaseModel):
@@ -126,25 +127,48 @@ def rules_create(
     db: Session = Depends(get_db),
 ):
     brand = body.brand.strip()
-    # виды товара — список, пустые/дубли выбрасываем, порядок сохраняем
-    ptypes = list(dict.fromkeys(t.strip() for t in body.product_types if t.strip()))
+    # виды товара — список: пустые выбрасываем, дедуп по casefold (первое
+    # написание выигрывает), порядок сохраняем — как матчит match_rule
+    seen: dict[str, str] = {}
+    for t in body.product_types:
+        v = t.strip()
+        if v:
+            seen.setdefault(v.casefold(), v)
+    ptypes = list(seen.values())
     if not brand and not ptypes:
         raise HTTPException(400, "укажите бренд или вид товара — правило без условия матчит все строки")
     if db.get(Declaration, body.declaration_id) is None:
         raise HTTPException(404, "declaration not found")
-    # дубль условия — как матчит match_rule: бренд casefold, список видов точно
-    dup = db.query(Rule).filter(func.lower(Rule.brand) == brand.casefold(),
-                                Rule.product_types == ptypes).first()
+    # дополнительные поля: whitelist, пустые значения выкидываются
+    fields = {}
+    for key, value in (body.fields or {}).items():
+        k = str(key).strip()
+        if not k:
+            continue
+        if k not in RULE_FIELDS:
+            raise HTTPException(400, f"поле «{k}» недоступно для подстановки правилом")
+        v = str(value).strip()
+        if v:
+            fields[k] = v
+    # дубль условия — как матчит match_rule: бренд и МНОЖЕСТВО видов без учёта
+    # регистра. Сравнение в Python (casefold), не lower() БД: локаль сервера
+    # не фолдит кириллицу; справочник правил мал — полный скан дешёвый
+    low_brand, low_types = brand.casefold(), {t.casefold() for t in ptypes}
+    dup = next((r for r in db.query(Rule).all()
+                if r.brand.casefold() == low_brand
+                and {t.casefold() for t in (r.product_types or [])} == low_types), None)
     if dup:
         raise HTTPException(409, "правило с таким условием уже существует")
     r = Rule(brand=brand, product_types=ptypes,
-             declaration_id=body.declaration_id, producer=body.producer.strip())
+             declaration_id=body.declaration_id, producer=body.producer.strip(),
+             fields=fields)
     db.add(r)
     db.commit()
     db.refresh(r)
     audit(db, tok.principal_id, "nkmt.rule.create",
           {"id": r.id, "brand": brand, "product_types": ptypes,
-           "declaration_id": body.declaration_id, "producer": r.producer})
+           "declaration_id": body.declaration_id, "producer": r.producer,
+           "fields": fields})
     return {"id": r.id}
 
 
@@ -223,6 +247,17 @@ def dicts_hints(
     """Подсказки для условий правил РД: пресетные виды товара (из кэша
     атрибутных моделей) и известные бренды. Без сети."""
     return dict_hints(db, get_defaults(db))
+
+
+@router.get("/context")
+def nkmt_context(
+    tok: PlatformToken = Depends(require_scope("read")),
+    db: Session = Depends(get_db),
+):
+    """Контекст контура НК для внешних агентов: колонки шаблона, приоритет
+    подстановок, дефолты, правила, справочники, карта эндпоинтов. Read-only,
+    без сети — агент понимает, как собирается карточка, и может подсказывать."""
+    return agent_context(db)
 
 
 @router.post("/import")

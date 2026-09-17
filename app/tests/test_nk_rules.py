@@ -1,13 +1,15 @@
-"""Движок правил РД: match_rule (приоритет, мультивыбор видов) и apply_rules (файл > правило > дефолт)."""
+"""Движок правил РД: match_rule (приоритет, мультивыбор видов, casefold) и
+apply_rules (файл > правило > дефолт; fields — дополнительные поля карточки)."""
 from marko.nkmt.parse import apply_defaults
-from marko.nkmt.resolve import apply_rules, match_rule, resolve_pipeline, sources
+from marko.nkmt.resolve import apply_rules, match_rule, resolve_fields, resolve_pipeline, sources
 
 
 def R(id, brand="", product_types=None, declaration_number="Д-X",
-      declaration_date="2026-05-05", producer=""):
+      declaration_date="2026-05-05", producer="", fields=None):
     return {"id": id, "brand": brand, "product_types": product_types or [],
             "declaration_number": declaration_number,
-            "declaration_date": declaration_date, "producer": producer}
+            "declaration_date": declaration_date, "producer": producer,
+            "fields": fields or {}}
 
 
 def test_match_rule_precedence():
@@ -18,8 +20,9 @@ def test_match_rule_precedence():
     assert match_rule(rules, "ДРУГОЙ", "ФУТБОЛКА") is None    # бренд не совпал нигде
     # мультивыбор: правило бьёт по любому виду из списка
     assert match_rule(rules, "ycpb", "ФУТБОЛКА")["id"] == 2
-    # вид товара — точно, не casefold
-    assert match_rule([R(5, product_types=["ШАПКА"])], "YCPB", "шапка") is None
+    # вид товара — casefold, как бренд: ручной ввод мимо подсказок не разваливает матчинг
+    assert match_rule([R(5, product_types=["ШАПКА"])], "YCPB", "шапка")["id"] == 5
+    assert match_rule([R(5, product_types=["Шапка-Ушанка"])], "", "ШАПКА-УШАНКА")["id"] == 5
 
 
 def test_match_rule_empty_types_is_wildcard():
@@ -73,3 +76,46 @@ def test_pipeline_multitype_rule():
     assert src[0]["declaration_number"] == "rule"
     # вид вне списка → правило не сработало, декларация осталась дефолтной
     assert rows[1]["declaration_number"] == "" and matched[1] is None
+
+
+def test_apply_rules_fields_fill_and_file_wins():
+    """fields правила подставляют поля карточки в пустые слоты: типовой кейс
+    «one size» для шапок. Файловое значение сильнее (инвариант _fill)."""
+    raw = [{"brand": "YCPB", "product_type": "ШАПКА", "size": ""},
+           {"brand": "YCPB", "product_type": "ШАПКА", "size": "58-60", "color": "ЧЁРНЫЙ"}]
+    rows, src = apply_defaults(raw, {}), sources(raw)
+    out, src2, matched = apply_rules(
+        [R(3, product_types=["ШАПКА"], declaration_number="Д-1",
+           fields={"size": "ONE SIZE", "color": "ОЛИВА"})], rows, src)
+    assert out[0]["size"] == "ONE SIZE" and src2[0]["size"] == "rule"
+    assert out[0]["color"] == "ОЛИВА" and src2[0]["color"] == "rule"
+    assert matched[0] == 3
+    # файловые значения сильнее: и размер, и цвет не тронуты при подходящем правиле
+    assert out[1]["size"] == "58-60" and src2[1]["size"] == "file"
+    assert out[1]["color"] == "ЧЁРНЫЙ" and src2[1]["color"] == "file"
+
+
+def test_apply_rules_fields_whitelist_enforced_in_engine():
+    """Ключи вне RULE_FIELDS движок игнорирует оборонительно (в БД значения
+    могли попасть в обход роута): идентификация строки не подменяется."""
+    raw = [{"brand": "YCPB", "product_type": "ШАПКА", "article": "A-1", "gtin": ""}]
+    out, _, _ = apply_rules(
+        [R(1, product_types=["ШАПКА"], declaration_number="Д-1",
+           fields={"article": "HACKED", "tnved": "0000000000", "size": "ONE SIZE"})],
+        apply_defaults(raw, {}), sources(raw))
+    assert out[0]["article"] == "A-1" and out[0].get("tnved", "") != "0000000000"
+    assert out[0]["size"] == "ONE SIZE"    # валидный ключ из той же карты работает
+
+
+def test_resolve_fields_includes_rule_fields():
+    """«Проверка подстановок»: rule-поля в ответе; недефолтуемые поля без
+    подстановки имеют src='' (источника нет), дефолтуемые — 'default'."""
+    rules = [R(2, product_types=["ШАПКА"], declaration_number="Д-1",
+               fields={"size": "ONE SIZE"})]
+    keys = resolve_fields("YCPB", "шапка", {}, rules)
+    assert keys["size"] == {"value": "ONE SIZE", "src": "rule"}
+    assert keys["color"] == {"value": "", "src": ""}
+    assert keys["declaration_number"] == {"value": "Д-1", "src": "rule"}
+    # без правила: размер пуст (дефолт не задан), цвет — без источника
+    keys2 = resolve_fields("YCPB", "кепка", {}, rules)
+    assert keys2["size"] == {"value": "", "src": "default"}

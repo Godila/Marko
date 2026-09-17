@@ -44,12 +44,16 @@ def test_dicts_attributes_validates_tnved(db, client, monkeypatch):
 
 
 def test_dicts_hints(db, client):
-    """Подсказки для правил: пресеты вида товара из кэша атрибутных моделей
-    + бренды из brand_cache и дефолта."""
+    """Подсказки для правил: пресеты вида товара, размерные системы и пол из
+    кэша атрибутных моделей + бренды из brand_cache и дефолта."""
     from marko.nkmt.models import BrandCache
     from marko.platform.models import PlatformKV
     db.add(PlatformKV(key="nk_attrs:6109100000", value={"m": [
-        {"attr_id": 12, "attr_name": "Вид товара", "attr_preset": ["ФУТБОЛКА", "ШАПКА"]}], "r": []}))
+        {"attr_id": 12, "attr_name": "Вид товара", "attr_preset": ["ФУТБОЛКА", "ШАПКА"]},
+        {"attr_id": 35, "attr_name": "Размер", "attr_preset": [],
+         "attr_value_type": ["МЕЖДУНАРОДНЫЙ", "ЕВРОПЕЙСКИЙ"]},
+        {"attr_id": 14013, "attr_name": "Целевой пол",
+         "attr_preset": ["ЖЕНСКИЙ", "МУЖСКОЙ"]}], "r": []}))
     db.add(BrandCache(name="ycpb", brand_id=2102811))
     db.commit()
     r = client.get("/v1/nkmt/dicts/hints", headers=AUTH_RO)
@@ -58,6 +62,8 @@ def test_dicts_hints(db, client):
     assert hints["product_types"] == ["ФУТБОЛКА", "ШАПКА"]
     # casefold-дедуп: кэш «ycpb» + дефолт «YCPB» → один вариант с дефолтным написанием
     assert hints["brands"] == ["YCPB"]
+    assert hints["size_systems"] == ["ЕВРОПЕЙСКИЙ", "МЕЖДУНАРОДНЫЙ"]
+    assert hints["genders"] == ["ЖЕНСКИЙ", "МУЖСКОЙ"]
 
 
 def test_rules_crud_and_declaration_guard(db, client):
@@ -70,8 +76,9 @@ def test_rules_crud_and_declaration_guard(db, client):
     assert lst == [{"id": r.json()["id"], "brand": "YCPB",
                     "product_types": ["ФУТБОЛКА", "ШАПКА"],
                     "declaration_id": d, "declaration_number": DECL["doc_number"],
-                    "declaration_date": DECL["doc_date"], "producer": "ИП Байкулов"}]
-    # правило без условия — 400; неизвестная декларация — 404; точный дубль условия — 409
+                    "declaration_date": DECL["doc_date"], "declaration_title": "",
+                    "producer": "ИП Байкулов", "fields": {}}]
+    # правило без условия — 400; неизвестная декларация — 404; дубль условия — 409
     assert client.post("/v1/nkmt/rules", headers=AUTH,
                        json={"declaration_id": d}).status_code == 400
     assert client.post("/v1/nkmt/rules", headers=AUTH,
@@ -79,6 +86,20 @@ def test_rules_crud_and_declaration_guard(db, client):
     assert client.post("/v1/nkmt/rules", headers=AUTH,
                        json={"brand": "YCPB", "product_types": ["ФУТБОЛКА", "ШАПКА"],
                              "declaration_id": d}).status_code == 409
+    # матчится casefold → дубль условия в другом регистре тоже 409
+    assert client.post("/v1/nkmt/rules", headers=AUTH,
+                       json={"brand": "ycpb", "product_types": ["футболка", "Шапка"],
+                             "declaration_id": d}).status_code == 409
+    # дубль в другом порядке видов — то же множество (семантика match_rule);
+    # кириллический бренд фолдится в Python, а не lower() локали БД
+    assert client.post("/v1/nkmt/rules", headers=AUTH,
+                       json={"brand": "Адель", "product_types": ["ШАПКА", "КЕПКА"],
+                             "declaration_id": d}).status_code == 200
+    adel = client.get("/v1/nkmt/rules", headers=AUTH_RO).json()[-1]["id"]
+    assert client.post("/v1/nkmt/rules", headers=AUTH,
+                       json={"brand": "АДЕЛЬ", "product_types": ["кепка", "шапка"],
+                             "declaration_id": d}).status_code == 409
+    assert client.delete(f"/v1/nkmt/rules/{adel}", headers=AUTH).json() == {"ok": True}
     # пустые виды в списке выбрасываются: ["  ", ""] → [] → без условия → 400
     assert client.post("/v1/nkmt/rules", headers=AUTH,
                        json={"brand": "", "product_types": ["  ", ""],
@@ -88,6 +109,34 @@ def test_rules_crud_and_declaration_guard(db, client):
     assert client.delete(f"/v1/nkmt/rules/{r.json()['id']}", headers=AUTH).json() == {"ok": True}
     assert client.delete(f"/v1/nkmt/declarations/{d}", headers=AUTH).json() == {"ok": True}
     assert client.delete("/v1/nkmt/rules/99999", headers=AUTH).status_code == 404
+
+
+def test_rules_fields_crud(db, client):
+    """fields правила: whitelist-ключи сохраняются и возвращаются, неизвестное
+    поле — 400, пустые значения нормализуются в отсутствие ключа."""
+    d = client.post("/v1/nkmt/declarations", headers=AUTH, json=DECL).json()["id"]
+    r = client.post("/v1/nkmt/rules", headers=AUTH,
+                    json={"product_types": ["ШАПКА"], "declaration_id": d,
+                          "fields": {"size": "ONE SIZE", "color": "  "}})
+    assert r.status_code == 200
+    lst = client.get("/v1/nkmt/rules", headers=AUTH_RO).json()
+    assert lst[0]["fields"] == {"size": "ONE SIZE"}
+    bad = client.post("/v1/nkmt/rules", headers=AUTH,
+                      json={"product_types": ["КЕПКА"], "declaration_id": d,
+                            "fields": {"article": "X"}})
+    assert bad.status_code == 400 and "article" in bad.json()["detail"]
+
+
+def test_rules_types_casefold_dedup(db, client):
+    """Виды товара дедуплицируются по casefold при записи: «ШАПКА, шапка» —
+    один вид с первым написанием (роут открыт API-агентам, UI так не шлёт)."""
+    d = client.post("/v1/nkmt/declarations", headers=AUTH, json=DECL).json()["id"]
+    r = client.post("/v1/nkmt/rules", headers=AUTH,
+                    json={"product_types": ["ШАПКА", "шапка", " КЕПКА "],
+                          "declaration_id": d})
+    assert r.status_code == 200
+    lst = client.get("/v1/nkmt/rules", headers=AUTH_RO).json()
+    assert lst[0]["product_types"] == ["ШАПКА", "КЕПКА"]
 
 
 def test_resolve_endpoint(db, client):
