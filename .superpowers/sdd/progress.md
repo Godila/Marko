@@ -348,3 +348,11 @@ colgroup, .content 1440); (3) время МСК (хост tz + parseUtc, кон�
 Прод-движение: PENDING_WITHDRAW 21→23, WITHDRAWN 114→118 — выкупы новой партии
 капают. Ждём юзера: «Собрать вывод» (23) → «Подать». Гейты/бэклог — в agentmemory
 «PRE-COMPACT CHECKPOINT 2026-09-17».
+
+## PRE-COMPACT CHECKPOINT 2026-09-18 (ночь)
+
+- main = origin = 28cde9d; прод синхронен (ui force-recreated), healthz ok, signer онлайн, сьют 251 passed.
+- Сессия: (1) НК-импорт 2.0 (58da0ef: правила fields+ТНВЭД, casefold, шаблон, wide-модалка превью, /context); (2) Производители+декларации из ЧЗ (979b22c, мигр. 0017: rd/list v4 enrichment, tnved_list, ТНВЭД-контроль превью, дровер-карточка); (3) Сага таблиц → ФИНАЛ b847878: ВСЕ colgroup сплошные ширины (пропорциональный масштаб на широких), контент без max-width, бейджи по словам; правило в DESIGN.md §7/§13.
+- Уроки сессии: UI-ширину проверять на 2560 юзера; в fit-гридах нет колонок без width; русские commit-сообщения через -F/- (не -m после taskkill); amend запушенного = reset --soft origin/main; MCP filechooser убивает run_code-блок — диалоги отдельными шагами.
+- Открыто: fbs_unknown=6 в wb_last_poll (трипваер, не разобран); латентно get_token 'PT9H' в kv; partial-импорт из UI заблокирован (ошибка = disabled кнопка).
+- Гейты: юзер «Собрать вывод»→«Подать»; TG-creds; S3-бэкап; УКЭП до 21.10.2026.
