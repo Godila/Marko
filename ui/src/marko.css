@@ -122,10 +122,9 @@ a{color:var(--info)}
 
 /* ============ бейджи/чипы ============ */
 .bdg{display:inline-flex;align-items:center;gap:6px;font-size:12px;font-weight:500;padding:2px 9px;border-radius:99px;white-space:nowrap}
-/* в гридах (fit+colgroup) колонка жёсткая: бейдж не может наезжать на
-   соседнюю — либо колонка шире подписи, либо подпись переносится внутри
-   пилюли (инцидент 18.09: «истекает ДД.ММ.ГГГГ» поверх соседней строки) */
-table.t .bdg{max-width:100%;white-space:normal;word-break:break-word}
+/* в гридах (fit+colgroup) бейдж не шире своей колонки: перенос ТОЛЬКО по
+   словам (break-word рвал «выведен» посреди слова — инцидент 18.09) */
+table.t .bdg{max-width:100%;white-space:normal}
 .bdg::before{content:"";width:6px;height:6px;border-radius:50%;background:currentColor}
 .bdg.grey{background:#EEF1F0;color:var(--muted)}
 .bdg.blue{background:var(--info-bg);color:var(--info)}
@@ -150,9 +149,10 @@ table.t .bdg{max-width:100%;white-space:normal;word-break:break-word}
 /* ============ таблицы ============ */
 .twrap{overflow-x:auto}
 table.t{width:100%;border-collapse:collapse;font-size:13px}
-/* плотные табличные формы: фиксированный лейаут — ширины колонок заданы
-   colgroup и не дёргаются при обновлении данных; ячейки однострочные,
-   ell-обрезку правит col, а не max-width */
+/* плотные табличные формы: фиксированный лейаут — ВСЕ колонки с шириной в
+   colgroup; на широком экране таблица масштабируется пропорционально
+   (поведение fixed layout), колонка БЕЗ width забрала бы весь избыток и
+   раздулась (инцидент 18.09); на узком — держит сумму ширин, скролл в .twrap */
 table.t.fit{table-layout:fixed}
 table.t.fit td.ell{max-width:none}
 table.t th{font-size:11px;letter-spacing:.06em;text-transform:uppercase;color:var(--faint);font-weight:500;text-align:left;padding:10px 14px;border-bottom:1px solid var(--line);white-space:nowrap}

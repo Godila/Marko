@@ -265,9 +265,9 @@ function DocTable({ docs, ctx, empty }) {
           <pre>{JSON.stringify(full.payload, null, 2)}</pre></div>)
     } catch (e) { notify('Не удалось открыть состав', e.message, 'bad') } }
   if (!docs.length) return <div className="empty"><b>{empty || 'Документов пока нет'}</b>Они появятся после сбора из позиций журнала.</div>
-  return <div className="twrap"><table className="t fit" style={{ minWidth: 880 }}>
+  return <div className="twrap"><table className="t fit">
     <colgroup><col style={{ width: 44 }} /><col style={{ width: 104 }} /><col style={{ width: 118 }} />
-      <col /><col style={{ width: 86 }} /><col style={{ width: 248 }} /></colgroup>
+      <col style={{ width: 480 }} /><col style={{ width: 90 }} /><col style={{ width: 250 }} /></colgroup>
     <thead><tr><th>№</th><th>Тип</th><th>Статус</th><th>uuid в ЧЗ</th><th>Создан</th><th></th></tr></thead>
     <tbody>{docs.map((d) => <tr key={d.id}>
       <td className="num">{d.id}</td>
@@ -450,8 +450,8 @@ function Withdraw({ ctx }) {
     </div>
     <div className="card">
       <div className="card-h"><h2>Готовы к выводу</h2><span className="hint">шт: {pend ? pend.length : '…'} · ИНН из «Справочников»</span></div>
-      <div className="twrap"><table className="t fit" style={{ minWidth: 760 }}>
-        <colgroup><col style={{ width: 248 }} /><col /><col style={{ width: 205 }} /></colgroup>
+      <div className="twrap"><table className="t fit">
+        <colgroup><col style={{ width: 248 }} /><col style={{ width: 783 }} /><col style={{ width: 205 }} /></colgroup>
         <thead><tr><th>Код маркировки</th><th>Наименование</th><th>Последний сигнал</th></tr></thead>
         <tbody>{(pend || []).map((it) => <tr key={it.km}>
           <td><KmCell km={it.km} /></td>
@@ -518,8 +518,8 @@ function Returns({ ctx, pulse }) {
         <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
           <span className="hint">квота {pulse?.quota?.goods_return_used ?? '—'}/{pulse?.quota?.goods_return_limit ?? 2} в час</span>
           <button className="btn sm" onClick={poll}>Обновить WB</button></div></div>
-      <div className="twrap"><table className="t fit" style={{ minWidth: 960 }}>
-        <colgroup><col style={{ width: 84 }} /><col /><col style={{ width: 170 }} />
+      <div className="twrap"><table className="t fit">
+        <colgroup><col style={{ width: 84 }} /><col style={{ width: 330 }} /><col style={{ width: 170 }} />
           <col style={{ width: 150 }} /><col style={{ width: 132 }} /><col style={{ width: 100 }} />
           <col style={{ width: 180 }} /></colgroup>
         <thead><tr><th>Заказ</th><th>Предмет</th><th>Причина</th><th>Статус</th><th>Забрать до</th><th>Выдан</th><th>ПВЗ</th></tr></thead>
@@ -553,37 +553,38 @@ const SrcMark = ({ v, src, extra }) => (v && src && src !== 'file'
   ? <div className="faint" style={{ fontSize: 11 }}>← {SRC_RU[src] || src}{extra || ''}</div> : null)
 
 // декларативный конфиг колонок предпросмотра (паттерн JOURNAL_COLUMNS):
-// подстановочные поля несут маркер источника — правило видно до импорта
+// подстановочные поля несут маркер источника — правило видно до импорта;
+// все колонки с шириной, сумма 1204 = контент wide-модалки без скролла
 const PREVIEW_COLUMNS = [
-  { key: 'article', label: 'Артикул', w: 104, mono: true,
+  { key: 'article', label: 'Артикул', w: 88, mono: true,
     text: (r) => r.article, render: (r) => r.article },
-  { key: 'name', label: 'Наименование', ell: true,
+  { key: 'name', label: 'Наименование', w: 150, ell: true,
     text: (r) => r.name, render: (r) => r.name || <span className="faint">—</span> },
-  { key: 'pt', label: 'Вид', w: 118, ell: true,
+  { key: 'pt', label: 'Вид', w: 104, ell: true,
     text: (r) => r.product_type, render: (r) => r.product_type || <span className="faint">—</span> },
-  { key: 'brand', label: 'Бренд', w: 104,
+  { key: 'brand', label: 'Бренд', w: 88,
     text: (r) => r.brand, render: (r) => <>{r.brand || '—'}<SrcMark v={r.brand} src={r.src.brand} /></> },
-  { key: 'tnved', label: 'ТН ВЭД', w: 96, mono: true,
+  { key: 'tnved', label: 'ТН ВЭД', w: 84, mono: true,
     text: (r) => r.tnved, render: (r) => <>{r.tnved || '—'}
       <SrcMark v={r.tnved} src={r.src.tnved} />
       {r.tnved_warning && <div title={r.tnved_warning}
         style={{ fontSize: 11, color: 'var(--wait)' }}>вне декларации</div>}</> },
-  { key: 'size', label: 'Размер', w: 92,
+  { key: 'size', label: 'Размер', w: 78,
     text: (r) => r.size, render: (r) => <>{r.size || <span className="faint">—</span>}<SrcMark v={r.size} src={r.src.size} /></> },
-  { key: 'decl', label: 'Декларация', w: 196,
+  { key: 'decl', label: 'Декларация', w: 166,
     text: (r) => r.declaration_number, render: (r) => <>
       {r.declaration_number || '—'}
       {r.declaration_date && <div className="faint mono" style={{ fontSize: 11 }}>{r.declaration_date}</div>}
       <SrcMark v={r.declaration_number} src={r.src.declaration_number}
         extra={r.src.declaration_number === 'rule' && r.rule_id ? ` №${r.rule_id}` : ''} /></> },
-  { key: 'producer', label: 'Производитель', w: 164,
+  { key: 'producer', label: 'Производитель', w: 136,
     text: (r) => r.producer, render: (r) => <>{r.producer || '—'}<SrcMark v={r.producer} src={r.src.producer} /></> },
-  { key: 'gtin', label: 'GTIN', w: 118, mono: true,
+  { key: 'gtin', label: 'GTIN', w: 98, mono: true,
     text: (r) => r.gtin, render: (r) => <>{r.gtin || '—'}
       {r.gtin_status && <div style={{ marginTop: 3 }}><Badge dict={GTIN_STATUS} v={r.gtin_status} /></div>}</> },
-  { key: 'res', label: 'Итог', w: 82,
+  { key: 'res', label: 'Итог', w: 70,
     render: (r) => r.ok ? <span className="bdg green">ok</span> : <span className="bdg red">ошибка</span> },
-  { key: 'err', label: 'Ошибка', w: 196, ell: true,
+  { key: 'err', label: 'Ошибка', w: 142, ell: true,
     text: (r) => r.error || '', render: (r) => r.error ? <span className="err-tx">{r.error}</span> : '' },
 ]
 
@@ -617,8 +618,8 @@ function ImportPreview({ ctx, file, onDone }) {
       <p style={{ fontSize: 12.5, color: 'var(--muted)', marginTop: 0 }}>
         Подстановка: значение из файла → правило РД → дефолты. Под каждым значением —
         источник, у правила его номер. Импорт повторит ровно этот разбор.</p>
-      <div className="twrap"><table className="t small fit" style={{ minWidth: 1180 }}>
-        <colgroup>{PREVIEW_COLUMNS.map((c) => <col key={c.key} style={c.w ? { width: c.w } : undefined} />)}</colgroup>
+          <div className="twrap"><table className="t small fit">
+            <colgroup>{PREVIEW_COLUMNS.map((c) => <col key={c.key} style={{ width: c.w }} />)}</colgroup>
         <thead><tr>{PREVIEW_COLUMNS.map((c) => <th key={c.key}>{c.label}</th>)}</tr></thead>
         <tbody>{data.rows.map((r, i) => <tr key={i} className={r.ok ? undefined : 'rowhot'}>
           {PREVIEW_COLUMNS.map((c) => c.ell
@@ -730,8 +731,8 @@ function Catalog({ ctx }) {
               {Object.keys(CARD_STATUS).map((s2) => <option key={s2} value={s2}>{CARD_STATUS[s2][0]}</option>)}
             </select>
             <span className="hint">{cards ? `карточек: ${cards.length}` : 'загрузка…'}</span></div>
-          <div className="twrap"><table className="t small fit" style={{ minWidth: 820 }}>
-            <colgroup><col style={{ width: 132 }} /><col style={{ width: 132 }} /><col />
+          <div className="twrap"><table className="t small fit">
+            <colgroup><col style={{ width: 132 }} /><col style={{ width: 132 }} /><col style={{ width: 340 }} />
               <col style={{ width: 130 }} /><col style={{ width: 260 }} /></colgroup>
             <thead><tr><th>Артикул</th><th>GTIN</th><th>Наименование</th><th>Статус</th><th>Ошибка</th></tr></thead>
             <tbody>{(cards || []).map((c) => <tr key={c.id}>
@@ -1014,10 +1015,10 @@ function Refs({ ctx }) {
               onChange={(e) => setDtitle(e.target.value)} /></div>
         </div>
       </div>
-      <div className="twrap"><table className="t small fit" style={{ minWidth: 1100 }}>
-        <colgroup><col style={{ width: 30 }} /><col style={{ width: 208 }} /><col />
-          <col style={{ width: 82 }} /><col style={{ width: 88 }} /><col style={{ width: 150 }} />
-          <col style={{ width: 128 }} /><col style={{ width: 132 }} /><col style={{ width: 132 }} /></colgroup>
+      <div className="twrap"><table className="t small fit">
+        <colgroup><col style={{ width: 30 }} /><col style={{ width: 200 }} /><col style={{ width: 308 }} />
+          <col style={{ width: 80 }} /><col style={{ width: 86 }} /><col style={{ width: 150 }} />
+          <col style={{ width: 122 }} /><col style={{ width: 130 }} /><col style={{ width: 130 }} /></colgroup>
         <thead><tr><th>№</th><th>Номер</th><th>Продукция / название</th><th>Дата</th>
           <th>Действует до</th><th>Статус</th><th>ТН ВЭД</th><th>Техрегламенты</th>
           <th>Изготовитель</th></tr></thead>
@@ -1060,8 +1061,8 @@ function Refs({ ctx }) {
         </div>
         <div className="note">Производитель из этого справочника появится в подсказках полей «Производитель» (дефолты и правила РД) — каноническое написание попадёт во все карточки одинаково.</div>
       </div>
-      <div className="twrap"><table className="t small fit" style={{ minWidth: 720 }}>
-        <colgroup><col /><col style={{ width: 140 }} /><col style={{ width: 96 }} />
+      <div className="twrap"><table className="t small fit">
+        <colgroup><col style={{ width: 480 }} /><col style={{ width: 140 }} /><col style={{ width: 96 }} />
           <col style={{ width: 210 }} /><col style={{ width: 110 }} /></colgroup>
         <thead><tr><th>Наименование</th><th>ИНН</th><th>Тип</th><th>Примечание</th><th></th></tr></thead>
         <tbody>{(producers || []).map((p) => <tr key={p.id}>
@@ -1133,8 +1134,8 @@ function Refs({ ctx }) {
         </div>
         <div className="note" style={{ marginTop: 10 }}>Как применяется: у строки файла берётся эффективный бренд и вид (из файла или дефолтов); правило подходит, если бренд и вид совпали (без учёта регистра) и вид входит в список. Из подошедших побеждает правило с большим числом условий. Подстановка действует только там, где значение не задано файлом — проверяйте её в «Проверке подстановок» ниже и в предпросмотре импорта.</div>
       </div>
-      <div className="twrap"><table className="t small fit" style={{ minWidth: 980 }}>
-        <colgroup><col style={{ width: 120 }} /><col /><col style={{ width: 216 }} />
+      <div className="twrap"><table className="t small fit">
+        <colgroup><col style={{ width: 120 }} /><col style={{ width: 320 }} /><col style={{ width: 216 }} />
           <col style={{ width: 168 }} /><col style={{ width: 186 }} /><col style={{ width: 112 }} /></colgroup>
         <thead><tr><th>Бренд</th><th>Виды товара</th><th>Декларация</th><th>Производитель</th><th>Поля</th><th></th></tr></thead>
         <tbody>{(rules || []).map((r) => { const fs = Object.entries(r.fields || {})
@@ -1322,15 +1323,15 @@ function OrderCard({ data, ctx }) {
    обрезка с кликом-раскрытием, mono — кодовая колонка (DESIGN.md 11) */
 const JOURNAL_COLUMNS = [
   { key: 'km', label: 'Код маркировки', w: 248, render: (it) => <KmCell km={it.km} /> },
-  { key: 'name', label: 'Наименование', ell: true, text: (it) => it.cis_product_name || '',
+  { key: 'name', label: 'Наименование', w: 238, ell: true, text: (it) => it.cis_product_name || '',
     render: (it) => it.cis_product_name || <span className="faint">—</span> },
-  { key: 'state', label: 'Состояние', w: 104, render: (it) => <Badge dict={ITEM_STATES} v={it.state} /> },
-  { key: 'sig', label: 'Последний сигнал', w: 205, ell: true, text: (it) => evLine(it),
+  { key: 'state', label: 'Состояние', w: 126, render: (it) => <Badge dict={ITEM_STATES} v={it.state} /> },
+  { key: 'sig', label: 'Последний сигнал', w: 194, ell: true, text: (it) => evLine(it),
     render: (it) => evLine(it) },
-  { key: 'order', label: 'Заказ WB', w: 235, ell: true, mono: true, text: (it) => it.last_event?.srid || '',
+  { key: 'order', label: 'Заказ WB', w: 224, ell: true, mono: true, text: (it) => it.last_event?.srid || '',
     render: (it) => it.last_event?.srid || <span className="faint">—</span> },
-  { key: 'cz', label: 'ЧЗ', w: 100, render: (it) => it.cis_status ? <Badge dict={CIS_STATUS} v={it.cis_status} /> : <span className="faint">—</span> },
-  { key: 'upd', label: 'Обновлён', w: 92, mono: true, render: (it) => fmtD(it.updated_at) },
+  { key: 'cz', label: 'ЧЗ', w: 120, render: (it) => it.cis_status ? <Badge dict={CIS_STATUS} v={it.cis_status} /> : <span className="faint">—</span> },
+  { key: 'upd', label: 'Обновлён', w: 86, mono: true, render: (it) => fmtD(it.updated_at) },
 ]
 
 // ID заказа WB: [префикс.]тело[.n.m]. Тела реальных rid двух видов (фикстура
@@ -1402,7 +1403,7 @@ function Journal({ ctx, initial }) {
         {isOrderId(q) && <> · Enter — карточка заказа WB</>}</span>
     </div>
     <div className="card">
-      <div className="twrap"><table className="t fit" style={{ minWidth: 1230 }}>
+      <div className="twrap"><table className="t fit">
         <colgroup>{JOURNAL_COLUMNS.map((c) => <col key={c.key} style={c.w ? { width: c.w } : undefined} />)}</colgroup>
         <thead><tr>{JOURNAL_COLUMNS.map((c) => <th key={c.key}>{c.label}</th>)}</tr></thead>
         <tbody>{shown.map((it) => { const [lbl] = ITEM_STATES[it.state] || [it.state]
