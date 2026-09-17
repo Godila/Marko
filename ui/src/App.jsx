@@ -265,13 +265,15 @@ function DocTable({ docs, ctx, empty }) {
           <pre>{JSON.stringify(full.payload, null, 2)}</pre></div>)
     } catch (e) { notify('Не удалось открыть состав', e.message, 'bad') } }
   if (!docs.length) return <div className="empty"><b>{empty || 'Документов пока нет'}</b>Они появятся после сбора из позиций журнала.</div>
-  return <div className="twrap"><table className="t">
+  return <div className="twrap"><table className="t fit" style={{ minWidth: 880 }}>
+    <colgroup><col style={{ width: 44 }} /><col style={{ width: 104 }} /><col style={{ width: 118 }} />
+      <col /><col style={{ width: 86 }} /><col style={{ width: 248 }} /></colgroup>
     <thead><tr><th>№</th><th>Тип</th><th>Статус</th><th>uuid в ЧЗ</th><th>Создан</th><th></th></tr></thead>
     <tbody>{docs.map((d) => <tr key={d.id}>
       <td className="num">{d.id}</td>
-      <td className="mono">{d.type}</td>
+      <td className="mono ell" title={d.type}>{d.type}</td>
       <td><Badge dict={DOC_STATUS} v={d.status} /></td>
-      <td className="mono">{d.external_id || '—'}</td>
+      <td className="ell mono" title={d.external_id || ''}>{d.external_id || '—'}</td>
       <td className="mono">{fmtD(d.created_at)}</td>
       <td className="actions">
         {d.status === 'draft' && <button className="btn sm pri" onClick={() => submitDoc(d)}>Подать</button>}
@@ -279,8 +281,8 @@ function DocTable({ docs, ctx, empty }) {
         {(d.status === 'submitted' || d.status === 'error')
           && <button className="btn sm" onClick={() => checkDoc(d)}>Проверить</button>}
         <button className="btn sm" onClick={() => showPayload(d)}>Состав</button>
-      </td></tr>)}</tbody>
-  </table></div>
+      </td></tr>)}
+    </tbody></table></div>
 }
 
 /* ================= обзор ================= */
@@ -516,16 +518,22 @@ function Returns({ ctx, pulse }) {
         <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
           <span className="hint">квота {pulse?.quota?.goods_return_used ?? '—'}/{pulse?.quota?.goods_return_limit ?? 2} в час</span>
           <button className="btn sm" onClick={poll}>Обновить WB</button></div></div>
-      <div className="twrap"><table className="t">
+      <div className="twrap"><table className="t fit" style={{ minWidth: 960 }}>
+        <colgroup><col style={{ width: 84 }} /><col /><col style={{ width: 170 }} />
+          <col style={{ width: 150 }} /><col style={{ width: 132 }} /><col style={{ width: 100 }} />
+          <col style={{ width: 180 }} /></colgroup>
         <thead><tr><th>Заказ</th><th>Предмет</th><th>Причина</th><th>Статус</th><th>Забрать до</th><th>Выдан</th><th>ПВЗ</th></tr></thead>
         <tbody>{sorted.map((r) => {
           const c = !r.completed_dt && r.expired_dt ? leftCls(r.expired_dt) : ''
           return <tr key={r.srid} className={c === 'danger' || c === 'over' ? 'rowhot' : ''}>
-            <td className="num">{r.order_id}</td><td>{r.subject || r.srid}</td>
-            <td>{r.reason || '—'}</td><td>{r.status}</td>
+            <td className="num">{r.order_id}</td>
+            <td className="ell" title={r.subject || r.srid}>{r.subject || r.srid}</td>
+            <td className="ell" title={r.reason || ''}>{r.reason || '—'}</td>
+            <td className="ell" title={r.status || ''}>{r.status}</td>
             <td>{r.expired_dt ? <><span className={`cd ${c}`}>{fmtLeft(r.expired_dt)}</span>
               <div className="faint mono" style={{ fontSize: 11, marginTop: 2 }}>{fmtD(r.expired_dt)}</div></> : '—'}</td>
-            <td>{r.completed_dt ? fmtD(r.completed_dt) : '—'}</td><td>{r.office || '—'}</td></tr> })}
+            <td className="mono">{r.completed_dt ? fmtD(r.completed_dt) : '—'}</td>
+            <td className="ell" title={r.office || ''}>{r.office || '—'}</td></tr> })}
           {rows && !rows.length && <tr><td colSpan={7}><div className="empty"><b>Возвратов нет</b>Появятся из часового опроса WB — или нажмите «Обновить WB».</div></td></tr>}
         </tbody></table></div>
       <div className="card-b" style={{ borderTop: '1px solid var(--line)', display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 12, flexWrap: 'wrap' }}>
@@ -721,13 +729,17 @@ function Catalog({ ctx }) {
               {Object.keys(CARD_STATUS).map((s2) => <option key={s2} value={s2}>{CARD_STATUS[s2][0]}</option>)}
             </select>
             <span className="hint">{cards ? `карточек: ${cards.length}` : 'загрузка…'}</span></div>
-          <div className="twrap"><table className="t small">
+          <div className="twrap"><table className="t small fit" style={{ minWidth: 820 }}>
+            <colgroup><col style={{ width: 132 }} /><col style={{ width: 132 }} /><col />
+              <col style={{ width: 130 }} /><col style={{ width: 260 }} /></colgroup>
             <thead><tr><th>Артикул</th><th>GTIN</th><th>Наименование</th><th>Статус</th><th>Ошибка</th></tr></thead>
             <tbody>{(cards || []).map((c) => <tr key={c.id}>
-              <td className="mono">{c.article}</td><td className="mono">{c.gtin || '—'}</td>
-              <td>{c.name}</td><td><Badge dict={CARD_STATUS} v={c.status} /></td>
-              <td className="err-tx">{c.error_text || ''}</td></tr>)}</tbody>
-          </table></div>
+              <td className="ell mono" title={c.article}>{c.article}</td>
+              <td className="ell mono" title={c.gtin || ''}>{c.gtin || '—'}</td>
+              <td className="ell" title={c.name}>{c.name}</td>
+              <td><Badge dict={CARD_STATUS} v={c.status} /></td>
+              <td className="ell err-tx" title={c.error_text || ''}>{c.error_text || ''}</td></tr>)}
+            </tbody></table></div>
         </div>}
       </div>)}
       {batches && !shown.length && <div className="empty"><b>Батчей в этом статусе нет</b>Импортируйте выгрузку, чтобы начать новый.</div>}
