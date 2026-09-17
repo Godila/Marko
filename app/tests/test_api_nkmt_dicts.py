@@ -23,11 +23,62 @@ DECL = {"doc_number": "ЕАЭС №RU Д-RU.АБ12.В.12345", "doc_date": "2026-
 def test_declarations_crud(db, client):
     r = client.post("/v1/nkmt/declarations", headers=AUTH, json=DECL)
     assert r.status_code == 200 and r.json()["id"]
-    assert r.json()["id"] == client.get("/v1/nkmt/declarations", headers=AUTH_RO).json()[0]["id"]
+    assert r.json()["found"] is False   # ЧЗ офлайн в тестах — обогащение best-effort
+    lst = client.get("/v1/nkmt/declarations", headers=AUTH_RO).json()
+    row = lst[0]
+    assert row["id"] == r.json()["id"] and row["status"] == "" and row["tnved_list"] == []
     dup = client.post("/v1/nkmt/declarations", headers=AUTH, json=DECL)
     assert dup.status_code == 409
     assert client.delete(f"/v1/nkmt/declarations/{r.json()['id']}", headers=AUTH).json() == {"ok": True}
     assert client.get("/v1/nkmt/declarations", headers=AUTH_RO).json() == []
+
+
+def test_declarations_check_enriches(db, client, monkeypatch):
+    """POST /declarations/{id}/check: rd/list → rich-поля; не найдена — found: 0."""
+    from marko.nkmt.client import NkClient
+    monkeypatch.setattr("marko.connector_mt.manager.get_token", lambda _db: "T")
+    monkeypatch.setattr(NkClient, "rd_list", lambda self, token, docs: {
+        "documents": [{"type": "CONFORMITY_DECLARATION", "number": DECL["doc_number"],
+                       "dateFrom": DECL["doc_date"], "dateTo": "2031-05-12",
+                       "status": "Действует", "productName": "Головные уборы",
+                       "productTnved": "6505003000, 6505009000",
+                       "productTechRegulations": "ТР ТС 017/2011",
+                       "applicantProductName": "ИП", "manufacturerProductName": "ИП"}],
+        "errors": []})
+    d = client.post("/v1/nkmt/declarations", headers=AUTH, json=DECL).json()
+    out = client.post(f"/v1/nkmt/declarations/{d['id']}/check", headers=AUTH).json()
+    assert out["found"] == 1 and out["declaration"]["status"] == "Действует"
+    assert out["declaration"]["tnved_list"] == ["6505003000", "6505009000"]
+    assert out["declaration"]["date_to"] == "2031-05-12"
+    assert out["declaration"]["checked_at"]
+    # check-all по всему реестру — тот же enriched-ответ
+    allout = client.post("/v1/nkmt/declarations/check-all", headers=AUTH).json()
+    assert allout["checked"] == 1 and allout["found"] == 1
+
+
+def test_declarations_check_all_empty_409(db, client):
+    assert client.post("/v1/nkmt/declarations/check-all", headers=AUTH).status_code == 409
+
+
+def test_producers_crud(db, client):
+    r = client.post("/v1/nkmt/producers", headers=AUTH, json={
+        "name": "ИП Байкулов Д. А.", "inn": "090201471350",
+        "kind": "entrepreneur", "note": "осн. производитель"})
+    assert r.status_code == 200 and r.json()["id"]
+    lst = client.get("/v1/nkmt/producers", headers=AUTH_RO).json()
+    assert lst == [{"id": r.json()["id"], "name": "ИП Байкулов Д. А.",
+                    "inn": "090201471350", "kind": "entrepreneur",
+                    "note": "осн. производитель"}]
+    # дубль имени без учёта регистра — 409; битый ИНН — 400; пустое имя — 400
+    assert client.post("/v1/nkmt/producers", headers=AUTH,
+                       json={"name": "ип байкулов д. а."}).status_code == 409
+    assert client.post("/v1/nkmt/producers", headers=AUTH,
+                       json={"name": "X", "inn": "123"}).status_code == 400
+    assert client.post("/v1/nkmt/producers", headers=AUTH,
+                       json={"name": "  "}).status_code == 400
+    assert client.delete(f"/v1/nkmt/producers/{r.json()['id']}", headers=AUTH).json() == {"ok": True}
+    assert client.get("/v1/nkmt/producers", headers=AUTH_RO).json() == []
+    assert client.delete("/v1/nkmt/producers/999", headers=AUTH).status_code == 404
 
 
 def test_defaults_get_put(db, client):
@@ -45,8 +96,8 @@ def test_dicts_attributes_validates_tnved(db, client, monkeypatch):
 
 def test_dicts_hints(db, client):
     """Подсказки для правил: пресеты вида товара, размерные системы и пол из
-    кэша атрибутных моделей + бренды из brand_cache и дефолта."""
-    from marko.nkmt.models import BrandCache
+    кэша атрибутных моделей + бренды и производители из справочников."""
+    from marko.nkmt.models import BrandCache, Producer
     from marko.platform.models import PlatformKV
     db.add(PlatformKV(key="nk_attrs:6109100000", value={"m": [
         {"attr_id": 12, "attr_name": "Вид товара", "attr_preset": ["ФУТБОЛКА", "ШАПКА"]},
@@ -55,6 +106,7 @@ def test_dicts_hints(db, client):
         {"attr_id": 14013, "attr_name": "Целевой пол",
          "attr_preset": ["ЖЕНСКИЙ", "МУЖСКОЙ"]}], "r": []}))
     db.add(BrandCache(name="ycpb", brand_id=2102811))
+    db.add(Producer(name="ИП Байкулов Д. А.", inn="090201471350", kind="entrepreneur"))
     db.commit()
     r = client.get("/v1/nkmt/dicts/hints", headers=AUTH_RO)
     assert r.status_code == 200
@@ -64,6 +116,7 @@ def test_dicts_hints(db, client):
     assert hints["brands"] == ["YCPB"]
     assert hints["size_systems"] == ["ЕВРОПЕЙСКИЙ", "МЕЖДУНАРОДНЫЙ"]
     assert hints["genders"] == ["ЖЕНСКИЙ", "МУЖСКОЙ"]
+    assert hints["producers"] == ["ИП Байкулов Д. А."]
 
 
 def test_rules_crud_and_declaration_guard(db, client):

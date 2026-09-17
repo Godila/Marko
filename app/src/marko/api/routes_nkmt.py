@@ -19,7 +19,7 @@ from sqlalchemy.orm import Session
 from marko.api.deps import audit, get_db, require_scope
 from marko.nkmt.dicts import (agent_context, attrs_model, dict_hints,
                               get_defaults, get_rules, set_defaults)
-from marko.nkmt.models import Batch, Card, Declaration, Rule
+from marko.nkmt.models import Batch, Card, Declaration, Producer, Rule
 from marko.nkmt.parse import RULE_FIELDS
 from marko.nkmt.validate import DATE_RE
 from marko.platform.models import PlatformToken
@@ -40,6 +40,13 @@ class DeclarationBody(BaseModel):
     title: str = ""
 
 
+class ProducerBody(BaseModel):
+    name: str
+    inn: str = ""
+    kind: str = ""                  # entrepreneur|company|""
+    note: str = ""
+
+
 class RuleBody(BaseModel):
     brand: str = ""
     product_types: list[str] = []
@@ -53,16 +60,42 @@ class ResolveBody(BaseModel):
     product_type: str = ""
 
 
+def _decl_row(d: Declaration) -> dict:
+    return {"id": d.id, "doc_number": d.doc_number, "doc_date": d.doc_date,
+            "doc_type": d.doc_type, "title": d.title,
+            "status": d.status, "date_to": d.date_to,
+            "product_name": d.product_name, "tnved_list": d.tnved_list or [],
+            "techregs": d.techregs, "applicant": d.applicant,
+            "manufacturer": d.manufacturer, "checked_at": d.checked_at}
+
+
+def _enrich(db, decls) -> None:
+    """Best-effort обогащение свежих деклараций из ЧЗ ПО КЭШИРОВАННОМУ токену:
+    без сети на обновление токена (get_token может ждать signer до 240 с —
+    фоновое обогащение после добавления не должно подвешивать запрос)."""
+    from marko.nkmt.client import NkClient
+    from marko.nkmt.rd import cached_token, enrich_declarations
+    from marko.settings import settings
+    token = cached_token(db)
+    if not token:
+        return   # без свежего токена — обогатится кнопкой «Проверить в ЧЗ»
+    try:
+        # без ретрай-пауз и с коротким таймаутом: деградация ЧЗ не должна
+        # подвешивать «Добавить» (худший случай ~4×8 c вместо ~140 c)
+        enrich_declarations(db, NkClient(settings.mt_base_v3,
+                                         base_v4=settings.mt_base_v4,
+                                         sleeper=lambda _s: None, timeout=8),
+                            token, decls)
+    except Exception:
+        db.commit()   # декларация уже добавлена — обогащение повторится «Проверить в ЧЗ»
+
+
 @router.get("/declarations")
 def declarations_list(
     tok: PlatformToken = Depends(require_scope("read")),
     db: Session = Depends(get_db),
 ):
-    return [
-        {"id": d.id, "doc_number": d.doc_number, "doc_date": d.doc_date,
-         "doc_type": d.doc_type, "title": d.title}
-        for d in db.query(Declaration).order_by(Declaration.id).all()
-    ]
+    return [_decl_row(d) for d in db.query(Declaration).order_by(Declaration.id).all()]
 
 
 @router.post("/declarations")
@@ -89,7 +122,9 @@ def declarations_create(
     db.refresh(d)
     audit(db, tok.principal_id, "nkmt.declaration.create",
           {"id": d.id, "doc_number": doc_number, "doc_date": doc_date})
-    return {"id": d.id}
+    _enrich(db, [d])   # rich-поля из ЧЗ сразу, если ЧЗ доступен
+    db.refresh(d)
+    return {"id": d.id, "found": bool(d.status or d.tnved_list)}
 
 
 @router.delete("/declarations/{decl_id}")
@@ -107,6 +142,112 @@ def declarations_delete(
     db.commit()
     audit(db, tok.principal_id, "nkmt.declaration.delete",
           {"id": decl_id, "doc_number": d.doc_number})
+    return {"ok": True}
+
+
+@router.post("/declarations/{decl_id}/check")
+def declaration_check(
+    decl_id: int,
+    tok: PlatformToken = Depends(require_scope("nkmt:import")),
+    db: Session = Depends(get_db),
+):
+    """Обновить данные одной декларации из ЧЗ (rd/list): статус, срок,
+    ТНВЭД-список, техрегламенты, заявитель/изготовитель."""
+    from marko.connector_mt import manager
+    from marko.nkmt.client import NkClient, NkHttpError
+    from marko.nkmt.rd import enrich_declarations
+    from marko.settings import settings
+    d = db.get(Declaration, decl_id)
+    if not d:
+        raise HTTPException(404, "declaration not found")
+    try:
+        out = enrich_declarations(
+            db, NkClient(settings.mt_base_v3, base_v4=settings.mt_base_v4),
+            manager.get_token(db), [d])
+    except NkHttpError as e:
+        raise HTTPException(502, f"nk upstream error: {e}")
+    audit(db, tok.principal_id, "nkmt.declaration.check",
+          {"id": decl_id, "found": out["found"]})
+    return {**out, "declaration": _decl_row(d)}
+
+
+@router.post("/declarations/check-all")
+def declarations_check_all(
+    tok: PlatformToken = Depends(require_scope("nkmt:import")),
+    db: Session = Depends(get_db),
+):
+    """Проверить все декларации реестра одним батчем (чанки ≤25 по лимиту ЧЗ)."""
+    from marko.connector_mt import manager
+    from marko.nkmt.client import NkClient, NkHttpError
+    from marko.nkmt.rd import enrich_declarations
+    from marko.settings import settings
+    decls = db.query(Declaration).order_by(Declaration.id).all()
+    if not decls:
+        raise HTTPException(409, "реестр деклараций пуст")
+    try:
+        out = enrich_declarations(
+            db, NkClient(settings.mt_base_v3, base_v4=settings.mt_base_v4),
+            manager.get_token(db), decls)
+    except NkHttpError as e:
+        raise HTTPException(502, f"nk upstream error: {e}")
+    audit(db, tok.principal_id, "nkmt.declaration.check-all",
+          {"checked": out["checked"], "found": out["found"]})
+    return out
+
+
+# --- справочник производителей ---
+
+
+@router.get("/producers")
+def producers_list(
+    tok: PlatformToken = Depends(require_scope("read")),
+    db: Session = Depends(get_db),
+):
+    return [{"id": p.id, "name": p.name, "inn": p.inn, "kind": p.kind,
+             "note": p.note} for p in db.query(Producer).order_by(Producer.id).all()]
+
+
+@router.post("/producers")
+def producers_create(
+    body: ProducerBody,
+    tok: PlatformToken = Depends(require_scope("nkmt:import")),
+    db: Session = Depends(get_db),
+):
+    name = body.name.strip()
+    if not name:
+        raise HTTPException(400, "укажите наименование производителя")
+    inn = body.inn.strip()
+    if inn and (not inn.isdigit() or len(inn) not in (10, 12)):
+        raise HTTPException(400, "ИНН: 10 или 12 цифр")
+    kind = body.kind if body.kind in ("entrepreneur", "company") else ""
+    # дедуп casefold в Python, не lower() БД: локаль сервера не фолдит кириллицу
+    # (как дубль-чек правил); справочник мал — полный скан дешёвый
+    low_name = name.casefold()
+    dup = next((p for p in db.query(Producer).all()
+                if p.name.casefold() == low_name), None)
+    if dup:
+        raise HTTPException(409, "производитель с таким наименованием уже есть")
+    p = Producer(name=name, inn=inn, kind=kind, note=body.note.strip())
+    db.add(p)
+    db.commit()
+    db.refresh(p)
+    audit(db, tok.principal_id, "nkmt.producer.create",
+          {"id": p.id, "name": name, "inn": inn})
+    return {"id": p.id}
+
+
+@router.delete("/producers/{producer_id}")
+def producers_delete(
+    producer_id: int,
+    tok: PlatformToken = Depends(require_scope("nkmt:import")),
+    db: Session = Depends(get_db),
+):
+    p = db.get(Producer, producer_id)
+    if not p:
+        raise HTTPException(404, "producer not found")
+    db.delete(p)
+    db.commit()
+    audit(db, tok.principal_id, "nkmt.producer.delete", {"id": producer_id, "name": p.name})
     return {"ok": True}
 
 

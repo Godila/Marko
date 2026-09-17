@@ -141,8 +141,11 @@ def _validate_row(db, client, token: str, row: dict, errors: list,
     if not declaration_number:
         errors.append("укажите декларацию")
     elif db is not None:
+        # order_by: один номер с разными датами (uq_doc_pair) — детерминированно
+        # берём первую пару, как lookup ТНВЭД-контроля в service.preview_batch
         decl = db.execute(select(Declaration)
-                          .where(Declaration.doc_number == declaration_number)).scalars().first()
+                          .where(Declaration.doc_number == declaration_number)
+                          .order_by(Declaration.id)).scalars().first()
         if decl is None:
             errors.append(f"декларация не в реестре: {declaration_number}")
         elif not declaration_date:

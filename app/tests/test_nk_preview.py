@@ -102,6 +102,36 @@ def test_preview_bad_file_400(db, client, monkeypatch, model):
     assert r.status_code == 400 and "xlsx" in r.json()["detail"]
 
 
+def test_preview_tnved_warning(db, client, monkeypatch, model):
+    """ТНВЭД-контроль: строка с кодом вне tnved_list подставленной декларации
+    получает предупреждение (импорт не блокируется); совпадение и декларация
+    без списка (не проверена в ЧЗ) — молчим."""
+    monkeypatch.setattr("marko.connector_mt.manager.get_token", lambda _db: "T")
+    d = Declaration(doc_number="Д-1", doc_date="2026-01-01",
+                    tnved_list=["6109100000", "6109909900"], status="Действует")
+    d2 = Declaration(doc_number="Д-2", doc_date="2026-02-02")   # без tnved_list
+    db.add_all([d, d2]); db.flush()
+    db.add(Rule(product_types=["ФУТБОЛКА"], declaration_id=d.id))
+    db.add(Rule(product_types=["БАЛАКЛАВА"], declaration_id=d2.id))
+    db.commit()
+    rows = [
+        ["A-1", "6203499009", "Футболка вне декларации", "ФУТБОЛКА", "БЕЛЫЙ",
+         "100% хлопок", "M", "A-1", "", "", "", "", ""],
+        ["A-2", "6109100000", "Футболка ок", "ФУТБОЛКА", "БЕЛЫЙ",
+         "100% хлопок", "M", "A-2", "", "", "", "", ""],
+        ["A-3", "6109100000", "Балаклава без проверки", "БАЛАКЛАВА", "БЕЛЫЙ",
+         "100% акрил", "ONE SIZE", "A-3", "", "", "", "", ""],
+    ]
+    files = {"file": ("w.xlsx", make_xlsx(HDR, rows), XLSX_MIME)}
+    out = client.post("/v1/nkmt/import/preview", headers=AUTH, files=files).json()
+    by_article = {x["article"]: x for x in out["rows"]}
+    warn = by_article["A-1"]["tnved_warning"]
+    assert "6203499009" not in warn and "6109100000" in warn and "Д-1" in warn
+    assert by_article["A-1"]["ok"] is True          # предупреждение, не блок
+    assert by_article["A-2"]["tnved_warning"] == ""
+    assert by_article["A-3"]["tnved_warning"] == ""  # у Д-2 нет списка — не проверяем
+
+
 def test_template_endpoint(db, client):
     r = client.get("/v1/nkmt/import/template", headers=AUTH_RO)
     assert r.status_code == 200 and r.headers["content-type"] == XLSX_MIME

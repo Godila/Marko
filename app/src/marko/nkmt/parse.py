@@ -35,7 +35,8 @@ SPEC: list[ColumnSpec] = [
     ColumnSpec("Бренд", "brand", defaultable=True,
                hint="точное имя ТМ из НК; иначе правило РД, затем дефолт"),
     ColumnSpec("Модель/артикул", "model", hint="пусто — подставится артикул"),
-    ColumnSpec("ТНВЭД", "tnved", required=True, hint="ровно 10 цифр"),
+    ColumnSpec("ТНВЭД", "tnved", required=True,
+               hint="ровно 10 цифр; пусто — можно подставить правилом РД по виду товара"),
     ColumnSpec("Вид товара", "product_type", required=True, defaultable=True,
                hint="точное значение из справочника НК; пусто — подставится дефолт; участвует в правилах РД"),
     ColumnSpec("Категория", "category_hint",
@@ -62,11 +63,12 @@ REQUIRED_ROW_KEYS = [s.key for s in SPEC if s.required]
 DEFAULTED_KEYS = [s.key for s in SPEC if s.defaultable]
 
 # Поля, которые правило РД может подставить сверх декларации/производителя
-# (единственный источник whitelist: роут правил и apply_rules). Идентификация
-# (article/tnved/name/gtin/category_hint), условия матчинга (brand,
+# (единственный источник whitelist: роут правил и apply_rules). ТН ВЭД —
+# маппинг «изделие → код» для выгрузок 1С без ТН ВЭД. Идентификация
+# (article/name/gtin/category_hint), условия матчинга (brand,
 # product_type), пара декларации (реестр), techreg (системный) и producer
 # (отдельная колонка правила) сюда не входят.
-RULE_FIELDS = ["size", "color", "composition", "model",
+RULE_FIELDS = ["tnved", "size", "color", "composition", "model",
                "target_gender", "size_system", "country"]
 # Ключи provenance-карты: дефолтуемые + правила-поля, без дублей, порядок стабилен
 PROV_KEYS = list(dict.fromkeys(DEFAULTED_KEYS + RULE_FIELDS))

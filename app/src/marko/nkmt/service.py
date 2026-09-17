@@ -17,7 +17,7 @@ import json
 from marko.connector_mt.manager import _sign_via_gateway
 from marko.nkmt import resolve as _resolve
 from marko.nkmt.client import NkHttpError
-from marko.nkmt.models import Batch, Card
+from marko.nkmt.models import Batch, Card, Declaration
 from marko.nkmt.parse import PROV_KEYS
 from marko.nkmt.validate import GTIN_RE
 
@@ -113,11 +113,31 @@ def preview_batch(db, data: bytes, client, token) -> dict:
     """
     res = _resolve.resolve_rows(db, client, token, data)
     planned = plan_batch(db, res["validated"])
+    # ТНВЭД-контроль: декларация, подставленная в строку, должна покрывать
+    # её ТН ВЭД (tnved_list из ЧЗ, rd/list). Матчинг ПАРОЙ номер+дата — как
+    # enrich_declarations (реестр допускает один номер с разными датами).
+    # Списка нет — не проверена, молчим.
+    pairs = {(str((p["attributes"].get("23557") or {}).get("number", "")),
+              str((p["attributes"].get("23557") or {}).get("date", "")))
+             for p in planned} - {("", "")}
+    decls_by_pair: dict[tuple, Declaration] = {}
+    if pairs:
+        nums = {n for n, _ in pairs}
+        for d in db.query(Declaration).filter(
+                Declaration.doc_number.in_(nums)).order_by(Declaration.id).all():
+            decls_by_pair.setdefault((d.doc_number.casefold(), d.doc_date), d)
     rows = []
     for p, s, rule_id in zip(planned, res["src"], res["matched"]):
         attrs = p["attributes"]   # итоговые значения: дата декларации уже из реестра
         decl = attrs.get("23557") or {}
         size = attrs.get("35") or {}
+        tnved_warning = ""
+        cover = decls_by_pair.get((str(decl.get("number", "")).casefold(),
+                                   str(decl.get("date", ""))))
+        if p["tnved"] and cover is not None and cover.tnved_list \
+                and p["tnved"] not in cover.tnved_list:
+            tnved_warning = (f"ТН ВЭД вне декларации {cover.doc_number} от {cover.doc_date} "
+                             f"(покрывает: {', '.join(cover.tnved_list)})")
         rows.append({
             "article": p["article"], "name": p["name"], "tnved": p["tnved"],
             "gtin": p["gtin_final"], "gtin_status": p["gtin_status"],
@@ -130,6 +150,7 @@ def preview_batch(db, data: bytes, client, token) -> dict:
             "ok": p["dup"] is False and p["error"] == "",
             "error": p["error"], "dup": p["dup"],
             "rule_id": rule_id, "src": {k: s[k] for k in PROV_KEYS},
+            "tnved_warning": tnved_warning,
         })
     stats = {"ok": sum(1 for r in rows if r["ok"]),
              "error": sum(1 for r in rows if not r["ok"]),

@@ -34,6 +34,14 @@ class Card(Base):
 
 
 class Declaration(Base):
+    """Декларация/сертификат соответствия — источник подстановки в карточки НК.
+
+    Ядро (номер+дата+тип) заводится оператором вручную;rich-поля (статус,
+    срок, продукция, список ТНВЭД, техрегламенты, заявитель, изготовитель)
+    обогащаются из ЧЗ методом /true-api/rd/list (кнопка «Проверить в ЧЗ»
+    или автоматически после добавления). tnved_list — допустимые коды
+    «6505003000, 6505009000» из ответа ЧЗ, контроль ТНВЭД строк импорта.
+    """
     __tablename__ = "declarations"
     __table_args__ = (
         UniqueConstraint("doc_number", "doc_date", name="uq_doc_pair"),
@@ -44,6 +52,31 @@ class Declaration(Base):
     doc_date: Mapped[str] = mapped_column(String(10))  # ISO 'YYYY-MM-DD'
     doc_type: Mapped[str] = mapped_column(String(16), default="declaration")  # declaration|certificate
     title: Mapped[str] = mapped_column(String, default="")
+    # --- обогащение из ЧЗ (rd/list), пусто = не проверялась ---
+    status: Mapped[str] = mapped_column(String(64), default="", server_default="")
+    date_to: Mapped[str] = mapped_column(String(10), default="", server_default="")
+    product_name: Mapped[str] = mapped_column(String(1024), default="", server_default="")
+    tnved_list: Mapped[list] = mapped_column(JSONB, default=list,
+                                             server_default=text("'[]'::jsonb"))
+    techregs: Mapped[str] = mapped_column(String(1024), default="", server_default="")
+    applicant: Mapped[str] = mapped_column(String(512), default="", server_default="")
+    manufacturer: Mapped[str] = mapped_column(String(512), default="", server_default="")
+    checked_at = mapped_column(DateTime, nullable=True)
+
+
+class Producer(Base):
+    """Справочник производителей: каноническое наименование для атрибута 2503
+    карточек и подстановок правил/дефолтов, ИНН и тип для контекста НК/РД.
+    Правила ссылаются на производителя текстом (без FK) — удаление записи
+    справочника не ломает существующие подстановки."""
+    __tablename__ = "producers"
+    __table_args__ = {"schema": "nkmt"}
+    id: Mapped[int] = mapped_column(primary_key=True)
+    name: Mapped[str] = mapped_column(String(512), unique=True)  # как в 2503 карточки
+    inn: Mapped[str] = mapped_column(String(12), default="", server_default="")
+    kind: Mapped[str] = mapped_column(String(16), default="", server_default="")  # entrepreneur|company
+    note: Mapped[str] = mapped_column(String(512), default="", server_default="")
+    created_at = mapped_column(DateTime, server_default=func.now())
 
 
 class Rule(Base):

@@ -16,10 +16,12 @@ class NkHttpError(Exception):
 
 
 class NkClient:
-    def __init__(self, base: str, transport=None, sleeper=time.sleep):
+    def __init__(self, base: str, transport=None, sleeper=time.sleep, base_v4: str = "",
+                 timeout: float = 30):
         self.base = base.rstrip("/")
+        self.base_v4 = (base_v4 or base).rstrip("/")
         self.sleeper = sleeper
-        self.http = httpx.Client(transport=transport, timeout=30)
+        self.http = httpx.Client(transport=transport, timeout=timeout)
 
     def _req(self, method, url, **kw):
         # обёртка для инъекции sleeper в тестах
@@ -33,13 +35,15 @@ class NkClient:
             return r
 
     def _get(self, path, token, params=None):
-        r = self._req("GET", f"{self.base}{path}", params=params,
+        url = path if path.startswith("http") else f"{self.base}{path}"
+        r = self._req("GET", url, params=params,
                       headers={"Accept": "application/json",
                                "Authorization": f"Bearer {token}"})
         return r.json()
 
     def _post_json(self, path, token, json_body):
-        r = self._req("POST", f"{self.base}{path}",
+        url = path if path.startswith("http") else f"{self.base}{path}"
+        r = self._req("POST", url,
                       headers={"Accept": "application/json",
                                "Content-Type": "application/json",
                                "Authorization": f"Bearer {token}"},
@@ -62,6 +66,22 @@ class NkClient:
 
     def generate_gtins(self, token: str, quantity: int) -> dict:
         return self._get("/nk/generate-gtins", token, {"quantity": quantity})["result"]
+
+    # --- реестр разрешительных документов (v4 true-api/rd/list) ---
+
+    def rd_list(self, token: str, documents: list[dict]) -> dict:
+        """Сведения о разрешительных документах по номеру+дате: статус, срок,
+        продукция, список ТНВЭД, техрегламенты, заявитель/изготовитель.
+        Лимит метода — 25 документов за запрос; длинные списки чанкуем.
+        → {"documents": [...], "errors": [...]} (errors — номера, которых ЧЗ не нашёл)."""
+        docs, errors = [], []
+        url = f"{self.base_v4}/rd/list"   # живёт на v4-базе, не v3
+        for i in range(0, len(documents), 25):
+            chunk = documents[i:i + 25]
+            res = self._post_json(url, token, {"documents": chunk}).get("result") or {}
+            docs.extend(res.get("documents") or [])
+            errors.extend(res.get("errors") or [])
+        return {"documents": docs, "errors": errors}
 
     # --- публикация карточек (feed) ---
 

@@ -77,14 +77,28 @@ const DEF_FIELDS = [
   ['producer', 'Производитель'], ['declaration_number', 'Номер декларации'],
   ['declaration_date', 'Дата декларации'], ['size', 'Размер']]
 // дополнительные поля, которые правило РД может подставить в пустые ячейки
-// (зеркало бэкенд-константы RULE_FIELDS; размер — общая для дефолта и правила)
-const RULE_FIELD_LABELS = { size: 'Размер', color: 'Цвет', composition: 'Состав',
-  model: 'Модель/артикул', target_gender: 'Пол', size_system: 'Система размеров',
-  country: 'Страна (ISO-код)' }
+// (зеркало бэкенд-константы RULE_FIELDS; ТН ВЭД — маппинг «изделие → код»,
+// размер — общая для дефолта и правила)
+const RULE_FIELD_LABELS = { tnved: 'ТН ВЭД', size: 'Размер', color: 'Цвет',
+  composition: 'Состав', model: 'Модель/артикул', target_gender: 'Пол',
+  size_system: 'Система размеров', country: 'Страна (ISO-код)' }
 // порядок показа «Проверки подстановок»: дефолты + правило-поля без дефолтов
 const RZ_FIELDS = [...DEF_FIELDS.filter(([k]) => k !== 'techreg'),
   ['color', 'Цвет'], ['composition', 'Состав'], ['model', 'Модель/артикул'],
   ['techreg', 'Техрегламент']]
+// состояние декларации по данным ЧЗ (rd/list): производный статус для бейджа
+const declState = (d) => {
+  if (!d.checked_at && !d.status) return ['не проверялась', 'grey']
+  // негативные статусы ЧЗ содержат «действ» («Не действует», «Истёк срок
+  // действия») — проверяем их ДО позитивного теста
+  if (/не\s*действ|истёк|истек|аннулир|прекращ/i.test(d.status || ''))
+    return [d.status, 'red']
+  if (!/действ/i.test(d.status || '')) return [d.status || 'нет данных', 'red']
+  const days = d.date_to ? (new Date(d.date_to) - new Date()) / 864e5 : null
+  if (days != null && days < 0) return ['не действует', 'red']
+  if (days != null && days <= 60) return [`истекает ${d.date_to.split('-').reverse().join('.')}`, 'amber']
+  return ['действует', 'green']
+}
 // эксайз-payload не несёт kind — вид события выводим из operation_type_id
 const opRu = (ev) => ev.operation_type_id === 2 ? 'возврат'
   : ev.operation_type_id === 1 ? 'продажа' : '—'
@@ -542,7 +556,10 @@ const PREVIEW_COLUMNS = [
   { key: 'brand', label: 'Бренд', w: 104,
     text: (r) => r.brand, render: (r) => <>{r.brand || '—'}<SrcMark v={r.brand} src={r.src.brand} /></> },
   { key: 'tnved', label: 'ТН ВЭД', w: 96, mono: true,
-    text: (r) => r.tnved, render: (r) => r.tnved },
+    text: (r) => r.tnved, render: (r) => <>{r.tnved || '—'}
+      <SrcMark v={r.tnved} src={r.src.tnved} />
+      {r.tnved_warning && <div title={r.tnved_warning}
+        style={{ fontSize: 11, color: 'var(--wait)' }}>вне декларации</div>}</> },
   { key: 'size', label: 'Размер', w: 92,
     text: (r) => r.size, render: (r) => <>{r.size || <span className="faint">—</span>}<SrcMark v={r.size} src={r.src.size} /></> },
   { key: 'decl', label: 'Декларация', w: 196,
@@ -727,9 +744,13 @@ function Refs({ ctx }) {
   const [defs, setDefs] = useState(null)
   const [em, setEm] = useState(null)
   const [rules, setRules] = useState(null)
+  const [producers, setProducers] = useState(null)
+  const [checkBusy, setCheckBusy] = useState(false)
   const [dnum, setDnum] = useState(''); const [ddate, setDdate] = useState(''); const [dtype, setDtype] = useState('declaration')
   const [dtitle, setDtitle] = useState('')
-  const [hints, setHints] = useState({ brands: [], product_types: [] })
+  const [pname, setPname] = useState(''); const [pinn, setPinn] = useState('')
+  const [pkind, setPkind] = useState(''); const [pnote, setPnote] = useState('')
+  const [hints, setHints] = useState({ brands: [], product_types: [], producers: [] })
   const [rbrand, setRbrand] = useState(''); const [rdecl, setRdecl] = useState('')
   const [rtypes, setRtypes] = useState([]); const [rtypeInput, setRtypeInput] = useState('')
   const [rprod, setRprod] = useState('')
@@ -738,6 +759,7 @@ function Refs({ ctx }) {
   const [rzBrand, setRzBrand] = useState(''); const [rzType, setRzType] = useState(''); const [rz, setRz] = useState(null)
   useEffect(() => { api('/v1/nkmt/declarations').then(setDecls).catch(() => setDecls([]))
     api('/v1/nkmt/rules').then(setRules).catch(() => setRules([]))
+    api('/v1/nkmt/producers').then(setProducers).catch(() => setProducers([]))
     api('/v1/nkmt/dicts/hints').then(setHints).catch(() => {}) }, [ctx.tick])
   // формы дефолтов и эмиттера грузятся один раз при входе: 60-секундный тик
   // консоли не должен затирать несохранённые правки оператора
@@ -749,11 +771,49 @@ function Refs({ ctx }) {
   }, [])
   const addDecl = () => { if (!dnum || !ddate) return notify('Заполните номер и дату', '', 'warn')
     api('/v1/nkmt/declarations', { method: 'POST', body: JSON.stringify({ doc_number: dnum, doc_date: ddate, doc_type: dtype, title: dtitle }) })
-      .then(() => { setDnum(''); setDdate(''); setDtitle(''); notify('Декларация добавлена', ''); ctx.bump() })
+      .then((r) => { setDnum(''); setDdate(''); setDtitle('')
+        notify('Декларация добавлена', r.found
+          ? 'Данные из ЧЗ: статус, срок и ТН ВЭД подтянуты автоматически.'
+          : 'ЧЗ не ответил — нажмите «Проверить в ЧЗ», чтобы подтянуть статус и ТН ВЭД.')
+        ctx.bump() })
       .catch((e) => notify('Не добавлено', e.message, 'bad')) }
   const delDecl = (d) => confirm('Удалить декларацию?', d.doc_number, 'Карточки, где она уже подставлена, не изменятся.', 'Удалить',
     () => api(`/v1/nkmt/declarations/${d.id}`, { method: 'DELETE' })
       .then(() => { notify('Декларация удалена', ''); ctx.bump() })
+      .catch((e) => notify('Не удалось удалить', e.message, 'bad')))
+  // обновление из ЧЗ (rd/list): статус, срок, ТН ВЭД-список, заявитель/изготовитель
+  const [declBusyId, setDeclBusyId] = useState(null)
+  const checkDecl = (d) => { if (declBusyId) return
+    setDeclBusyId(d.id)
+    api(`/v1/nkmt/declarations/${d.id}/check`, { method: 'POST' })
+      .then((r) => { const [lbl] = declState(r.declaration)
+        notify(r.found ? `Декларация: ${lbl}` : 'ЧЗ не нашёл декларацию',
+          r.found ? `ТН ВЭД: ${r.declaration.tnved_list.join(', ') || '—'}`
+            : 'Проверьте номер и дату — пара должна совпадать с реестром ЧЗ.',
+          r.found ? '' : 'warn')
+        ctx.bump() })
+      .catch((e) => notify('Проверка не удалась', e.message, 'bad'))
+      .finally(() => setDeclBusyId(null)) }
+  const checkAll = () => { if (checkBusy) return
+    setCheckBusy(true)
+    api('/v1/nkmt/declarations/check-all', { method: 'POST' })
+      .then((r) => { notify('Декларации проверены в ЧЗ',
+          `найдено ${r.found} из ${r.checked}` + (r.not_found?.length ? ` · не найдено: ${r.not_found.join(', ')}` : ''))
+        ctx.bump() })
+      .catch((e) => notify('Проверка не удалась', e.message, 'bad'))
+      .finally(() => setCheckBusy(false)) }
+  const addProducer = () => { if (!pname.trim()) return notify('Укажите наименование', 'Как оно должно попасть в карточку НК (атрибут «Производитель»).', 'warn')
+    if (pinn && (!/^\d+$/.test(pinn) || ![10, 12].includes(pinn.length)))
+      return notify('ИНН: 10 или 12 цифр', '', 'warn')
+    api('/v1/nkmt/producers', { method: 'POST',
+        body: JSON.stringify({ name: pname, inn: pinn, kind: pkind, note: pnote }) })
+      .then(() => { setPname(''); setPinn(''); setPkind(''); setPnote('')
+        notify('Производитель добавлен', 'Появится в подсказках правил и дефолтов.'); ctx.bump() })
+      .catch((e) => notify('Не добавлено', e.message, 'bad')) }
+  const delProducer = (p) => confirm('Удалить производителя?', p.name,
+    'Подсказки исчезнут; уже подставленные в карточки и правила значения не изменятся.', 'Удалить',
+    () => api(`/v1/nkmt/producers/${p.id}`, { method: 'DELETE' })
+      .then(() => { notify('Производитель удалён', ''); ctx.bump() })
       .catch((e) => notify('Не удалось удалить', e.message, 'bad')))
   const addRule = () => { if (!rbrand.trim() && !rtypes.length)
     return notify('Заполните бренд или вид товара', 'Правило без условия не создаётся — оно подходило бы всем строкам.', 'warn')
@@ -804,7 +864,7 @@ function Refs({ ctx }) {
     .then(() => notify('Реквизиты эмиттера сохранены', 'Применятся к следующим черновикам LK_RECEIPT.'))
     .catch((e) => notify('Не сохранено', e.message, 'bad'))
   const tabs = [['fields', 'Поля'], ['decls', 'Декларации'],
-    ['rules', 'Правила'], ['emitter', 'Эмиттер ЧЗ']]
+    ['producers', 'Производители'], ['rules', 'Правила'], ['emitter', 'Эмиттер ЧЗ']]
   return <>
     <Head title="Справочники" sub="Значения для карточек НК и документов. Приоритет подстановки: файл → правило РД → дефолт."
       tools={<Sync tick={ctx.tick} />} />
@@ -812,6 +872,8 @@ function Refs({ ctx }) {
       {tabs.map(([k, l]) => <button key={k} className="chip" aria-pressed={tab === k}
         onClick={() => setTab(k)}>{l}</button>)}
     </div>
+    <datalist id="hint-producers">
+      {(hints.producers || []).map((p) => <option key={p} value={p} />)}</datalist>
     {tab === 'fields' && <>
       <div className="card">
         <div className="card-h"><h2>Поля и значения по умолчанию</h2>
@@ -833,6 +895,7 @@ function Refs({ ctx }) {
                     </select>
                   : <input style={{ maxWidth: 400, textAlign: 'right', textOverflow: 'ellipsis' }}
                     title={(defs || {})[k] || ''}
+                    list={k === 'producer' ? 'hint-producers' : undefined}
                     type={k === 'declaration_date' ? 'date' : 'text'}
                     value={(defs || {})[k] || ''}
                     onChange={(e) => setDefs({ ...(defs || {}), [k]: e.target.value })} />}
@@ -880,10 +943,14 @@ function Refs({ ctx }) {
       </div>
     </>}
     {tab === 'decls' && <div className="card">
-      <div className="card-h"><h2>Декларации соответствия</h2><span className="hint">подставляются в карточки по номеру</span></div>
+      <div className="card-h"><h2>Декларации соответствия</h2>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+          <span className="hint">номер + дата → данные из ЧЗ подтягиваются сами</span>
+          <button className="btn sm" disabled={checkBusy || !(decls || []).length}
+            onClick={checkAll}>Проверить в ЧЗ</button></div></div>
       <div className="card-b" style={{ borderBottom: '1px solid var(--line)' }}>
         <div className="frow">
-          <div className="field" style={{ flex: 1, minWidth: 170 }}><label>Номер</label>
+          <div className="field" style={{ flex: 2, minWidth: 220 }}><label>Номер</label>
             <input value={dnum} placeholder="ЕАЭС N RU Д-…" onChange={(e) => setDnum(e.target.value)} /></div>
           <div className="field"><label>Дата</label><input type="date" value={ddate} onChange={(e) => setDdate(e.target.value)} /></div>
           <div className="field"><label>Тип</label><select value={dtype} onChange={(e) => setDtype(e.target.value)}>
@@ -895,15 +962,66 @@ function Refs({ ctx }) {
               onChange={(e) => setDtitle(e.target.value)} /></div>
         </div>
       </div>
-      <div className="twrap"><table className="t small">
-        <thead><tr><th>Номер</th><th>Название</th><th>Дата</th><th>Тип</th><th></th></tr></thead>
-        <tbody>{(decls || []).map((d) => <tr key={d.id}>
-          <td style={{ fontSize: 12.5 }}>{d.doc_number}</td>
-          <td>{d.title || '—'}</td>
+      <div className="twrap"><table className="t small fit" style={{ minWidth: 1140 }}>
+        <colgroup><col style={{ width: 34 }} /><col style={{ width: 240 }} /><col />
+          <col style={{ width: 86 }} /><col style={{ width: 92 }} /><col style={{ width: 118 }} />
+          <col style={{ width: 150 }} /><col style={{ width: 150 }} /><col style={{ width: 150 }} />
+          <col style={{ width: 156 }} /></colgroup>
+        <thead><tr><th>№</th><th>Номер</th><th>Продукция / название</th><th>Дата</th>
+          <th>Действует до</th><th>Статус</th><th>ТН ВЭД</th><th>Техрегламенты</th>
+          <th>Изготовитель</th><th></th></tr></thead>
+        <tbody>{(decls || []).map((d) => { const [lbl, cls] = declState(d)
+          return <tr key={d.id}>
+          <td className="num">{d.id}</td>
+          <td className="ell mono" style={{ fontSize: 12 }} title={d.doc_number}>{d.doc_number}</td>
+          <td className="ell" title={d.product_name || d.title || ''}>
+            {d.product_name || d.title || '—'}</td>
           <td className="mono">{d.doc_date}</td>
-          <td>{d.doc_type === 'certificate' ? 'сертификат' : 'декларация'}</td>
-          <td className="actions"><button className="btn sm" onClick={() => delDecl(d)}>Удалить</button></td></tr>)}
-          {decls && !decls.length && <tr><td colSpan={5}><div className="empty"><b>Список пуст</b>Добавьте действующую декларацию — она подставится в карточки.</div></td></tr>}
+          <td className="mono">{d.date_to || '—'}</td>
+          <td><span className={`bdg ${cls}`}>{lbl}</span></td>
+          <td className="ell mono" style={{ fontSize: 11.5 }} title={(d.tnved_list || []).join(', ')}>
+            {(d.tnved_list || []).join(', ') || '—'}</td>
+          <td className="ell" style={{ fontSize: 12 }} title={d.techregs || ''}>{d.techregs || '—'}</td>
+          <td className="ell" style={{ fontSize: 12 }} title={d.manufacturer || ''}>{d.manufacturer || '—'}</td>
+          <td className="actions">
+            <button className="btn sm" disabled={declBusyId === d.id}
+              onClick={() => checkDecl(d)}>Проверить</button>
+            <button className="btn sm" onClick={() => delDecl(d)}>Удалить</button></td></tr> })}
+          {decls && !decls.length && <tr><td colSpan={10}><div className="empty"><b>Деклараций нет</b>Добавьте номер и дату — статус, срок и допустимые ТН ВЭД подтянутся из Честного ЗНАКА автоматически.</div></td></tr>}
+        </tbody></table></div>
+    </div>}
+    {tab === 'producers' && <div className="card">
+      <div className="card-h"><h2>Производители</h2>
+        <span className="hint">каноническое наименование для карточек НК и подсказок правил</span></div>
+      <div className="card-b" style={{ borderBottom: '1px solid var(--line)' }}>
+        <div className="frow">
+          <div className="field" style={{ flex: 2, minWidth: 220 }}><label>Наименование</label>
+            <input value={pname} placeholder="как в атрибуте «Производитель» карточки"
+              onChange={(e) => setPname(e.target.value)} /></div>
+          <div className="field"><label>ИНН</label>
+            <input className="mono" style={{ maxWidth: 160 }} value={pinn} placeholder="10 или 12 цифр"
+              onChange={(e) => setPinn(e.target.value)} /></div>
+          <div className="field"><label>Тип</label>
+            <select value={pkind} onChange={(e) => setPkind(e.target.value)}>
+              <option value="">— не указан —</option>
+              <option value="entrepreneur">ИП / самозанятый</option>
+              <option value="company">юрлицо</option></select></div>
+          <div className="field" style={{ flex: 1 }}><label>Примечание</label>
+            <input value={pnote} placeholder="опционально"
+              onChange={(e) => setPnote(e.target.value)} /></div>
+          <button className="btn pri" onClick={addProducer}>Добавить</button>
+        </div>
+        <div className="note">Производитель из этого справочника появится в подсказках полей «Производитель» (дефолты и правила РД) — каноническое написание попадёт во все карточки одинаково.</div>
+      </div>
+      <div className="twrap"><table className="t small">
+        <thead><tr><th>Наименование</th><th>ИНН</th><th>Тип</th><th>Примечание</th><th></th></tr></thead>
+        <tbody>{(producers || []).map((p) => <tr key={p.id}>
+          <td className="ell" style={{ maxWidth: 360 }} title={p.name}>{p.name}</td>
+          <td className="mono">{p.inn || '—'}</td>
+          <td>{p.kind === 'entrepreneur' ? 'ИП' : p.kind === 'company' ? 'юрлицо' : '—'}</td>
+          <td className="ell" style={{ maxWidth: 260 }} title={p.note}>{p.note || '—'}</td>
+          <td className="actions"><button className="btn sm" onClick={() => delProducer(p)}>Удалить</button></td></tr>)}
+          {producers && !producers.length && <tr><td colSpan={5}><div className="empty"><b>Производителей нет</b>Добавьте наименование и ИНН — они появятся в подсказках правил и дефолтов.</div></td></tr>}
         </tbody></table></div>
     </div>}
     {tab === 'rules' && <div className="card">
@@ -941,7 +1059,8 @@ function Refs({ ctx }) {
                 {d.title ? `${d.title} · ${d.doc_number}` : `${d.doc_number} · ${d.doc_date}`}</option>)}
             </select></div>
           <div className="field" style={{ flex: 1 }}><label>Производитель (опционально)</label>
-            <input value={rprod} onChange={(e) => setRprod(e.target.value)} /></div>
+            <input list="hint-producers" value={rprod} placeholder="вводите — будут подсказки"
+              onChange={(e) => setRprod(e.target.value)} /></div>
         </div>
         <div className="frow">
           <div className="field" style={{ flex: 2, minWidth: 260 }}><label>Поле карточки (опционально — например, размер «one size» для шапок)</label>

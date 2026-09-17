@@ -14,7 +14,7 @@ from sqlalchemy import func, select
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.orm import Session
 
-from marko.nkmt.models import BrandCache, Declaration, Rule
+from marko.nkmt.models import BrandCache, Declaration, Producer, Rule
 from marko.nkmt.parse import RULE_FIELDS, SPEC
 from marko.platform.models import PlatformKV
 
@@ -50,8 +50,10 @@ def dict_hints(db: Session, defaults: dict) -> dict:
         brands_map.setdefault(b.name.casefold(), b.name)
     if defaults.get("brand"):
         brands_map[defaults["brand"].casefold()] = defaults["brand"]
+    producers = [p.name for p in db.query(Producer).order_by(Producer.id).all()]
     return {"product_types": sorted(pts), "brands": sorted(brands_map.values()),
-            "size_systems": sorted(size_systems), "genders": sorted(genders)}
+            "size_systems": sorted(size_systems), "genders": sorted(genders),
+            "producers": producers}
 
 
 class UnknownBrand(Exception):

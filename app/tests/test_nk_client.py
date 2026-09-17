@@ -63,3 +63,37 @@ def test_feed_product_sign_pkcs_unwraps_list_result():
     c = make_client(lambda r: httpx.Response(200, json={
         "apiversion": 3, "result": [{"signed": [501], "errors": []}]}))
     assert c.feed_product_sign_pkcs("T", [{"goodId": 501}]) == {"signed": [501], "errors": []}
+
+
+def test_rd_list_posts_to_v4_and_unwraps():
+    """rd/list живёт на v4-базе (/rd/list), ответ — {result:{documents,errors}}."""
+    seen = {}
+    def h(r):
+        seen["url"] = str(r.url); seen["body"] = r.read().decode()
+        return httpx.Response(200, json={"result": {"documents": [
+            {"type": "CONFORMITY_DECLARATION", "number": "Д-1", "status": "Действует"}],
+            "errors": []}})
+    c = NkClient("https://nk.example/v3/true-api", base_v4="https://nk.example/v4/true-api",
+                 transport=httpx.MockTransport(h))
+    out = c.rd_list("T", [{"type": "CONFORMITY_DECLARATION", "number": "Д-1",
+                           "dateFrom": "2026-05-13"}])
+    assert seen["url"].endswith("/v4/true-api/rd/list")
+    assert out["documents"][0]["number"] == "Д-1" and out["errors"] == []
+
+
+def test_rd_list_chunks_over_25():
+    """Лимит метода — 25 документов за запрос: длинный список чанкуется,
+    ответы склеиваются (живой формат ЧЗ, прод-проба 17.09)."""
+    calls = {"n": 0}
+    def h(r):
+        calls["n"] += 1
+        sent = len(r.read().decode().split('"number"')) - 1
+        return httpx.Response(200, json={"result": {
+            "documents": [{"number": f"D{i}", "status": "Действует"}
+                          for i in range(sent)], "errors": []}})
+    c = NkClient("https://nk.example", base_v4="https://nk.example/v4",
+                 transport=httpx.MockTransport(h))
+    out = c.rd_list("T", [{"type": "CONFORMITY_DECLARATION", "number": f"D{i}",
+                           "dateFrom": "2026-01-01"} for i in range(60)])
+    assert calls["n"] == 3          # 25 + 25 + 10
+    assert len(out["documents"]) == 60

@@ -95,15 +95,31 @@ def test_apply_rules_fields_fill_and_file_wins():
     assert out[1]["color"] == "ЧЁРНЫЙ" and src2[1]["color"] == "file"
 
 
+def test_apply_rules_tnved_mapping():
+    """Маппинг «изделие → ТН ВЭД»: правило подставляет код в выгрузки 1С без
+    ТН ВЭД; файловый код сильнее (инвариант _fill)."""
+    raw = [{"brand": "YCPB", "product_type": "ШАПКА", "tnved": ""},
+           {"brand": "YCPB", "product_type": "ШАПКА", "tnved": "6505003000"},
+           {"brand": "YCPB", "product_type": "ФУТБОЛКА", "tnved": ""}]
+    out, src2, matched = apply_rules(
+        [R(4, product_types=["ШАПКА", "ШАПКА-УШАНКА"], declaration_number="Д-1",
+           fields={"tnved": "6505009000"})],
+        apply_defaults(raw, {}), sources(raw))
+    assert out[0]["tnved"] == "6505009000" and src2[0]["tnved"] == "rule"
+    assert out[1]["tnved"] == "6505003000" and src2[1]["tnved"] == "file"
+    assert matched[1] is not None          # правило матчится, но не перебивает файл
+    assert out[2]["tnved"] == "" and matched[2] is None   # вид вне списка правила
+
+
 def test_apply_rules_fields_whitelist_enforced_in_engine():
     """Ключи вне RULE_FIELDS движок игнорирует оборонительно (в БД значения
     могли попасть в обход роута): идентификация строки не подменяется."""
     raw = [{"brand": "YCPB", "product_type": "ШАПКА", "article": "A-1", "gtin": ""}]
     out, _, _ = apply_rules(
         [R(1, product_types=["ШАПКА"], declaration_number="Д-1",
-           fields={"article": "HACKED", "tnved": "0000000000", "size": "ONE SIZE"})],
+           fields={"article": "HACKED", "gtin": "11111111111111", "size": "ONE SIZE"})],
         apply_defaults(raw, {}), sources(raw))
-    assert out[0]["article"] == "A-1" and out[0].get("tnved", "") != "0000000000"
+    assert out[0]["article"] == "A-1" and not out[0].get("gtin")
     assert out[0]["size"] == "ONE SIZE"    # валидный ключ из той же карты работает
 
 
