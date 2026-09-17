@@ -122,6 +122,10 @@ a{color:var(--info)}
 
 /* ============ бейджи/чипы ============ */
 .bdg{display:inline-flex;align-items:center;gap:6px;font-size:12px;font-weight:500;padding:2px 9px;border-radius:99px;white-space:nowrap}
+/* в гридах (fit+colgroup) колонка жёсткая: бейдж не может наезжать на
+   соседнюю — либо колонка шире подписи, либо подпись переносится внутри
+   пилюли (инцидент 18.09: «истекает ДД.ММ.ГГГГ» поверх соседней строки) */
+table.t .bdg{max-width:100%;white-space:normal;word-break:break-word}
 .bdg::before{content:"";width:6px;height:6px;border-radius:50%;background:currentColor}
 .bdg.grey{background:#EEF1F0;color:var(--muted)}
 .bdg.blue{background:var(--info-bg);color:var(--info)}

@@ -579,7 +579,8 @@ const PREVIEW_COLUMNS = [
   { key: 'producer', label: 'Производитель', w: 164,
     text: (r) => r.producer, render: (r) => <>{r.producer || '—'}<SrcMark v={r.producer} src={r.src.producer} /></> },
   { key: 'gtin', label: 'GTIN', w: 118, mono: true,
-    text: (r) => r.gtin, render: (r) => <>{r.gtin || '—'} {r.gtin_status && <Badge dict={GTIN_STATUS} v={r.gtin_status} />}</> },
+    text: (r) => r.gtin, render: (r) => <>{r.gtin || '—'}
+      {r.gtin_status && <div style={{ marginTop: 3 }}><Badge dict={GTIN_STATUS} v={r.gtin_status} /></div>}</> },
   { key: 'res', label: 'Итог', w: 82,
     render: (r) => r.ok ? <span className="bdg green">ok</span> : <span className="bdg red">ошибка</span> },
   { key: 'err', label: 'Ошибка', w: 196, ell: true,
@@ -1013,9 +1014,9 @@ function Refs({ ctx }) {
               onChange={(e) => setDtitle(e.target.value)} /></div>
         </div>
       </div>
-      <div className="twrap"><table className="t small fit" style={{ minWidth: 1060 }}>
+      <div className="twrap"><table className="t small fit" style={{ minWidth: 1100 }}>
         <colgroup><col style={{ width: 30 }} /><col style={{ width: 208 }} /><col />
-          <col style={{ width: 82 }} /><col style={{ width: 88 }} /><col style={{ width: 112 }} />
+          <col style={{ width: 82 }} /><col style={{ width: 88 }} /><col style={{ width: 150 }} />
           <col style={{ width: 128 }} /><col style={{ width: 132 }} /><col style={{ width: 132 }} /></colgroup>
         <thead><tr><th>№</th><th>Номер</th><th>Продукция / название</th><th>Дата</th>
           <th>Действует до</th><th>Статус</th><th>ТН ВЭД</th><th>Техрегламенты</th>
@@ -1328,7 +1329,7 @@ const JOURNAL_COLUMNS = [
     render: (it) => evLine(it) },
   { key: 'order', label: 'Заказ WB', w: 235, ell: true, mono: true, text: (it) => it.last_event?.srid || '',
     render: (it) => it.last_event?.srid || <span className="faint">—</span> },
-  { key: 'cz', label: 'ЧЗ', w: 88, render: (it) => it.cis_status ? <Badge dict={CIS_STATUS} v={it.cis_status} /> : <span className="faint">—</span> },
+  { key: 'cz', label: 'ЧЗ', w: 100, render: (it) => it.cis_status ? <Badge dict={CIS_STATUS} v={it.cis_status} /> : <span className="faint">—</span> },
   { key: 'upd', label: 'Обновлён', w: 92, mono: true, render: (it) => fmtD(it.updated_at) },
 ]
 
