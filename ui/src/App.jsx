@@ -736,6 +736,54 @@ function Catalog({ ctx }) {
   </>
 }
 
+/* карточка декларации: вся мета из ЧЗ + действия — клик по строке реестра */
+function DeclarationCard({ d, ctx, onDel }) {
+  const [st, setSt] = useState(d)
+  const [busy, setBusy] = useState(false)
+  const check = async () => { if (busy) return
+    setBusy(true)
+    try { const r = await api(`/v1/nkmt/declarations/${st.id}/check`, { method: 'POST' })
+      setSt(r.declaration)
+      const [lbl] = declState(r.declaration)
+      ctx.notify(r.found ? `Декларация: ${lbl}` : 'ЧЗ не нашёл декларацию',
+        r.found ? `ТН ВЭД: ${r.declaration.tnved_list.join(', ') || '—'}`
+          : 'Проверьте номер и дату — пара должна совпадать с реестром ЧЗ.',
+        r.found ? '' : 'warn')
+      ctx.bump()
+    } catch (e) { ctx.notify('Проверка не удалась', e.message, 'bad') } finally { setBusy(false) } }
+  const [lbl, cls] = declState(st)
+  return <div>
+    <div style={{ marginBottom: 12, display: 'flex', gap: 10, alignItems: 'center', flexWrap: 'wrap' }}>
+      <span className="mono" style={{ fontSize: 12.5, wordBreak: 'break-all' }}>{st.doc_number}</span>
+      <span className={`bdg ${cls}`}>{lbl}</span>
+    </div>
+    <div className="row" style={{ gap: 8, marginBottom: 14, flexWrap: 'wrap' }}>
+      <button className="btn" disabled={busy} onClick={check}>Проверить в ЧЗ</button>
+      <button className="btn" onClick={onDel}>Удалить</button>
+    </div>
+    <b style={{ fontSize: 12.5 }}>Реестр ЧЗ</b>
+    <div className="twrap" style={{ margin: '6px 0 10px' }}><table className="t small"><tbody>
+      <tr><td className="faint" style={{ width: '40%' }}>Тип документа</td>
+        <td>{st.doc_type === 'certificate' ? 'сертификат соответствия' : 'декларация о соответствии'}</td></tr>
+      <tr><td className="faint">Дата регистрации</td><td className="mono">{st.doc_date}</td></tr>
+      <tr><td className="faint">Действует до</td><td className="mono">{st.date_to || '—'}</td></tr>
+      <tr><td className="faint">Продукция</td><td>{st.product_name || '—'}</td></tr>
+      <tr><td className="faint">Допустимые ТН ВЭД</td>
+        <td className="mono" style={{ fontSize: 12 }}>{(st.tnved_list || []).join(', ') || '—'}</td></tr>
+      <tr><td className="faint">Техрегламенты</td><td>{st.techregs || '—'}</td></tr>
+      <tr><td className="faint">Заявитель</td><td>{st.applicant || '—'}</td></tr>
+      <tr><td className="faint">Изготовитель</td><td>{st.manufacturer || '—'}</td></tr>
+      <tr><td className="faint">Проверено в ЧЗ</td>
+        <td>{st.checked_at ? fmtD(st.checked_at) : 'ещё не было'}</td></tr>
+    </tbody></table></div>
+    {st.title && <div className="note" style={{ marginBottom: 10 }}>Название для себя: {st.title}</div>}
+    <details>
+      <summary style={{ fontSize: 12, color: 'var(--muted)', cursor: 'pointer' }}>Сырые данные</summary>
+      <pre>{JSON.stringify(st, null, 2)}</pre>
+    </details>
+  </div>
+}
+
 /* ================= справочники ================= */
 function Refs({ ctx }) {
   const { notify, confirm, inn, setInn } = ctx
@@ -779,21 +827,12 @@ function Refs({ ctx }) {
       .catch((e) => notify('Не добавлено', e.message, 'bad')) }
   const delDecl = (d) => confirm('Удалить декларацию?', d.doc_number, 'Карточки, где она уже подставлена, не изменятся.', 'Удалить',
     () => api(`/v1/nkmt/declarations/${d.id}`, { method: 'DELETE' })
-      .then(() => { notify('Декларация удалена', ''); ctx.bump() })
+      .then(() => { notify('Декларация удалена', ''); ctx.closeDrawer(); ctx.bump() })
       .catch((e) => notify('Не удалось удалить', e.message, 'bad')))
-  // обновление из ЧЗ (rd/list): статус, срок, ТН ВЭД-список, заявитель/изготовитель
-  const [declBusyId, setDeclBusyId] = useState(null)
-  const checkDecl = (d) => { if (declBusyId) return
-    setDeclBusyId(d.id)
-    api(`/v1/nkmt/declarations/${d.id}/check`, { method: 'POST' })
-      .then((r) => { const [lbl] = declState(r.declaration)
-        notify(r.found ? `Декларация: ${lbl}` : 'ЧЗ не нашёл декларацию',
-          r.found ? `ТН ВЭД: ${r.declaration.tnved_list.join(', ') || '—'}`
-            : 'Проверьте номер и дату — пара должна совпадать с реестром ЧЗ.',
-          r.found ? '' : 'warn')
-        ctx.bump() })
-      .catch((e) => notify('Проверка не удалась', e.message, 'bad'))
-      .finally(() => setDeclBusyId(null)) }
+  // клик по строке реестра → карточка со всей метой из ЧЗ и действиями
+  const openDecl = (d) => ctx.openDrawer(<>Декларация ·&nbsp;<span className="mono"
+    style={{ fontSize: 12, color: 'var(--muted)' }}>№{d.id}</span></>,
+    <DeclarationCard d={d} ctx={ctx} onDel={() => delDecl(d)} />)
   const checkAll = () => { if (checkBusy) return
     setCheckBusy(true)
     api('/v1/nkmt/declarations/check-all', { method: 'POST' })
@@ -962,16 +1001,15 @@ function Refs({ ctx }) {
               onChange={(e) => setDtitle(e.target.value)} /></div>
         </div>
       </div>
-      <div className="twrap"><table className="t small fit" style={{ minWidth: 1140 }}>
-        <colgroup><col style={{ width: 34 }} /><col style={{ width: 240 }} /><col />
-          <col style={{ width: 86 }} /><col style={{ width: 92 }} /><col style={{ width: 118 }} />
-          <col style={{ width: 150 }} /><col style={{ width: 150 }} /><col style={{ width: 150 }} />
-          <col style={{ width: 156 }} /></colgroup>
+      <div className="twrap"><table className="t small fit" style={{ minWidth: 1060 }}>
+        <colgroup><col style={{ width: 30 }} /><col style={{ width: 208 }} /><col />
+          <col style={{ width: 82 }} /><col style={{ width: 88 }} /><col style={{ width: 112 }} />
+          <col style={{ width: 128 }} /><col style={{ width: 132 }} /><col style={{ width: 132 }} /></colgroup>
         <thead><tr><th>№</th><th>Номер</th><th>Продукция / название</th><th>Дата</th>
           <th>Действует до</th><th>Статус</th><th>ТН ВЭД</th><th>Техрегламенты</th>
-          <th>Изготовитель</th><th></th></tr></thead>
+          <th>Изготовитель</th></tr></thead>
         <tbody>{(decls || []).map((d) => { const [lbl, cls] = declState(d)
-          return <tr key={d.id}>
+          return <tr key={d.id} style={{ cursor: 'pointer' }} onClick={() => openDecl(d)}>
           <td className="num">{d.id}</td>
           <td className="ell mono" style={{ fontSize: 12 }} title={d.doc_number}>{d.doc_number}</td>
           <td className="ell" title={d.product_name || d.title || ''}>
@@ -982,12 +1020,8 @@ function Refs({ ctx }) {
           <td className="ell mono" style={{ fontSize: 11.5 }} title={(d.tnved_list || []).join(', ')}>
             {(d.tnved_list || []).join(', ') || '—'}</td>
           <td className="ell" style={{ fontSize: 12 }} title={d.techregs || ''}>{d.techregs || '—'}</td>
-          <td className="ell" style={{ fontSize: 12 }} title={d.manufacturer || ''}>{d.manufacturer || '—'}</td>
-          <td className="actions">
-            <button className="btn sm" disabled={declBusyId === d.id}
-              onClick={() => checkDecl(d)}>Проверить</button>
-            <button className="btn sm" onClick={() => delDecl(d)}>Удалить</button></td></tr> })}
-          {decls && !decls.length && <tr><td colSpan={10}><div className="empty"><b>Деклараций нет</b>Добавьте номер и дату — статус, срок и допустимые ТН ВЭД подтянутся из Честного ЗНАКА автоматически.</div></td></tr>}
+          <td className="ell" style={{ fontSize: 12 }} title={d.manufacturer || ''}>{d.manufacturer || '—'}</td></tr> })}
+          {decls && !decls.length && <tr><td colSpan={9}><div className="empty"><b>Деклараций нет</b>Добавьте номер и дату — статус, срок и допустимые ТН ВЭД подтянутся из Честного ЗНАКА автоматически.</div></td></tr>}
         </tbody></table></div>
     </div>}
     {tab === 'producers' && <div className="card">
@@ -1013,13 +1047,15 @@ function Refs({ ctx }) {
         </div>
         <div className="note">Производитель из этого справочника появится в подсказках полей «Производитель» (дефолты и правила РД) — каноническое написание попадёт во все карточки одинаково.</div>
       </div>
-      <div className="twrap"><table className="t small">
+      <div className="twrap"><table className="t small fit" style={{ minWidth: 720 }}>
+        <colgroup><col /><col style={{ width: 140 }} /><col style={{ width: 96 }} />
+          <col style={{ width: 210 }} /><col style={{ width: 110 }} /></colgroup>
         <thead><tr><th>Наименование</th><th>ИНН</th><th>Тип</th><th>Примечание</th><th></th></tr></thead>
         <tbody>{(producers || []).map((p) => <tr key={p.id}>
-          <td className="ell" style={{ maxWidth: 360 }} title={p.name}>{p.name}</td>
+          <td className="ell" title={p.name}>{p.name}</td>
           <td className="mono">{p.inn || '—'}</td>
           <td>{p.kind === 'entrepreneur' ? 'ИП' : p.kind === 'company' ? 'юрлицо' : '—'}</td>
-          <td className="ell" style={{ maxWidth: 260 }} title={p.note}>{p.note || '—'}</td>
+          <td className="ell" title={p.note}>{p.note || '—'}</td>
           <td className="actions"><button className="btn sm" onClick={() => delProducer(p)}>Удалить</button></td></tr>)}
           {producers && !producers.length && <tr><td colSpan={5}><div className="empty"><b>Производителей нет</b>Добавьте наименование и ИНН — они появятся в подсказках правил и дефолтов.</div></td></tr>}
         </tbody></table></div>
@@ -1084,19 +1120,21 @@ function Refs({ ctx }) {
         </div>
         <div className="note" style={{ marginTop: 10 }}>Как применяется: у строки файла берётся эффективный бренд и вид (из файла или дефолтов); правило подходит, если бренд и вид совпали (без учёта регистра) и вид входит в список. Из подошедших побеждает правило с большим числом условий. Подстановка действует только там, где значение не задано файлом — проверяйте её в «Проверке подстановок» ниже и в предпросмотре импорта.</div>
       </div>
-      <div className="twrap"><table className="t small">
+      <div className="twrap"><table className="t small fit" style={{ minWidth: 980 }}>
+        <colgroup><col style={{ width: 120 }} /><col /><col style={{ width: 216 }} />
+          <col style={{ width: 168 }} /><col style={{ width: 186 }} /><col style={{ width: 112 }} /></colgroup>
         <thead><tr><th>Бренд</th><th>Виды товара</th><th>Декларация</th><th>Производитель</th><th>Поля</th><th></th></tr></thead>
         <tbody>{(rules || []).map((r) => { const fs = Object.entries(r.fields || {})
           .map(([k, v]) => `${RULE_FIELD_LABELS[k] || k}: ${v}`).join(' · ')
           return <tr key={r.id}>
-          <td>{r.brand || 'любой'}</td>
-          <td className="ell" style={{ fontSize: 12.5 }} title={r.product_types?.join(', ')}>
+          <td className="ell" title={r.brand}>{r.brand || 'любой'}</td>
+          <td className="ell" title={r.product_types?.join(', ')}>
             {r.product_types?.length ? r.product_types.join(', ') : 'любой'}</td>
-          <td className="ell" style={{ fontSize: 12.5 }} title={r.declaration_title
+          <td className="ell" title={r.declaration_title
             ? `${r.declaration_title} · ${r.declaration_number}` : r.declaration_number}>
             {r.declaration_number}</td>
-          <td>{r.producer || '—'}</td>
-          <td className="ell" style={{ fontSize: 12.5 }} title={fs}>{fs || '—'}</td>
+          <td className="ell" title={r.producer}>{r.producer || '—'}</td>
+          <td className="ell" title={fs}>{fs || '—'}</td>
           <td className="actions"><button className="btn sm" onClick={() => delRule(r)}>Удалить</button></td></tr> })}
           {rules && !rules.length && <tr><td colSpan={6}><div className="empty"><b>Правил нет</b>Пример: вид «ШАПКА» → декларация №…, производитель и размер ONE SIZE. Правило без бренда и видов не создаётся — оно подходило бы всем строкам.</div></td></tr>}
         </tbody></table></div>
