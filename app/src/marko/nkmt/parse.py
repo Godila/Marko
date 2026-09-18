@@ -44,9 +44,13 @@ SPEC: list[ColumnSpec] = [
     ColumnSpec("Цвет", "color", required=True),
     ColumnSpec("Состав", "composition", required=True),
     ColumnSpec("Размер", "size", required=True, defaultable=True,
-               hint="например «M», «one size»; пусто — подставится правилом РД"),
-    ColumnSpec("Размерная система", "size_system", defaultable=True),
-    ColumnSpec("Пол", "target_gender", defaultable=True),
+               hint="например «M», «one size»; пусто — правило РД; у части ТНВЭД есть "
+                    "справочник значений (шапки: 46–62) — предпросмотр предупредит, если вне"),
+    ColumnSpec("Размерная система", "size_system", defaultable=True,
+               hint="справочник: МЕЖДУНАРОДНЫЙ, ЕВРОПА, РОССИЯ…; головные уборы — ОБХВАТ ГОЛОВЫ"),
+    ColumnSpec("Пол", "target_gender", defaultable=True,
+               hint="справочник ЧЗ: ЖЕНСКИЙ, МУЖСКОЙ, БЕЗ УКАЗАНИЯ ПОЛА, "
+                    "УНИВЕРСАЛЬНЫЙ (УНИСЕКС); синонимы «унисекс»/«универсальный» понимаются"),
     ColumnSpec("Декларация", "declaration_number", defaultable=True,
                hint="номер из реестра; иначе правило РД, затем дефолт"),
     ColumnSpec("Дата декларации", "declaration_date", defaultable=True,

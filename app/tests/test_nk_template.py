@@ -29,12 +29,18 @@ def test_build_template():
     titles = [s.title for s in SPEC]
     assert [c.value for c in ws[1]] == titles
     assert ws.cell(row=2, column=cols.index("article") + 1).value == "AB-1001"
-    # строки-примеры: футболка M и шапка ONE SIZE (правило-подстановка размера)
+    # строки-примеры учат валидным значениям справочников ЧЗ: пол — литералы
+    # («ЖЕНСКИЙ», «УНИВЕРСАЛЬНЫЙ (УНИСЕКС)»), размерная система, у шапок
+    # размер — из справочника 46–62 (обхват головы)
     rows = list(ws.iter_rows(min_row=2, values_only=True))
     assert len(rows) == 2
     assert rows[0][cols.index("size")] == "M"
+    assert rows[0][cols.index("target_gender")] == "ЖЕНСКИЙ"
+    assert rows[0][cols.index("size_system")] == "МЕЖДУНАРОДНЫЙ"
     assert rows[1][cols.index("product_type")] == "ШАПКА"
-    assert rows[1][cols.index("size")] == "ONE SIZE"
+    assert rows[1][cols.index("size")] == "54"
+    assert rows[1][cols.index("size_system")] == "ОБХВАТ ГОЛОВЫ"
+    assert rows[1][cols.index("target_gender")] == "УНИВЕРСАЛЬНЫЙ (УНИСЕКС)"
     info = wb["Инструкция"]
     assert info.cell(row=1, column=1).value == "Колонка"
     assert info.max_row >= len(titles)   # по строке на колонку + абзацы правил
@@ -56,4 +62,14 @@ def test_template_formatting():
     notes = [str(r[0]) for r in info.iter_rows(min_row=2, values_only=True)]
     assert "Техрегламент" in notes and "Подстановка" in notes
     parsed = parse_xlsx(data)
-    assert len(parsed) == 2 and parsed[1]["size"] == "ONE SIZE"
+    assert len(parsed) == 2 and parsed[1]["size"] == "54"
+    assert parsed[1]["target_gender"] == "УНИВЕРСАЛЬНЫЙ (УНИСЕКС)"
+
+
+def test_template_hint_lists_gender_dictionary():
+    """Инструкция должна назвать литералы справочника ЧЗ: инцидент 17.09 —
+    оператор писал «Унисекс»/«Универсальный», а в справочнике только
+    составной литерал «УНИВЕРСАЛЬНЫЙ (УНИСЕКС)»."""
+    from marko.nkmt.parse import SPEC
+    hint = next(s.hint for s in SPEC if s.key == "target_gender")
+    assert "УНИВЕРСАЛЬНЫЙ (УНИСЕКС)" in hint and "синоним" in hint

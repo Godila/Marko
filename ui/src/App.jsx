@@ -558,33 +558,37 @@ const SrcMark = ({ v, src, extra }) => (v && src && src !== 'file'
 const PREVIEW_COLUMNS = [
   { key: 'article', label: 'Артикул', w: 88, mono: true,
     text: (r) => r.article, render: (r) => r.article },
-  { key: 'name', label: 'Наименование', w: 150, ell: true,
+  { key: 'name', label: 'Наименование', w: 128, ell: true,
     text: (r) => r.name, render: (r) => r.name || <span className="faint">—</span> },
-  { key: 'pt', label: 'Вид', w: 104, ell: true,
+  { key: 'pt', label: 'Вид', w: 92, ell: true,
     text: (r) => r.product_type, render: (r) => r.product_type || <span className="faint">—</span> },
-  { key: 'brand', label: 'Бренд', w: 88,
+  { key: 'brand', label: 'Бренд', w: 80,
     text: (r) => r.brand, render: (r) => <>{r.brand || '—'}<SrcMark v={r.brand} src={r.src.brand} /></> },
-  { key: 'tnved', label: 'ТН ВЭД', w: 84, mono: true,
+  { key: 'tnved', label: 'ТН ВЭД', w: 80, mono: true,
     text: (r) => r.tnved, render: (r) => <>{r.tnved || '—'}
       <SrcMark v={r.tnved} src={r.src.tnved} />
       {r.tnved_warning && <div title={r.tnved_warning}
         style={{ fontSize: 11, color: 'var(--wait)' }}>вне декларации</div>}</> },
   { key: 'size', label: 'Размер', w: 78,
-    text: (r) => r.size, render: (r) => <>{r.size || <span className="faint">—</span>}<SrcMark v={r.size} src={r.src.size} /></> },
-  { key: 'decl', label: 'Декларация', w: 166,
+    text: (r) => r.size, render: (r) => <>{r.size || <span className="faint">—</span>}<SrcMark v={r.size} src={r.src.size} />
+      {r.size_warning && <div title={r.size_warning}
+        style={{ fontSize: 11, color: 'var(--wait)' }}>вне справочника</div>}</> },
+  { key: 'gender', label: 'Пол', w: 92, ell: true,
+    text: (r) => r.target_gender, render: (r) => <>{r.target_gender || <span className="faint">—</span>}<SrcMark v={r.target_gender} src={r.src.target_gender} /></> },
+  { key: 'decl', label: 'Декларация', w: 150,
     text: (r) => r.declaration_number, render: (r) => <>
       {r.declaration_number || '—'}
       {r.declaration_date && <div className="faint mono" style={{ fontSize: 11 }}>{r.declaration_date}</div>}
       <SrcMark v={r.declaration_number} src={r.src.declaration_number}
         extra={r.src.declaration_number === 'rule' && r.rule_id ? ` №${r.rule_id}` : ''} /></> },
-  { key: 'producer', label: 'Производитель', w: 136,
+  { key: 'producer', label: 'Производитель', w: 122,
     text: (r) => r.producer, render: (r) => <>{r.producer || '—'}<SrcMark v={r.producer} src={r.src.producer} /></> },
   { key: 'gtin', label: 'GTIN', w: 98, mono: true,
     text: (r) => r.gtin, render: (r) => <>{r.gtin || '—'}
       {r.gtin_status && <div style={{ marginTop: 3 }}><Badge dict={GTIN_STATUS} v={r.gtin_status} /></div>}</> },
   { key: 'res', label: 'Итог', w: 70,
     render: (r) => r.ok ? <span className="bdg green">ok</span> : <span className="bdg red">ошибка</span> },
-  { key: 'err', label: 'Ошибка', w: 142, ell: true,
+  { key: 'err', label: 'Ошибка', w: 126, ell: true,
     text: (r) => r.error || '', render: (r) => r.error ? <span className="err-tx">{r.error}</span> : '' },
 ]
 

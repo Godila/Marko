@@ -33,6 +33,28 @@ ATTR_SIZE = 35            # Размер: attr_value_type = размерные �
 ATTR_TECHREG = 13836      # Номер технического регламента (preset, список)
 ATTR_GENDER = 14013       # Целевой пол (preset)
 
+# Живые справочники ЧЗ содержат составные литералы («УНИВЕРСАЛЬНЫЙ (УНИСЕКС)»),
+# которые оператор в файле пишет синонимом (инцидент 17.09: и «Унисекс», и
+# «Универсальный» отвергались). Кураторский маппинг attr_id → {синоним casefold:
+# литерал}; литерал обязан присутствовать в attr_preset — устаревший синоним
+# честно уйдёт в ошибку «отсутствует в справочнике».
+PRESET_SYNONYMS = {
+    14013: {  # live: ЖЕНСКИЙ, МУЖСКОЙ, БЕЗ УКАЗАНИЯ ПОЛА, УНИВЕРСАЛЬНЫЙ (УНИСЕКС)
+        "унисекс": "УНИВЕРСАЛЬНЫЙ (УНИСЕКС)",
+        "универсальный": "УНИВЕРСАЛЬНЫЙ (УНИСЕКС)",
+        "универсальное": "УНИВЕРСАЛЬНЫЙ (УНИСЕКС)",
+        "уни": "УНИВЕРСАЛЬНЫЙ (УНИСЕКС)",
+        "без пола": "БЕЗ УКАЗАНИЯ ПОЛА",
+        "без указания": "БЕЗ УКАЗАНИЯ ПОЛА",
+        "женское": "ЖЕНСКИЙ",
+        "мужское": "МУЖСКОЙ",
+    },
+}
+
+# нормформа «без пунктуации и пробелов»: «футболка поло» ≡ «ФУТБОЛКА-ПОЛО»;
+# – и — (автозамена тире) и ё/е (ТЕРМОБЕЛЬЁ ≡ ТЕРМОБЕЛЬЕ) сворачиваются тоже
+_PUNCT_RE = re.compile(r"[\s()\[\]«»\"'.,:;/\\\-–—]+")
+
 
 class ValidatedRow(TypedDict):
     article: str
@@ -43,6 +65,7 @@ class ValidatedRow(TypedDict):
     attributes: dict
     ok: bool
     error: str
+    size_warning: str
 
 
 def _attr_map(model: dict) -> dict:
@@ -50,21 +73,52 @@ def _attr_map(model: dict) -> dict:
     return {a["attr_id"]: a for a in model.get("m", []) + model.get("r", [])}
 
 
+def _dict_hint(presets: list, value: str) -> str:
+    """Выход из тупика прямо в тексте ошибки: короткий справочник — целиком,
+    длинный — ближайшие по вхождению значений («топ-банд» → ТОП-БАНДО)."""
+    if not presets:
+        return ""
+    if len(presets) <= 6:
+        return f" (доступно: {', '.join(presets)})"
+    low = value.casefold()
+    near = [p for p in presets if len(low) >= 3 and low in p.casefold()][:3]
+    if near:
+        return f" (возможно: {', '.join(near)}; всего значений: {len(presets)})"
+    return f" (всего значений: {len(presets)}; справочник — консоль, Справочники)"
+
+
 def _check_preset(amap: dict, attr_id: int, value: str, errors: list) -> None:
     attr = amap.get(attr_id)
-    if attr and value not in (attr.get("attr_preset") or []):
-        errors.append(f"{attr['attr_name']}: значение «{value}» отсутствует в справочнике")
+    if attr and value not in (presets := attr.get("attr_preset") or []):
+        errors.append(f"{attr['attr_name']}: значение «{value}» отсутствует в справочнике"
+                      + _dict_hint(presets, value))
 
 
 def _canonical(attr: dict | None, list_key: str, value: str) -> str:
     """casefold-совпадение → каноническое написание справочника (регистр файла/правила
-    не должен валить preset-проверку и расходиться с НК); нет совпадения — как есть,
-    _check_preset честно скажет «отсутствует в справочнике»."""
+    не должен валить preset-проверку и расходиться с НК); затем синонимы и
+    пунктуационно-нечувствительное совпадение (только attr_preset). Нет
+    совпадения — как есть, _check_preset честно скажет «отсутствует»."""
+    presets = (attr or {}).get(list_key) or []
     low = value.casefold()
-    for preset in ((attr or {}).get(list_key) or []):
+    for preset in presets:
         if preset.casefold() == low:
             return preset
+    if list_key == "attr_preset":
+        mapped = PRESET_SYNONYMS.get((attr or {}).get("attr_id"), {}).get(low)
+        if mapped in presets:
+            return mapped
+        # раскладка пунктуации/пробелов («универсальный(унисекс)») — только при
+        # уникальном совпадении: разные литералы с одной нормформой не трогаем
+        key = _flat(low)
+        hits = [p for p in presets if _flat(p) == key]
+        if len(hits) == 1:
+            return hits[0]
     return value
+
+
+def _flat(s: str) -> str:
+    return _PUNCT_RE.sub("", s.casefold()).replace("ё", "е")
 
 
 def _normalize_color(amap: dict, color: str) -> str:
@@ -76,6 +130,19 @@ def _normalize_color(amap: dict, color: str) -> str:
         if preset.casefold() == low:
             return preset
     return color
+
+
+def _size_out_warning(attr: dict | None, size: str) -> str:
+    """Размер мимо справочника attr 35 (если он есть): «ONE SIZE» у шапок при
+    46–62. Числовой список сжимается в диапазон, иначе — первые значения."""
+    presets = (attr.get("attr_preset") or []) if attr else []
+    if not presets or not size or size in presets:
+        return ""
+    if len(presets) > 6 and all(p.isdigit() for p in presets):
+        shown = f"{presets[0]}–{presets[-1]}"
+    else:
+        shown = ", ".join(presets[:6]) + (", …" if len(presets) > 6 else "")
+    return f"размер «{size}» вне справочника ТНВЭД ({shown})"
 
 
 def _validate_row(db, client, token: str, row: dict, errors: list,
@@ -121,8 +188,13 @@ def _validate_row(db, client, token: str, row: dict, errors: list,
     attr_size = amap.get(ATTR_SIZE)
     size_system = _canonical(attr_size, "attr_value_type",
                              str(row.get("size_system", "")))
-    if attr_size and size_system not in (attr_size.get("attr_value_type") or []):
-        errors.append(f"{attr_size['attr_name']}: значение «{size_system}» отсутствует в справочнике")
+    if attr_size and size_system not in (vts := attr_size.get("attr_value_type") or []):
+        errors.append(f"{attr_size['attr_name']}: значение «{size_system}» "
+                      f"отсутствует в справочнике" + _dict_hint(vts, size_system))
+    # размер: attr 35 может нести справочник значений (шапки: 46–62 обхвата
+    # головы), но preset_only=false — мимо справочника НЕ блокируем, предупреждаем
+    size = _canonical(attr_size, "attr_preset", str(row.get("size", "")))
+    size_warning = _size_out_warning(attr_size, size)
 
     # 5. цвет — нормализация к написанию preset
     color = _normalize_color(amap, str(row.get("color", "")))
@@ -177,7 +249,7 @@ def _validate_row(db, client, token: str, row: dict, errors: list,
         "36": color,                                 # Цвет (нормализованный)
         "2483": str(row.get("composition", "")),     # Состав
         "14013": target_gender,                      # Целевой пол (канонический)
-        "35": {"type": size_system, "value": str(row.get("size", ""))},
+        "35": {"type": size_system, "value": size},
         "13914": {"type": "Модель", "value": str(row.get("model") or row.get("article") or "")},
         "13836": [techreg],                          # списочный атрибут
         "2504": brand,                              # Товарный знак — имя ТМ строкой (дамп /nk/feed)
@@ -187,7 +259,8 @@ def _validate_row(db, client, token: str, row: dict, errors: list,
     }
     return ValidatedRow(article=str(row.get("article", "")), tnved=tnved,
                         name=str(row.get("name", "")), gtin=gtin, cat_id=cat_id,
-                        attributes=attributes, ok=not errors, error="; ".join(errors))
+                        attributes=attributes, ok=not errors, error="; ".join(errors),
+                        size_warning=size_warning)
 
 
 def validate_rows(db, client, token: str, rows: list[dict]) -> list[ValidatedRow]:
@@ -205,5 +278,6 @@ def validate_rows(db, client, token: str, rows: list[dict]) -> list[ValidatedRow
                 article=str(row.get("article", "")), tnved=str(row.get("tnved", "")),
                 name=str(row.get("name", "")), gtin=str(row.get("gtin", "")),
                 cat_id="", attributes={}, ok=False,
-                error="; ".join([*errors, f"необработанная ошибка: {e}"])))
+                error="; ".join([*errors, f"необработанная ошибка: {e}"]),
+                size_warning=""))
     return result

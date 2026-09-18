@@ -137,3 +137,34 @@ def test_template_endpoint(db, client):
     assert r.status_code == 200 and r.headers["content-type"] == XLSX_MIME
     wb = openpyxl.load_workbook(io.BytesIO(r.content))
     assert wb.sheetnames == ["Выгрузка", "Инструкция"]
+
+
+def test_preview_gender_synonym_and_size_warning(db, client, monkeypatch, model):
+    """Инцидент 17.09: «Унисекс»/«Универсальный» из файла канонизируются к литералу
+    справочника «УНИВЕРСАЛЬНЫЙ (УНИСЕКС)»; размер вне справочника ТНВЭД
+    (у шапок 46–62) — предупреждение в превью, строка не блокируется."""
+    import json as _json
+    from pathlib import Path as _Path
+    monkeypatch.setattr("marko.connector_mt.manager.get_token", lambda _db: "T")
+    db.add(Declaration(doc_number="Д-1", doc_date="2026-01-01")); db.commit()
+    fix = _json.loads((_Path(__file__).parent / "fixtures" / "nk_attrs_6109100000.json")
+                      .read_text(encoding="utf-8"))
+    for a in fix["m"]:  # шапочная модель: у атрибута 35 есть справочник размеров
+        if a["attr_id"] == 35:
+            a["attr_preset"] = [str(n) for n in range(46, 63)]
+    monkeypatch.setattr("marko.nkmt.dicts.attrs_model", lambda *a, **k: fix)
+    rows = [
+        ["U-1", *ROW_NO_DECL[1:11], "Д-1", "", "Унисекс"],
+        ["U-2", *ROW_NO_DECL[1:11], "Д-1", "", "универсальный"],
+    ]
+    # размер меняем в базовой HDR-строке: U-1 — «ONE SIZE» (вне 46–62), U-2 — «54»
+    rows[0][6] = "ONE SIZE"
+    rows[1][6] = "54"
+    files = {"file": ("u.xlsx", make_xlsx([*HDR, "Пол"], rows), XLSX_MIME)}
+    out = client.post("/v1/nkmt/import/preview", headers=AUTH, files=files).json()
+    assert out["stats"]["ok"] == 2
+    u1, u2 = out["rows"]
+    assert u1["ok"] is True and u1["target_gender"] == "УНИВЕРСАЛЬНЫЙ (УНИСЕКС)"
+    assert "вне справочника" in u1["size_warning"] and u1["size"] == "ONE SIZE"
+    assert u2["ok"] is True and u2["target_gender"] == "УНИВЕРСАЛЬНЫЙ (УНИСЕКС)"
+    assert u2["size_warning"] == "" and u2["size"] == "54"
