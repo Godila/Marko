@@ -81,7 +81,7 @@ def test_order_feed_wire():
 
     def handler(r):
         bodies.append((r.method, r.url.path, r.read().decode()))
-        return httpx.Response(200, json={"orders": [{"srid": "x.0.0", "status": "buyout"}]})
+        return httpx.Response(200, json={"data": {"orders": [{"srid": "x.0.0", "status": "buyout"}]}})
 
     c = WBClient(token="t", transport=httpx.MockTransport(handler), sleeper=lambda s: None)
     out = c.order_feed("2026-08-21T00:00:00+03:00", "2026-09-21T00:00:00+03:00", nm_ids=[42])

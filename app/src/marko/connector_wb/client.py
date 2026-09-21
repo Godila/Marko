@@ -141,7 +141,9 @@ class WBClient:
             body["nmIds"] = nm_ids[:1000]
         r = self.request("POST", "/api/analytics/v1/order-feed",
                          json_body=body, retries=0)
-        return r.json().get("orders") or []
+        # ответ обёрнут в {"data": {..., "orders": []}} (живой прогон 21.09)
+        data = r.json().get("data") or {}
+        return data.get("orders") or []
 
 
 def load_wb_token(path: str) -> str:
