@@ -129,6 +129,20 @@ class WBClient:
                         json_body={"orders": order_ids[:100]})
         return r.json()
 
+    def order_feed(self, date_from: str, date_to: str, nm_ids: list[int] | None = None,
+                   limit: int = 10_000) -> list[dict]:
+        """Лента заказов (аналитика): статус/склад/город/цена по srid за ≤31
+        день. На базовом токене квота 1 запрос/3ч — троттлит вызывающий
+        (kv-кэш трассировки), сам метод гейта не имеет; 429 не ретраим —
+        бэкофф не может оживить исчерпанную квоту, только держит тред."""
+        body: dict = {"selectedPeriod": {"start": date_from, "end": date_to},
+                      "pagination": {"limit": limit}}
+        if nm_ids:
+            body["nmIds"] = nm_ids[:1000]
+        r = self.request("POST", "/api/v1/analytics/order-feed",
+                         json_body=body, retries=0)
+        return r.json().get("orders") or []
+
 
 def load_wb_token(path: str) -> str:
     with open(path, encoding="utf-8") as f:

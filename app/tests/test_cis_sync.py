@@ -179,3 +179,18 @@ def test_unknown_kms_return_infos_without_items(db, mt):
     res3 = sync_cis_status(db, kms=[bad], client=FakeCz(
         {bad: {"errorMessage": "КИ не найден"}}))
     assert res3["infos"] == [{"km": bad, "error": "КИ не найден"}]
+
+
+def test_snapshot_flag_returns_full_cisinfo(db, mt):
+    km = "0104630520676025215CIS014"
+    _sale(db, km)
+    cz = FakeCz({km: {"cisInfo": {"cis": km, "status": "RETIRED", "productName": "Шапка",
+                                   "emissionDate": "2025-12-13T10:02:55.102Z",
+                                   "introducedDate": "2025-12-13T10:34:02.465Z"}}})
+    res = sync_cis_status(db, kms=[km], client=cz, snapshot=True)
+    assert res["cis"][km]["emissionDate"].startswith("2025-12-13")
+    assert res["cis"][km]["introducedDate"].startswith("2025-12-13")
+    # без флага контракт прежний — ключа cis нет
+    res2 = sync_cis_status(db, kms=[km], client=FakeCz(
+        {km: {"cisInfo": {"status": "INTRODUCED"}}}))
+    assert "cis" not in res2

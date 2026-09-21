@@ -139,7 +139,8 @@ def _detail(ev: Event) -> str:
 def _timeline(events: list[Event]) -> list[dict]:
     rows = [{"id": ev.id, "system": _system(ev.source),
              "system_label": SYSTEMS.get(_system(ev.source), ev.source),
-             "ts": _ts(ev), "kind": ev.kind,
+             "ts": _ts(ev), "observed": ev.created_at.isoformat(),
+             "kind": ev.kind,
              "title": TITLES.get((ev.source, ev.kind), ev.kind),
              "detail": _detail(ev), "srid": ev.srid,
              "payload": ev.payload} for ev in events]

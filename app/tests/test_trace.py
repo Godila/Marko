@@ -224,3 +224,145 @@ def test_trace_wb_meta_errors_and_scopes(db, client, monkeypatch):
     assert client.post("/v1/trace/wb-meta", headers=AUTH, json={"km": "abc"}).status_code == 422
     assert client.post("/v1/trace/wb-meta", headers=AUTH_RO,
                        json={"km": KM}).status_code == 403
+
+
+# --- v2: живой слой ЧЗ (полный cisInfo) и телеметрия заказа WB (order-feed) ---
+
+CZ_FULL = {"cisInfo": {
+    "cis": KM, "status": "INTRODUCED", "productName": "Костюм_8800_меланж_52",
+    "emissionDate": "2025-12-13T10:02:55.102Z", "applicationDate": "2025-12-13T10:10:02.122Z",
+    "introducedDate": "2025-12-13T10:34:02.465Z", "producedDate": "2025-12-01T00:00:00.000Z",
+    "emissionType": "LOCAL", "packageType": "BUNDLE", "brand": "YCPB",
+    "producerName": "ИП БАЙКУЛОВ ДИНИСЛАМ АХМАТОВИЧ", "producerInn": "090201471350",
+    "gtin": "04630520676025", "tnVedEaes": "6104192000", "markWithdraw": False,
+    "certDoc": [{"number": "ЕАЭС N RU Д-RU.РА09.В.28397/25",
+                 "type": "CONFORMITY_DECLARATION", "date": "2025-10-15"}],
+}}
+
+
+class _CzFull:
+    def __init__(self, answers):
+        self.answers = answers
+
+    def cises_info(self, token, cises):
+        return [self.answers[km] for km in cises]
+
+
+def _mt_full(monkeypatch, cz):
+    from marko.connector_mt import manager
+    monkeypatch.setattr(manager, "get_token", lambda d, c=None: "T")
+    monkeypatch.setattr(manager, "default_client", lambda: cz)
+
+
+def test_trace_live_cz_full_snapshot(db, client, monkeypatch):
+    _sale(db)
+    _mt_full(monkeypatch, _CzFull({KM: CZ_FULL}))
+    r = client.get("/v1/trace", params={"km": KM, "live": 1}, headers=AUTH)
+    body = r.json()
+    assert body["cz"]["emissionDate"].startswith("2025-12-13")
+    assert body["cz"]["introducedDate"].startswith("2025-12-13")
+    assert body["cz"]["producerName"] == "ИП БАЙКУЛОВ ДИНИСЛАМ АХМАТОВИЧ"
+    assert body["cz"]["certDoc"][0]["number"].startswith("ЕАЭС N RU Д-RU.ПА09") \
+        or body["cz"]["certDoc"][0]["number"].startswith("ЕАЭС")
+    # live-проверка заодно обновляет штатные колонки позиции
+    assert body["item"]["cis_status"] == "introduced"
+    assert body["item"]["cis_product_name"] == "Костюм_8800_меланж_52"
+
+
+def test_trace_live_unknown_km_and_no_live(db, client, monkeypatch):
+    _mt_full(monkeypatch, _CzFull({KM2: {"cisInfo": {"cis": KM2, "status": "RETIRED",
+                                                     "productName": "Чужой код"}}}))
+    # код вне журнала: cz приходит из infos-среза, позиция не создаётся
+    body = client.get("/v1/trace", params={"km": KM2, "live": 1}, headers=AUTH).json()
+    assert body["found"] is False
+    assert body["cz"]["status"] == "retired" and body["cz"]["productName"] == "Чужой код"
+    from marko.journal.models import Item
+    assert db.get(Item, KM2) is None
+    # live=0 — сети нет: ключа cz нет (только локальные данные)
+    from marko.connector_mt import manager
+    monkeypatch.setattr(manager, "default_client",
+                        lambda: pytest.fail("live=0 не должен звать ЧЗ"))
+    body2 = client.get("/v1/trace", params={"km": KM, "live": 0}, headers=AUTH).json()
+    assert "cz" not in body2
+    # read-only токен: живой слой выключен принудительно
+    body3 = client.get("/v1/trace", params={"km": KM, "live": 1}, headers=AUTH_RO).json()
+    assert "cz" not in body3
+
+
+def test_trace_live_cz_fail_soft(db, client, monkeypatch):
+    _sale(db)
+
+    class Broken:
+        def cises_info(self, token, cises):
+            raise RuntimeError("cz down")
+    from marko.connector_mt import manager
+    monkeypatch.setattr(manager, "get_token", lambda d, c=None: "T")
+    monkeypatch.setattr(manager, "default_client", Broken())
+    r = client.get("/v1/trace", params={"km": KM, "live": 1}, headers=AUTH)
+    assert r.status_code == 200                        # локальные данные живы
+    assert "error" in r.json()["cz"]
+
+
+FEED_ORDER = {"srid": f"{WB_DOC}.0.0", "status": "buyout", "createdAt": "2026-09-16T10:00:00Z",
+              "updatedAt": "2026-09-18T18:30:00Z", "warehouseName": "Коледино",
+              "isMp": True, "destinationCity": "Казань", "destinationDistrict": "Приволжский",
+              "sellerPrice": 3250, "isB2b": False, "nmId": 412478853}
+
+
+def test_trace_wb_feed_route_and_cache(db, client, monkeypatch):
+    from marko.api import routes_journal
+    from marko.platform.models import PlatformKV
+
+    seen = []
+
+    class FakeWb:
+        def order_feed(self, date_from, date_to, nm_ids=None, limit=10000):
+            seen.append({"date_from": date_from, "nm": nm_ids})
+            return [FEED_ORDER]
+
+    monkeypatch.setattr(routes_journal, "load_wb_token", lambda p: "t")
+    monkeypatch.setattr(routes_journal, "WBClient", lambda **kw: FakeWb())
+    _sale(db, srid=f"{WB_DOC}.3.0", nm_id=412478853)
+    r = client.post("/v1/trace/wb-feed", headers=AUTH, json={"km": KM})
+    assert r.status_code == 200
+    body = r.json()
+    assert body["orders"][0]["status"] == "buyout"           # хвосты расходятся — матч по документу
+    assert body["orders"][0]["destinationCity"] == "Казань"
+    assert seen and seen[0]["nm"] is None               # кэш общий: без nmIds-фильтра
+    assert body["fetched_at"]
+    # повтор в окне троттла — из кэша kv, WB не дёргается
+    monkeypatch.setattr(routes_journal, "WBClient",
+                        lambda **kw: pytest.fail("кэш 3ч — WB не должен зваться"))
+    r2 = client.post("/v1/trace/wb-feed", headers=AUTH, json={"km": KM})
+    assert r2.json()["orders"][0]["destinationCity"] == "Казань"
+    # протухший кэш → новая выгрузка (фейк WB возвращаем на место)
+    monkeypatch.setattr(routes_journal, "WBClient", lambda **kw: FakeWb())
+    from marko.db import SessionLocal
+    s = SessionLocal()
+    row = s.get(PlatformKV, "trace_wb_feed")
+    row.value = {"fetched_at": 0, "by_doc": {}}
+    s.commit(); s.close()
+    r3 = client.post("/v1/trace/wb-feed", headers=AUTH, json={"km": KM})
+    assert r3.json()["orders"][0]["status"] == "buyout"
+
+
+def test_trace_wb_feed_errors_and_scopes(db, client, monkeypatch):
+    from marko.api import routes_journal
+    from marko.connector_wb.client import WbHttpError
+
+    class Boom:
+        def order_feed(self, *a, **kw):
+            raise WbHttpError(500, "wb down")
+
+    monkeypatch.setattr(routes_journal, "load_wb_token", lambda p: "t")
+    monkeypatch.setattr(routes_journal, "WBClient", lambda **kw: Boom())
+    _sale(db, srid=f"{WB_DOC}.0.0")
+    assert client.post("/v1/trace/wb-feed", headers=AUTH, json={"km": KM}).status_code == 502
+    assert client.post("/v1/trace/wb-feed", headers=AUTH, json={"km": "abc"}).status_code == 422
+    assert client.post("/v1/trace/wb-feed", headers=AUTH_RO, json={"km": KM}).status_code == 403
+    # событий нет → note без сети
+    monkeypatch.setattr(routes_journal, "WBClient",
+                        lambda **kw: pytest.fail("без событий WB не зывается"))
+    r = client.post("/v1/trace/wb-feed", headers=AUTH,
+                    json={"km": "0104630520676025215NOFEED1"})
+    assert r.status_code == 200 and r.json()["orders"] == [] and "note" in r.json()

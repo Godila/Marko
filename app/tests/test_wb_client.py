@@ -74,3 +74,18 @@ def test_goods_return_limit_gate(db, monkeypatch):
     c.goods_return("2026-09-01", "2026-09-02")
     with pytest.raises(WbLimitError):
         c.goods_return("2026-09-01", "2026-09-02")   # 3-й за окно 1ч
+
+
+def test_order_feed_wire():
+    bodies = []
+
+    def handler(r):
+        bodies.append((r.method, r.url.path, r.read().decode()))
+        return httpx.Response(200, json={"orders": [{"srid": "x.0.0", "status": "buyout"}]})
+
+    c = WBClient(token="t", transport=httpx.MockTransport(handler), sleeper=lambda s: None)
+    out = c.order_feed("2026-08-21T00:00:00+03:00", "2026-09-21T00:00:00+03:00", nm_ids=[42])
+    assert out[0]["status"] == "buyout"
+    method, path, body = bodies[0]
+    assert method == "POST" and path == "/api/v1/analytics/order-feed"
+    assert '"nmIds":[42]' in body and '"start"' in body and '"limit"' in body

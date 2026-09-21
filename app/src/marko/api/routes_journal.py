@@ -108,17 +108,129 @@ class TraceWbMetaBody(BaseModel):
 @router.get("/trace")
 def trace_get(
     km: str = Query(..., min_length=4, max_length=256),
+    live: int = Query(1, ge=0, le=1),
     tok: PlatformToken = Depends(require_scope("read")),
     db: Session = Depends(get_db),
 ):
-    """Трассировка КМ: жизненный цикл одного кода по локальным данным —
-    журнал, документы ЧЗ, реестр/возвраты WB, карточка НК по GTIN. Read-only;
-    живые проверки — отдельными кнопками (cis-sync, /trace/wb-meta)."""
+    """Трассировка КМ: жизненный цикл одного кода. Локальный срез (журнал,
+    документы ЧЗ, реестр/возвраты WB, карточка НК) + живой слой ЧЗ
+    (live=1, только для токена с docs:submit): один cises_info отдаёт
+    полный путь кода — даты производства/эмиссии/ввода в оборот,
+    производителя, декларацию — и обновляет штатные cis_*-колонки.
+    Телеметрия WB — отдельной кнопкой (/trace/wb-feed, /trace/wb-meta)."""
     from marko.journal.trace import TraceError, trace as run_trace
     try:
-        return run_trace(db, km)
+        body = run_trace(db, km)
     except TraceError as e:
         raise HTTPException(422, str(e))
+    if live and "docs:submit" in (tok.scopes or "").split(","):
+        from marko.connector_mt import manager
+        from marko.journal.cis import sync_cis_status
+        cz = None
+        try:
+            res = sync_cis_status(db, [body["km"]],
+                                  client=manager.default_client(), snapshot=True)
+            # live-проверка могла перевести код «вывел WB» — хронология и
+            # документы пересобираются, иначе карточка соврёт наполовину
+            if res.get("translated"):
+                body = run_trace(db, body["km"])
+            if res.get("cis"):
+                cz = res["cis"].get(body["km"])
+                if isinstance(cz, dict) and cz.get("status"):
+                    # статус ЧЗ приходит верхним регистром — бейдж-словарь нижний
+                    cz = {**cz, "status": str(cz["status"]).lower()}
+            elif res.get("infos"):
+                i = res["infos"][0]
+                cz = {"status": i.get("status", ""), "error": i.get("error")}
+            elif res.get("checked"):
+                cz = {"status": "ok"}
+            audit(db, tok.principal_id, "trace.live_cz",
+                  {"km": body["km"], "checked": res.get("checked", 0),
+                   "translated": res.get("translated", 0),
+                   "errors": res.get("errors", 0)})
+        except Exception as e:                      # ЧЗ недоступен — локальные данные живы
+            cz = {"error": str(e)[:200]}
+        if cz is not None:
+            body["cz"] = cz
+            item = db.get(Item, body["km"])         # live-проверка обновила колонки
+            if item is not None:
+                body["item"] = item_row(item)
+    return body
+
+
+class TraceWbFeedBody(BaseModel):
+    km: str = Field(..., min_length=8, max_length=256)
+
+
+def _feed_row(o: dict) -> dict:
+    return {"srid": o.get("srid"), "status": o.get("status"),
+            "cancelType": o.get("cancelType"), "createdAt": o.get("createdAt"),
+            "updatedAt": o.get("updatedAt"), "warehouseName": o.get("warehouseName"),
+            "isMp": o.get("isMp"), "destinationCity": o.get("destinationCity"),
+            "destinationDistrict": o.get("destinationDistrict"),
+            "sellerPrice": o.get("sellerPrice"), "isB2b": o.get("isB2b"),
+            "nmId": o.get("nmId")}
+
+
+@router.post("/trace/wb-feed")
+def trace_wb_feed(
+    body: TraceWbFeedBody,
+    tok: PlatformToken = Depends(require_scope("docs:submit")),
+    db: Session = Depends(get_db),
+):
+    """Телеметрия заказа WB по ленте заказов (order-feed, окно ≤31 день):
+    статус (оформлен/куплен/отменён/возвращён), склад, город и цена
+    продавца. Выгрузка кэшируется в kv на 3ч — это же троттлер квоты
+    базового токена (1 запрос/3ч): повторные клики других кодов берут
+    кэш, WB не дёргается."""
+    from datetime import datetime, timedelta, timezone
+    from marko.connector_wb.registry import order_doc
+    from marko.journal.models import Event
+    from marko.journal.trace import TraceError, normalize_km
+    try:
+        km = normalize_km(body.km)
+    except TraceError as e:
+        raise HTTPException(422, str(e))
+    events = db.query(Event).filter(Event.km == km, Event.srid != "").all()
+    docs = {order_doc(e.srid) for e in events}
+    if not docs:
+        audit(db, tok.principal_id, "trace.wb_feed", {"km": km, "orders": 0})
+        return {"km": km, "orders": [], "fetched_at": None,
+                "note": "по коду нет заказов WB в журнале — телеметрии не откуда"}
+    now = time.time()
+    kv = db.get(PlatformKV, "trace_wb_feed")
+    # окно чуть ДЛИННЕЕ квоты WB 1/3ч: кэш не должен истечь раньше, чем
+    # освободится квота, иначе клик в зазоре ловит 429. Гонка двух холодных
+    # кликов не блокируем: session-level advisory-lock на пуле соединений
+    # ловит зависание; второй клик честно получит 502 «повторите позже»
+    if kv and now - kv.value.get("fetched_at", 0) < 3 * 3600 + 60:
+        by_doc = kv.value.get("by_doc") or {}
+    else:
+        try:
+            # без nmIds-фильтра: кэш общий на кабинет, фильтр по артикулу
+            # первого кликнувшего сделал бы его невалидным для остальных
+            client = WBClient(token=load_wb_token(settings.wb_token_file), db=db)
+            rows = client.order_feed(
+                (datetime.utcnow() - timedelta(days=31)).isoformat() + "Z",
+                datetime.utcnow().isoformat() + "Z")
+        except (WbHttpError, WbLimitError) as e:
+            raise HTTPException(502, f"wb order-feed failed: {e}")
+        by_doc = {order_doc(str(o.get("srid") or "")): _feed_row(o)
+                  for o in rows if o.get("srid")}
+        _kv_put_feed(db, {"fetched_at": now, "by_doc": by_doc})
+    orders = [by_doc[d] for d in sorted(docs) if d in by_doc]
+    audit(db, tok.principal_id, "trace.wb_feed",
+          {"km": km, "orders": len(orders), "feed_size": len(by_doc)})
+    fetched = db.get(PlatformKV, "trace_wb_feed").value.get("fetched_at")
+    return {"km": km, "orders": orders,
+            "fetched_at": datetime.fromtimestamp(fetched, tz=timezone.utc).isoformat()}
+
+
+def _kv_put_feed(db: Session, value: dict) -> None:
+    db.execute(pg_insert(PlatformKV).values(key="trace_wb_feed", value=value)
+               .on_conflict_do_update(index_elements=[PlatformKV.key],
+                                      set_={"value": value}))
+    db.commit()
 
 
 @router.post("/trace/wb-meta")

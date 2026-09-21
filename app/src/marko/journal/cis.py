@@ -33,7 +33,7 @@ def active_claims(db: Session) -> set[str]:
 
 
 def sync_cis_status(db: Session, kms: list[str] | None = None,
-                    client=None) -> dict:
+                    client=None, snapshot: bool = False) -> dict:
     """Проверить КИЗ в ЧЗ и обновить журнал; kms=None → все позиции.
 
     RETIRED + PENDING_WITHDRAW + нет активной претензии → «выведен (WB)»
@@ -44,7 +44,9 @@ def sync_cis_status(db: Session, kms: list[str] | None = None,
     errorMessage) позицию не трогают — неудачная попытка не наблюдение.
     Явные kms с кодами ВНЕ журнала — разовый срез в res["infos"] без
     записи позиций: проверка «чужого» кода из трассировки (empty-state).
-    Ответ: {checked, translated, errors, statuses[, infos]}.
+    snapshot=True (только с явными kms) — res["cis"][km] с ПОЛНЫМ cisInfo
+    (даты эмиссии/ввода, производитель, декларация) для трассировки.
+    Ответ: {checked, translated, errors, statuses[, infos][, cis]}.
     """
     q = db.query(Item)
     items = q.filter(Item.km.in_(kms)).all() if kms else q.all()
@@ -110,4 +112,12 @@ def sync_cis_status(db: Session, kms: list[str] | None = None,
             else:
                 out.append({"km": km, "error": "пустой ответ ЧЗ"})
         res["infos"] = out
+    if snapshot and kms:
+        res["cis"] = {}
+        for km in ask:
+            entry = by_cis.get(km) or infos[pos_map[km]]
+            if (entry or {}).get("errorMessage"):
+                res["cis"][km] = {"error": str(entry["errorMessage"])[:256]}
+            else:
+                res["cis"][km] = (entry or {}).get("cisInfo") or {"error": "пустой ответ ЧЗ"}
     return res
