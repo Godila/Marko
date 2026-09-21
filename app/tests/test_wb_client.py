@@ -87,5 +87,5 @@ def test_order_feed_wire():
     out = c.order_feed("2026-08-21T00:00:00+03:00", "2026-09-21T00:00:00+03:00", nm_ids=[42])
     assert out[0]["status"] == "buyout"
     method, path, body = bodies[0]
-    assert method == "POST" and path == "/api/v1/analytics/order-feed"
+    assert method == "POST" and path == "/api/analytics/v1/order-feed"
     assert '"nmIds":[42]' in body and '"start"' in body and '"limit"' in body

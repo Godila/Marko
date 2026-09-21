@@ -139,7 +139,7 @@ class WBClient:
                       "pagination": {"limit": limit}}
         if nm_ids:
             body["nmIds"] = nm_ids[:1000]
-        r = self.request("POST", "/api/v1/analytics/order-feed",
+        r = self.request("POST", "/api/analytics/v1/order-feed",
                          json_body=body, retries=0)
         return r.json().get("orders") or []
 
