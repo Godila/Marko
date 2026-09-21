@@ -6,21 +6,13 @@ from sqlalchemy import or_
 from sqlalchemy.orm import Session
 
 from marko.connector_wb.models import WbOrder
-from marko.connector_wb.registry import order_doc
+from marko.connector_wb.registry import order_doc, order_row
 from marko.journal import item_row
 from marko.journal.models import Event, Item
 
 
 def _esc(s: str) -> str:        # rid — пользовательский ввод: гасим LIKE-метасимволы
     return s.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
-
-
-def _order_row(o: WbOrder | None) -> dict | None:
-    if o is None:
-        return None
-    return {"order_doc": o.order_doc, "delivery_type": o.delivery_type,
-            "nm_id": o.nm_id, "order_created_at": o.order_created_at,
-            "first_seen": o.first_seen, "last_seen": o.last_seen}
 
 
 def order_lookup(db: Session, rid: str) -> dict:
@@ -50,5 +42,5 @@ def order_lookup(db: Session, rid: str) -> dict:
     status = ("found" if items else
               "fbw" if "skip_fbw" in {k for _, k in rows} else
               "lag" if order is not None else "unknown")
-    return {"rid": rid, "order_doc": doc, "order": _order_row(order),
+    return {"rid": rid, "order_doc": doc, "order": order_row(order) if order else None,
             "items": items, "status": status}

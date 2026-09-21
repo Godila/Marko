@@ -42,17 +42,22 @@ def sync_cis_status(db: Session, kms: list[str] | None = None,
     вывод мог дойти между синками), PENDING_RETURN с retired — норма (код
     ждёт возврата в оборот). Поэлементные ошибки ЧЗ (HTTP 200 +
     errorMessage) позицию не трогают — неудачная попытка не наблюдение.
-    Ответ: {checked, translated, errors, statuses}.
+    Явные kms с кодами ВНЕ журнала — разовый срез в res["infos"] без
+    записи позиций: проверка «чужого» кода из трассировки (empty-state).
+    Ответ: {checked, translated, errors, statuses[, infos]}.
     """
     q = db.query(Item)
     items = q.filter(Item.km.in_(kms)).all() if kms else q.all()
     res = {"checked": 0, "translated": 0, "errors": 0, "statuses": {}}
-    if not items:
+    known = [it.km for it in items]
+    missing = [k for k in (kms or []) if k not in set(known)]
+    if not known and not missing:
         return res
-    infos = manager.cises_info(db, [it.km for it in items], client=client)
-    if len(infos) != len(items):
+    ask = known + missing
+    infos = manager.cises_info(db, ask, client=client)
+    if len(infos) != len(ask):
         # соответствие запрос↔ответ — рассинхрон длин означает потерю элементов
-        raise RuntimeError(f"cises/info: {len(infos)} ответов на {len(items)} КМ")
+        raise RuntimeError(f"cises/info: {len(infos)} ответов на {len(ask)} КМ")
     # ЧЗ эхает запрошенный код (cisInfo.cis/requestedCis) — матчим по эху,
     # позиция только фолбэк: перестановка ответа не должна молча путать
     # статусы (ревью: единственный механизм «тихой порчи» журнала)
@@ -64,11 +69,12 @@ def sync_cis_status(db: Session, kms: list[str] | None = None,
             by_cis[str(echo)] = e
     claims = active_claims(db)
     now = datetime.now()
-    for pos, it in enumerate(items):
-        entry = by_cis.get(it.km) or infos[pos]
-        info = entry.get("cisInfo") or {}
+    pos_map = {k: i for i, k in enumerate(ask)}
+    for it in items:
+        entry = by_cis.get(it.km) or infos[pos_map[it.km]]
+        info = (entry or {}).get("cisInfo") or {}
         status = str(info.get("status") or "").lower()
-        if entry.get("errorMessage") or not status:
+        if (entry or {}).get("errorMessage") or not status:
             res["errors"] += 1
             continue
         it.cis_status = status[:32]
@@ -89,4 +95,19 @@ def sync_cis_status(db: Session, kms: list[str] | None = None,
             res["translated"] += 1
             continue
         db.commit()
+    if missing:
+        # срез по кодам без позиции: только наблюдение, журнал не трогаем
+        out = []
+        for i, km in enumerate(missing):
+            entry = by_cis.get(km) or infos[len(known) + i]
+            info = (entry or {}).get("cisInfo") or {}
+            status = str(info.get("status") or "").lower()
+            if (entry or {}).get("errorMessage"):
+                out.append({"km": km, "error": str(entry["errorMessage"])[:256]})
+            elif status:
+                out.append({"km": km, "status": status[:32],
+                            "product_name": str(info.get("productName") or "")[:256]})
+            else:
+                out.append({"km": km, "error": "пустой ответ ЧЗ"})
+        res["infos"] = out
     return res

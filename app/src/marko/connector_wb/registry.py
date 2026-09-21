@@ -27,6 +27,14 @@ def order_doc(rid_or_srid: str) -> str:
     return DOC_TAIL.sub("", str(rid_or_srid or "").strip())
 
 
+def order_row(o: WbOrder) -> dict:
+    """Сериализация строки реестра для консольных API (lookup, трассировка)."""
+    return {"order_doc": o.order_doc, "order_id": o.order_id,
+            "delivery_type": o.delivery_type, "nm_id": o.nm_id,
+            "order_created_at": o.order_created_at,
+            "first_seen": o.first_seen, "last_seen": o.last_seen}
+
+
 def _int_or_none(v) -> int | None:
     try:
         return int(v) if v else None
@@ -43,12 +51,17 @@ def upsert_orders(db: Session, order_rows: list[dict], chunk: int = 10_000) -> i
         if not rid:
             continue
         doc = order_doc(rid)
-        by_doc[doc] = {
+        prev = by_doc.get(doc)
+        row = {
             "order_doc": doc,
+            "order_id": _int_or_none(o.get("id")),
             "delivery_type": str(o.get("deliveryType") or "").strip().lower()[:8],
             "nm_id": _int_or_none(o.get("nmId")),
             "order_created_at": str(o.get("createdAt") or "")[:32],
         }
+        if prev and row["order_id"] is None:
+            row["order_id"] = prev["order_id"]     # дедуп позиций id не теряет
+        by_doc[doc] = row
     vals = list(by_doc.values())
     if not vals:
         db.commit()
@@ -58,7 +71,8 @@ def upsert_orders(db: Session, order_rows: list[dict], chunk: int = 10_000) -> i
         stmt = pg_insert(WbOrder).values(vals[i:i + chunk])
         stmt = stmt.on_conflict_do_update(
             index_elements=[WbOrder.order_doc],
-            set_={"delivery_type": stmt.excluded.delivery_type,
+            set_={"order_id": func.coalesce(stmt.excluded.order_id, WbOrder.order_id),
+                  "delivery_type": stmt.excluded.delivery_type,
                   "nm_id": stmt.excluded.nm_id,
                   "order_created_at": stmt.excluded.order_created_at,
                   "last_seen": func.now()})

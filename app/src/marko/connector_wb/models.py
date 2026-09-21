@@ -35,6 +35,7 @@ class WbOrder(Base):
     __table_args__ = {"schema": "wb"}
 
     order_doc: Mapped[str] = mapped_column(String(64), primary_key=True)
+    order_id: Mapped[int | None] = mapped_column(BigInteger, nullable=True)  # ID сборочного задания (orders/meta)
     delivery_type: Mapped[str] = mapped_column(String(8), default="")   # fbs/fbo/…
     nm_id: Mapped[int | None] = mapped_column(BigInteger, nullable=True)
     order_created_at: Mapped[str] = mapped_column(String(32), default="")  # ISO от WB

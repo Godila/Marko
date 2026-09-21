@@ -41,3 +41,12 @@ def test_registry_slices(db):
     assert registry_docs(db) == {"eA.ra", "eB.rb", "eC.rc"}
     # не-FBS = только явные другие схемы; пустой тип (поле пропало из API) не skip
     assert non_fbs_docs(db) == {"eB.rb"}
+
+
+def test_upsert_orders_stores_numeric_order_id(db):
+    # id сборочного задания нужен WB orders/meta (трассировка КМ)
+    upsert_orders(db, [dict(_row("eAL.rabc.0.0"), id=5632423)])
+    assert db.get(WbOrder, "eAL.rabc").order_id == 5632423
+    # апсерт без id не затирает уже известный номер (coalesce)
+    upsert_orders(db, [_row("eAL.rabc.1.0")])
+    assert db.get(WbOrder, "eAL.rabc").order_id == 5632423

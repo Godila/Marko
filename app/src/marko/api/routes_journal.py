@@ -101,6 +101,64 @@ def wb_lookup(
         raise HTTPException(422, str(e))
 
 
+class TraceWbMetaBody(BaseModel):
+    km: str = Field(..., min_length=8, max_length=256)
+
+
+@router.get("/trace")
+def trace_get(
+    km: str = Query(..., min_length=4, max_length=256),
+    tok: PlatformToken = Depends(require_scope("read")),
+    db: Session = Depends(get_db),
+):
+    """Трассировка КМ: жизненный цикл одного кода по локальным данным —
+    журнал, документы ЧЗ, реестр/возвраты WB, карточка НК по GTIN. Read-only;
+    живые проверки — отдельными кнопками (cis-sync, /trace/wb-meta)."""
+    from marko.journal.trace import TraceError, trace as run_trace
+    try:
+        return run_trace(db, km)
+    except TraceError as e:
+        raise HTTPException(422, str(e))
+
+
+@router.post("/trace/wb-meta")
+def trace_wb_meta(
+    body: TraceWbMetaBody,
+    tok: PlatformToken = Depends(require_scope("docs:submit")),
+    db: Session = Depends(get_db),
+):
+    """Телеметрия закрепления кода на WB: статусы проверки sgtin по сборочным
+    заданиям этого КМ (POST /api/marketplace/v3/orders/meta). Один клик —
+    один живой запрос WB, гейта не требует (лимит 300/мин)."""
+    from datetime import timezone
+    from marko.journal.trace import TraceError, km_wb_order_ids, normalize_km
+    try:
+        km = normalize_km(body.km)
+        order_ids = km_wb_order_ids(db, body.km)
+    except TraceError as e:
+        raise HTTPException(422, str(e))
+    if not order_ids:
+        audit(db, tok.principal_id, "trace.wb_meta", {"km": km, "orders": 0})
+        return {"km": km, "checked": 0, "orders": [], "fetched_at":
+                datetime.now(timezone.utc).isoformat(),
+                "note": "по событиям кода нет известных номеров сборочных "
+                        "заданий — реестр WB ещё не прогрет"}
+    try:
+        client = WBClient(token=load_wb_token(settings.wb_token_file), db=db)
+        data = client.orders_meta(order_ids)
+    except (WbHttpError, WbLimitError) as e:
+        raise HTTPException(502, f"wb meta failed: {e}")
+    orders = [{"id": o.get("id"),
+               "sgtins": [{"sgtin": m.get("value"), "decision": m.get("decision")}
+                          for m in (o.get("metaDetails") or [])
+                          if m.get("key") == "sgtin"]}
+              for o in (data.get("orders") or [])]
+    audit(db, tok.principal_id, "trace.wb_meta",
+          {"km": km, "orders": min(len(order_ids), 100)})
+    return {"km": km, "checked": min(len(order_ids), 100), "orders": orders,
+            "fetched_at": datetime.now(timezone.utc).isoformat()}
+
+
 @router.get("/journal/stats")
 def journal_stats(
     tok: PlatformToken = Depends(require_scope("read")),
@@ -169,7 +227,7 @@ def journal_cis_sync(
     audit(db, tok.principal_id, "journal.cis_sync",
           {"kms": len(body.kms) if body.kms else "all", **{
               k: v for k, v in res.items()
-              if k not in ("statuses", "items")}})   # items несёт datetime
+              if k not in ("statuses", "items", "infos")}})  # списки несут данные
     return res
 
 

@@ -121,6 +121,14 @@ class WBClient:
             log.error("orders pagination cap hit")
         return out
 
+    def orders_meta(self, order_ids: list[int]) -> dict:
+        """Идентификаторы маркировки сборочных заданий и статусы их проверки
+        (sgtin) — телеметрия закрепления КМ внутри WB. Живой клик консоли:
+        гейт не нужен (лимит 300/мин, ≤100 ID за запрос)."""
+        r = self._fetch("POST", self.orders_base + "/api/marketplace/v3/orders/meta",
+                        json_body={"orders": order_ids[:100]})
+        return r.json()
+
 
 def load_wb_token(path: str) -> str:
     with open(path, encoding="utf-8") as f:

@@ -59,6 +59,30 @@ const BATCH_STATUS = { new: ['новый', 'grey'], partial: ['частично'
   error: ['ошибка', 'red'] }
 const GTIN_STATUS = { new: ['новый', 'grey'], update: ['обновится', 'blue'], conflict: ['конфликт', 'red'] }
 const SRC_RU = { file: 'файл', rule: 'правило', default: 'дефолт' }
+const WB_DELIVERY = { fbs: 'FBS (наша отгрузка)', fbo: 'FBW (склад WB)' }
+// трассировка: система-источник события (бейдж) и цвет точки ленты по виду
+// события. Система ≠ статус: цвета — из базовой пятёрки, красный системам
+// не выдаётся (DESIGN.md §8: красное = требует человека)
+const TRACE_SYSTEMS = { marko: ['МАРКО', 'grey'], cz: ['Честный знак', 'blue'], wb: ['Wildberries', 'amber'] }
+const TRACE_DOT = {
+  sale: 'var(--info)', return: 'var(--wait)', skip_fbw: 'var(--line-strong)',
+  withdraw: 'var(--go)', return_apply: 'var(--go)',
+  resolve: 'var(--line-strong)', revert: 'var(--line-strong)',
+}
+// статусы проверки sgtin на WB (orders/meta, официальная документация WB);
+// неизвестное решение показывается как есть (mono) — словарь не молчаливый
+const SGTIN_DECISION = {
+  filled: 'закреплён, проверка не требуется', optional: 'не закреплён (необязателен)',
+  deadlineExceeded: 'проверка не завершена', sgtinIntroduced: 'введён в оборот — допущен к продаже',
+  sgtinSoldB2B: 'продан B2B, допущен повторно', required: 'обязателен, но не закреплён',
+  pending: 'проверка продолжается', sgtinInvalidFormat: 'неверный формат кода',
+  sgtinNoGS: 'нет GS-разделителя', sgtinHasInvalidSymbols: 'недопустимые символы',
+  sgtinHasNonLatinSymbols: 'не-латинские символы', sgtinInvalidPattern: 'неверная структура кода',
+  sgtinNotFound: 'не найден в Честном знаке', sgtinEmitted: 'выпущен, не введён в оборот',
+  sgtinApplied: 'нанесён, не введён в оборот', sgtinWrittenOff: 'списан',
+  sgtinRetired: 'уже продан (выбыл)', sgtinDisaggregated: 'агрегация снята',
+  sgtinAppliedNotPaid: 'заказ на код не оплачен',
+}
 // подписи источников в «Проверке подстановок»: бренд оператора семантически = значение из файла
 const RZ_SRC = { file: 'введено', rule: 'правило РД', default: 'дефолт' }
 // ключ стадии пайплайна → какие batch-статусы она покрывает
@@ -1218,6 +1242,7 @@ function AnomalyCard({ it, ctx }) {
     <div className="row" style={{ gap: 8, marginTop: 8, flexWrap: 'wrap' }}>
       {(help.presets || []).map((p) => (
         <button key={p.label} className="btn" disabled={busy} onClick={() => resolve(p)}>{p.label}</button>))}
+      <button className="btn" disabled={busy} onClick={() => { closeDrawer(); ctx.go('trace', it.km) }}>Трассировка</button>
     </div>
     <details style={{ marginTop: 14 }}>
       <summary style={{ fontSize: 12, color: 'var(--muted)', cursor: 'pointer' }}>Сырые данные события</summary>
@@ -1264,6 +1289,7 @@ function KmCard({ it, ctx }) {
       <button className="btn" disabled={busy} onClick={checkCis}>Проверить в ЧЗ</button>
       {st.cis_status === 'retired' && st.state === 'PENDING_WITHDRAW' &&
         <button className="btn" disabled={busy} onClick={markWb}>Выведен WB</button>}
+      <button className="btn" disabled={busy} onClick={() => ctx.go('trace', st.km)}>Трассировка</button>
     </div>
     <b style={{ fontSize: 12.5 }}>Последний сигнал WB</b>
     <div className="twrap" style={{ margin: '6px 0 8px' }}><table className="t small"><tbody>
@@ -1286,7 +1312,6 @@ function KmCard({ it, ctx }) {
 function OrderCard({ data, ctx }) {
   const { openDrawer } = ctx
   const o = data.order
-  const D = { fbs: 'FBS (наша отгрузка)', fbo: 'FBW (склад WB)' }
   return <div>
     <div style={{ marginBottom: 12 }}><KmCell km={data.order_doc} /></div>
     <div className="note" style={{ marginBottom: 12 }}>{ORDER_LOOKUP_STATUS[data.status] || ''}</div>
@@ -1297,7 +1322,7 @@ function OrderCard({ data, ctx }) {
     {o ? <><b style={{ fontSize: 12.5 }}>Реестр WB</b>
       <div className="twrap" style={{ margin: '6px 0 14px' }}><table className="t small"><tbody>
         <tr><td className="faint" style={{ width: '40%' }}>Тип доставки</td>
-          <td>{D[o.delivery_type] || o.delivery_type || '—'}</td></tr>
+          <td>{WB_DELIVERY[o.delivery_type] || o.delivery_type || '—'}</td></tr>
         <tr><td className="faint">nm_id</td><td className="mono">{o.nm_id ?? '—'}</td></tr>
         <tr><td className="faint">Создан</td>
           <td className="mono">{o.order_created_at ? fmtDay(o.order_created_at) : '—'}</td></tr>
@@ -1428,6 +1453,197 @@ function Journal({ ctx, initial }) {
   </>
 }
 
+/* трассировка КМ: жизненный цикл одного кода по системам (ЧЗ/МАРКО/WB).
+   Точечный запрос — не грузится по 60с-тику; живые проверки (ЧЗ, WB) —
+   кнопками, фоновых опросов и новых словарей статусов не заводим */
+function Trace({ ctx, initial }) {
+  const { notify, openDrawer, go, bump } = ctx
+  const [q, setQ] = useState(initial || '')
+  const [data, setData] = useState(null)
+  const [busy, setBusy] = useState(false)
+  const [czBusy, setCzBusy] = useState(false)
+  const [wbBusy, setWbBusy] = useState(false)
+  const [wbMeta, setWbMeta] = useState(null)
+  const [unknownCz, setUnknownCz] = useState(null)
+  const run = async (val, keepWb = false) => { const km = (val ?? q).trim()
+    if (!km) return
+    setBusy(true); setUnknownCz(null)
+    if (!keepWb) setWbMeta(null)
+    try { setData(await api(`/v1/trace?km=${encodeURIComponent(km)}`)) }
+    catch (e) { setData(null); notify('Трассировка не удалась', e.message, 'bad') }
+    finally { setBusy(false) } }
+  useEffect(() => { if (initial) run(initial) }, [])
+  const checkCis = async () => {
+    if (!data) return
+    setCzBusy(true)
+    try {
+      const r = await api('/v1/journal/cis-sync',
+        { method: 'POST', body: JSON.stringify({ kms: [data.km] }) })
+      const info = (r.infos || [])[0]
+      if (r.items?.length) { await run(data.input, true)
+        notify('Код проверен в ЧЗ', CIS_STATUS[r.items[0].cis_status]?.[0] || '') }
+      else if (info) { setUnknownCz(info)
+        notify('Код проверен в ЧЗ', info.status ? (CIS_STATUS[info.status]?.[0] || info.status) : (info.error || 'нет данных')) }
+      else notify('Проверка ЧЗ', 'код не найден', 'warn')
+      bump()
+    } catch (e) { notify('Проверка не удалась', e.message, 'bad') } finally { setCzBusy(false) } }
+  const fetchWbMeta = async () => {
+    if (!data) return
+    setWbBusy(true)
+    try { setWbMeta(await api('/v1/trace/wb-meta',
+        { method: 'POST', body: JSON.stringify({ km: data.km }) })) }
+    catch (e) { notify('WB не ответил', `${e.message} — повторите через минуту`, 'bad') }
+    finally { setWbBusy(false) } }
+  const evDrawer = (e) => openDrawer(<>Событие ·&nbsp;<span className="mono"
+    style={{ fontSize: 12, color: 'var(--muted)' }}>{e.kind}</span></>,
+    <div><div className="twrap" style={{ marginBottom: 10 }}><table className="t small"><tbody>
+      <tr><td className="faint" style={{ width: '40%' }}>Система</td><td><Badge dict={TRACE_SYSTEMS} v={e.system} /></td></tr>
+      <tr><td className="faint">Событие</td><td>{e.title}</td></tr>
+      <tr><td className="faint">Момент</td><td className="mono">{fmtDay(e.ts)}</td></tr>
+      <tr><td className="faint">Детали</td><td>{e.detail || '—'}</td></tr>
+    </tbody></table></div>
+      <details open><summary style={{ fontSize: 12, color: 'var(--muted)', cursor: 'pointer' }}>Сырые данные события</summary>
+        <pre>{JSON.stringify(e.payload, null, 2)}</pre></details></div>)
+  const docDrawer = async (d) => { let full = null
+    try { full = await api(`/v1/docs/${d.id}`) } catch {}
+    openDrawer(`Документ №${d.id} · ${d.type}`,
+      <div><div className="twrap" style={{ marginBottom: 10 }}><table className="t small"><tbody>
+        <tr><td className="faint" style={{ width: '40%' }}>Статус</td><td><Badge dict={DOC_STATUS} v={d.status} /></td></tr>
+        <tr><td className="faint">uuid ЧЗ</td><td className="mono" style={{ wordBreak: 'break-all' }}>{d.external_id || '—'}</td></tr>
+        <tr><td className="faint">Создан</td><td className="mono">{fmtD(d.created_at)}</td></tr>
+      </tbody></table></div>
+        <details open><summary style={{ fontSize: 12, color: 'var(--muted)', cursor: 'pointer' }}>Позиции документа</summary>
+          <pre>{JSON.stringify(full?.payload ?? d, null, 2)}</pre></details></div>) }
+  const it = data?.item
+  const name = data?.item?.cis_product_name || data?.card?.name || ''
+  return <>
+    <Head title="Трассировка кода маркировки" sub="Жизненный цикл одного КМ по системам: сигналы Wildberries, наши документы ЧЗ, наблюдения Честного знака. Живые проверки — кнопками, фоновых опросов нет."
+      tools={<Sync tick={ctx.tick} />} />
+    <div className="frow" style={{ marginBottom: 14 }}>
+      <div className="search" style={{ flex: '1 1 380px', maxWidth: 560 }}>{I.search}
+        <input value={q} placeholder="КИЗ (с криптохвостом) или короткий КМ…"
+          onChange={(e) => setQ(e.target.value)}
+          onKeyDown={(e) => { if (e.key === 'Enter') run() }} /></div>
+      <button className="btn pri" disabled={busy || !q.trim()} onClick={() => run()}>Проследить</button>
+      <span className="faint" style={{ fontSize: 12 }}>{busy ? 'ищем…' : 'Enter — тоже'}</span>
+    </div>
+    {data && <>
+      <div className="card" style={{ marginBottom: 22 }}>
+        <div className="card-h"><b style={{ fontSize: 12.5 }}>{data.km === data.input.trim() ? 'Код' : 'Код (нормализован)'}</b>
+          <span className="hint">событий: {data.counts.events}</span></div>
+        <div className="card-b">
+          <div style={{ display: 'flex', gap: 10, flexWrap: 'wrap', alignItems: 'center', marginBottom: 12 }}>
+            <KmCell km={data.km} />
+            {it && <Badge dict={ITEM_STATES} v={it.state} />}
+            {it?.withdrawn_by === 'wb' && <span className="bdg grey">вывел WB</span>}
+            {it?.cis_status ? <Badge dict={CIS_STATUS} v={it.cis_status} /> : <span className="faint">ЧЗ: не проверялся</span>}
+            {unknownCz && !it && (unknownCz.status
+              ? <Badge dict={CIS_STATUS} v={unknownCz.status} />
+              : <span className="bdg grey">{unknownCz.error || 'нет данных ЧЗ'}</span>)}
+          </div>
+          <div className="twrap"><table className="t small"><tbody>
+            <tr><td className="faint" style={{ width: '40%' }}>Наименование</td>
+              <td>{name || <span className="faint">—</span>}</td></tr>
+            <tr><td className="faint">GTIN</td><td className="mono">{data.gtin}</td></tr>
+            {data.card && <tr><td className="faint">Карточка НК</td>
+              <td>{data.card.article} · {data.card.name} <Badge dict={CARD_STATUS} v={data.card.status} /></td></tr>}
+            {it?.cis_checked_at && <tr><td className="faint">Проверен в ЧЗ</td>
+              <td className="mono">{fmtD(it.cis_checked_at)}</td></tr>}
+            {it && <tr><td className="faint">Последний сигнал</td><td>{evLine(it)}</td></tr>}
+          </tbody></table></div>
+          <div className="row" style={{ gap: 8, marginTop: 12, flexWrap: 'wrap' }}>
+            <button className="btn" disabled={czBusy} onClick={checkCis}>Проверить в ЧЗ</button>
+            <button className="btn" disabled={wbBusy || !(data.orders.length || data.returns.some((r) => r.order_id > 0))}
+              title={data.orders.length || data.returns.some((r) => r.order_id > 0) ? '' : 'по событиям кода нет известных заказов WB'} onClick={fetchWbMeta}>Статусы закрепления WB</button>
+            {data.card && <button className="btn" onClick={() => go('catalog')}>Открыть каталог НК</button>}
+          </div>
+          {!data.found && <div className="empty" style={{ marginTop: 12 }}>
+            <b>Код не наблюдается контуром МАРКО</b>
+            Продаж и возвратов по нему через наш FBS не было — код другой партии или кабинета. Проверку в Честном знаке кнопка выше выполняет и для таких кодов.
+          </div>}
+        </div>
+      </div>
+      {wbMeta && <div className="card" style={{ marginBottom: 22 }}>
+        <div className="card-h"><b style={{ fontSize: 12.5 }}>Закрепления на WB</b>
+          <span className="hint">live · {wbMeta.fetched_at ? fmtD(wbMeta.fetched_at) : ''}</span></div>
+        <div className="card-b">
+          {wbMeta.note ? <p style={{ fontSize: 12.5, color: 'var(--muted)', margin: 0 }}>{wbMeta.note}</p>
+            : wbMeta.orders.map((o) => <div key={o.id} style={{ marginBottom: 10 }}>
+              <span className="mono" style={{ fontSize: 12 }}>заказ {o.id}</span>
+              {!o.sgtins.length && <span className="faint" style={{ fontSize: 12 }}> — кодов не закреплено</span>}
+              {o.sgtins.map((s, i) => <div key={i} style={{ display: 'flex', gap: 8, alignItems: 'baseline', flexWrap: 'wrap', marginTop: 2 }}>
+                <span className="km" style={{ fontSize: 11 }}>{s.sgtin || '—'}</span>
+                <span>{SGTIN_DECISION[s.decision] || <span className="mono" style={{ fontSize: 12 }}>{s.decision || '—'}</span>}</span>
+                {s.sgtin && s.sgtin.startsWith(data.km) && <span className="bdg blue">этот код</span>}
+              </div>)}
+            </div>)}
+        </div>
+      </div>}
+      <div className="card" style={{ marginBottom: 22 }}>
+        <div className="card-h"><b style={{ fontSize: 12.5 }}>Хронология</b>
+          <span className="hint">клик по строке — сырые данные события</span></div>
+        {data.timeline.length ? <ul className="feed">
+          {data.timeline.map((e) => <li key={e.id} tabIndex={0} style={{ cursor: 'pointer' }}
+            onClick={() => evDrawer(e)}
+            onKeyDown={(ev2) => { if (ev2.key === 'Enter') evDrawer(e) }}>
+            <time>{fmtDay(e.ts)}</time>
+            <span className="dotsep" style={{ background: TRACE_DOT[e.kind] || 'var(--line-strong)' }} />
+            <div style={{ flex: 1, minWidth: 0 }}>
+              <div style={{ display: 'flex', gap: 8, alignItems: 'baseline', flexWrap: 'wrap' }}>
+                <Badge dict={TRACE_SYSTEMS} v={e.system} />
+                <span>{e.title}</span>
+              </div>
+              {e.detail && <div className="sm" style={{ color: 'var(--muted)', marginTop: 2 }}>{e.detail}</div>}
+            </div>
+          </li>)}
+        </ul> : <div className="empty"><b>Событий нет</b>Код не встречался ни в одном контуре платформы.</div>}
+      </div>
+      {data.docs.length > 0 && <div className="card" style={{ marginBottom: 22 }}>
+        <div className="card-h"><b style={{ fontSize: 12.5 }}>Документы ЧЗ ({data.docs.length})</b>
+          <span className="hint">клик — позиции и uuid</span></div>
+        <div className="twrap"><table className="t small fit">
+          <colgroup><col style={{ width: 90 }} /><col style={{ width: 150 }} /><col style={{ width: 130 }} /><col style={{ width: 120 }} /></colgroup>
+          <thead><tr><th>№</th><th>Тип</th><th>Статус</th><th>Создан</th></tr></thead>
+          <tbody>{data.docs.map((d) => <tr key={d.id} style={{ cursor: 'pointer' }} onClick={() => docDrawer(d)}>
+            <td className="mono">№{d.id}</td>
+            <td className="mono ell" title={d.type}>{d.type}</td>
+            <td><Badge dict={DOC_STATUS} v={d.status} /></td>
+            <td className="mono">{fmtD(d.created_at)}</td>
+          </tr>)}</tbody></table></div>
+      </div>}
+      {(data.orders.length > 0 || data.returns.length > 0) && <div className="card">
+        <div className="card-h"><b style={{ fontSize: 12.5 }}>Wildberries</b></div>
+        {data.orders.length > 0 && <><b style={{ fontSize: 12.5 }}>Заказы ({data.orders.length})</b>
+          <div className="twrap" style={{ margin: '6px 0 14px' }}><table className="t small fit">
+            <colgroup><col style={{ width: 278 }} /><col style={{ width: 130 }} /><col style={{ width: 90 }} /><col style={{ width: 110 }} /><col style={{ width: 150 }} /></colgroup>
+            <thead><tr><th>Документ</th><th>ID задания</th><th>Тип</th><th>nm_id</th><th>Создан</th></tr></thead>
+            <tbody>{data.orders.map((o) => <tr key={o.order_doc}>
+              <td className="mono ell" title={o.order_doc}>{o.order_doc}</td>
+              <td className="mono">{o.order_id ?? '—'}</td>
+              <td>{WB_DELIVERY[o.delivery_type] || o.delivery_type || '—'}</td>
+              <td className="mono">{o.nm_id ?? '—'}</td>
+              <td className="mono">{o.order_created_at ? fmtDay(o.order_created_at) : '—'}</td>
+            </tr>)}</tbody></table></div></>}
+        {data.returns.length > 0 && <><b style={{ fontSize: 12.5 }}>Возвраты на ПВЗ ({data.returns.length})</b>
+          <div className="twrap" style={{ margin: '6px 0 0' }}><table className="t small fit">
+            <colgroup><col style={{ width: 278 }} /><col style={{ width: 130 }} /><col style={{ width: 190 }} /><col style={{ width: 140 }} /><col style={{ width: 110 }} /></colgroup>
+            <thead><tr><th>Возврат (srid)</th><th>ID задания</th><th>Статус</th><th>Причина</th><th>Дедлайн</th></tr></thead>
+            <tbody>{data.returns.map((r) => <tr key={r.srid}>
+              <td className="mono ell" title={r.srid}>{r.srid}</td>
+              <td className="mono">{r.order_id || '—'}</td>
+              <td className="ell" title={`${r.status || ''}${r.is_active ? '' : ' · завершён'}`}>{r.status || '—'}</td>
+              <td className="ell" title={r.reason || ''}>{r.reason || '—'}</td>
+              <td className="mono">{r.expired_dt ? fmtDay(r.expired_dt) : '—'}</td>
+            </tr>)}</tbody></table></div></>}
+      </div>}
+    </>}
+    {!data && !busy && <div className="card"><div className="empty">
+      <b>Введите код маркировки</b>
+      Отсканируйте или вставьте КИЗ — полный (с криптохвостом) или короткий КМ. Платформа соберёт всё, что наблюдала по коду: сигналы WB, документы ЧЗ, статусы Честного знака.
+    </div></div>}
+  </>
+}
+
 /* ================= консоль ================= */
 const NAV = [
   ['overview', 'Обзор', I.pulse],
@@ -1436,11 +1652,13 @@ const NAV = [
   ['catalog', 'Каталог НК', I.grid],
   ['refs', 'Справочники', I.book],
   ['journal', 'Журнал КМ', I.list],
+  ['trace', 'Трассировка', I.clock],
 ]
 
 function Console({ me, logout }) {
   const [view, setView] = useState('overview')
   const [jInit, setJInit] = useState('')
+  const [tInit, setTInit] = useState('')
   const [pulse, setPulse] = useState(null)
   const [tick, setTick] = useState(Date.now())
   const [inn, setInn] = useState(localStorage.getItem('inn') || '090201471350')
@@ -1455,7 +1673,7 @@ function Console({ me, logout }) {
   const confirm = (title, text, detail, okLabel, action) => setModal({ title, text, detail, okLabel, action })
   const openDrawer = (title, node) => setDrawer({ title, node })
   const openWide = (title, node) => setWide({ title, node })
-  const go = (v, jf) => { if (jf != null) setJInit(jf); setView(v); window.scrollTo(0, 0) }
+  const go = (v, jf) => { if (jf != null) { setJInit(jf); setTInit(jf) } setView(v); window.scrollTo(0, 0) }
   useEffect(() => { const i = setInterval(bump, 60000); return () => clearInterval(i) }, [])
   useEffect(() => { api('/v1/pulse').then(setPulse).catch(() => {}) }, [tick])
   // Esc закрывает верхний слой: confirm → широкая модалка → drawer (DESIGN.md 7)
@@ -1476,7 +1694,8 @@ function Console({ me, logout }) {
     catalog: pulse ? Object.entries(pulse.batches || {})
       .filter(([k]) => !['published', 'error'].includes(k)).reduce((a, [, v]) => a + v, 0) : 0,
     refs: null,
-    journal: Object.entries(s).filter(([k]) => k.startsWith('ANOMALY')).reduce((a, [, v]) => a + v, 0) }
+    journal: Object.entries(s).filter(([k]) => k.startsWith('ANOMALY')).reduce((a, [, v]) => a + v, 0),
+    trace: null }
   const navBtn = (v) => { const [key, lbl, icon] = NAV.find((x) => x[0] === v)
     return <button key={key} className="nav-item" aria-current={view === key}
       onClick={() => go(key)}>{icon}<span className="lbl">{lbl}</span>
@@ -1503,6 +1722,7 @@ function Console({ me, logout }) {
         {view === 'catalog' && <Catalog ctx={ctx} />}
         {view === 'refs' && <Refs ctx={ctx} />}
         {view === 'journal' && <Journal key={jInit} ctx={ctx} initial={jInit} />}
+        {view === 'trace' && <Trace key={tInit} ctx={ctx} initial={tInit} />}
       </main>
     </div>
     <div id="toasts" aria-live="polite">

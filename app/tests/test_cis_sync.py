@@ -153,3 +153,29 @@ def test_echo_matching_survives_reorder(db, mt):
         and db.get(Item, km1).cis_status == "retired"
     assert db.get(Item, km2).state == "PENDING_WITHDRAW" \
         and db.get(Item, km2).cis_status == "introduced"
+
+
+def test_unknown_kms_return_infos_without_items(db, mt):
+    """Явные kms с кодами вне журнала: разовый срез ЧЗ без записи позиций —
+    проверка «чужого» кода из трассировки (empty-state «Проверить в ЧЗ»)."""
+    km = "0104630520676025215CIS011"
+    _sale(db, km)
+    other = "0104630520676025215CIS012"
+    cz = FakeCz({km: {"cisInfo": {"status": "INTRODUCED"}},
+                 other: {"cisInfo": {"cis": other, "status": "RETIRED",
+                                      "productName": "Шапка"}}})
+    res = sync_cis_status(db, kms=[km, other], client=cz)
+    assert res["checked"] == 1 and cz.calls == [[km, other]]
+    assert res["infos"] == [{"km": other, "status": "retired",
+                             "product_name": "Шапка"}]
+    assert db.get(Item, other) is None                  # позиция не создаётся
+    assert db.get(Item, km).cis_status == "introduced"  # штатный путь жив
+    # без неизвестных кодов ключ infos не появляется (совместимость контракта)
+    res2 = sync_cis_status(db, kms=[km], client=FakeCz(
+        {km: {"cisInfo": {"status": "INTRODUCED"}}}))
+    assert "infos" not in res2
+    # поэлементная ошибка ЧЗ по неизвестному коду — информативна, не потеряна
+    bad = "0104630520676025215CIS013"
+    res3 = sync_cis_status(db, kms=[bad], client=FakeCz(
+        {bad: {"errorMessage": "КИ не найден"}}))
+    assert res3["infos"] == [{"km": bad, "error": "КИ не найден"}]
