@@ -104,17 +104,15 @@ a{color:var(--info)}
 
 /* путь кода (трассировка): рельса этапов — фаза = участок системы,
    точка = состояние этапа (факт/ждёт нас/не наступило/недоступно).
-   Шаги — РАВНАЯ сетка (grid-auto-columns), тексты переносятся внутри
-   своей ячейки: точки идут с ровным шагом при любом содержимом */
+   Сетка ровная (132px/шаг), линия времени — СКВОЗНАЯ через все фазы
+   (::before на фазе), палка-разделитель фазы растёт ВНИЗ от линии */
 .path{display:flex;overflow-x:auto;padding:2px 0 4px}
-.path-ph{flex:0 0 auto}
-.path-ph + .path-ph{margin-left:22px;padding-left:22px;border-left:1px solid var(--line)}
-.path-cap{font:600 10px/1 var(--mono);letter-spacing:.09em;color:var(--faint);margin-bottom:12px;white-space:nowrap}
-.path-rail{display:grid;grid-auto-flow:column;grid-auto-columns:132px;align-items:start}
-.path-st{position:relative}
-.path-st::after{content:'';position:absolute;top:5px;left:14px;right:0;height:2px;background:var(--line)}
-.path-st:last-child::after{display:none}
-.path-dot{position:relative;z-index:1;width:12px;height:12px;border-radius:50%;background:var(--ink)}
+.path-ph{position:relative;flex:0 0 auto}
+.path-ph::before{content:'';position:absolute;top:27px;left:0;right:0;height:2px;background:var(--line)}
+.path-ph + .path-ph::after{content:'';position:absolute;left:-22px;top:27px;bottom:0;width:1px;background:var(--line)}
+.path-cap{font:600 10px/12px var(--mono);letter-spacing:.09em;color:var(--faint);margin-bottom:10px;white-space:nowrap;height:12px}
+.path-rail{display:grid;grid-auto-flow:column;grid-auto-columns:132px;align-items:start;position:relative}
+.path-dot{display:block;position:relative;z-index:1;width:12px;height:12px;border-radius:50%;background:var(--ink)}
 .path-st.wait .path-dot{background:var(--wait)}
 .path-st.todo .path-dot{background:var(--surface);border:2px solid var(--line-strong)}
 .path-st.na .path-dot{background:var(--surface);border:2px dashed var(--line-strong)}
