@@ -17,6 +17,7 @@ from marko.journal.lookup import _esc
 from marko.journal.models import Event, Item
 from marko.mt.models import MtDoc
 from marko.nkmt.models import Card
+from marko.platform.models import PlatformKV
 
 GS = "\x1d"            # GS1 group separator (printable-замена — '!')
 # только «настоящие» пробелы: str.split()/re \s съедают и сам GS (\x1d —
@@ -192,6 +193,18 @@ def _card(db: Session, gtin: str) -> dict | None:
     return {"article": c.article, "name": c.name, "status": c.status}
 
 
+def _supplies(db: Session, orders: list[dict]) -> list[dict]:
+    """Поставки заказов этого кода из кэша воркера (kv wb_supplies): даты
+    закрытия/приёмки на складе WB. Читается без сети; пустой кэш — пустая
+    секция (первый часовой прогрев наполнит)."""
+    ids = {o["supply_id"] for o in orders if o.get("supply_id")}
+    if not ids:
+        return []
+    kv = db.get(PlatformKV, "wb_supplies")
+    by_id = (kv.value.get("by_id") or {}) if kv else {}
+    return [by_id[i] for i in sorted(ids) if i in by_id]
+
+
 def trace(db: Session, km_input: str) -> dict:
     km = normalize_km(km_input)
     gtin = km[2:16]
@@ -203,12 +216,13 @@ def trace(db: Session, km_input: str) -> dict:
     orders = _orders(db, docs)
     returns = _returns(db, srids, docs)
     mt_docs = _docs(db, km)
+    supplies = _supplies(db, orders)
     return {"km": km, "input": km_input, "gtin": gtin,
             "found": item is not None,
             "item": item_row(item) if item else None,
             "card": _card(db, gtin),
             "timeline": timeline, "docs": mt_docs,
-            "orders": orders, "returns": returns,
+            "orders": orders, "returns": returns, "supplies": supplies,
             "counts": {"events": len(timeline)}}
 
 

@@ -1472,6 +1472,8 @@ function Journal({ ctx, initial }) {
 /* трассировка КМ: жизненный цикл одного кода по системам (ЧЗ/МАРКО/WB).
    Точечный запрос — не грузится по 60с-тику; живые проверки (ЧЗ, WB) —
    кнопками, фоновых опросов и новых словарей статусов не заводим */
+const traceDay = (v) => (v ? fmtDay(String(v).slice(0, 10)) : '')   // этап: только дата
+
 function Trace({ ctx, initial }) {
   const { notify, openDrawer, go, bump } = ctx
   const [q, setQ] = useState(initial || '')
@@ -1594,18 +1596,22 @@ function Trace({ ctx, initial }) {
       </div>
       {data && (() => {
         // «Путь кода»: этапы из живого среза ЧЗ (live-запрос при загрузке),
-        // реестра WB и хронологии; пустой этап = «нет данных», не прячем
+        // ленты WB (кэш кабинета — без сети) и хронологии; пустой этап =
+        // «нет данных», не прячем
         const cz = data.cz || {}
         const sale = data.timeline.find((e) => e.kind === 'sale')
         const ret = data.timeline.find((e) => e.kind === 'return')
         const lk = data.docs.find((d) => d.type === 'LK_RECEIPT')
-        const feed0 = (wbFeed?.orders || [])[0]
+        const feed0 = ((wbFeed?.orders?.length ? wbFeed.orders : data.wb_feed?.orders) || [])[0]
         const order0 = data.orders[0]
+        const sup0 = data.supplies?.[0]
         const stages = [
           { label: 'Производство', date: cz.producedDate, src: 'ЧЗ' },
           { label: 'Эмиссия', date: cz.emissionDate, src: 'ЧЗ', extra: cz.emissionType },
           { label: 'Ввод в оборот', date: cz.introducedDate, src: 'ЧЗ' },
           { label: 'Заказ WB', date: feed0?.createdAt || order0?.order_created_at, src: 'WB' },
+          { label: 'Отгрузка на склад WB', date: sup0?.scanDt || sup0?.closedAt,
+            src: 'WB', extra: sup0?.id },
           { label: 'Выкуп', date: sale?.ts, src: 'WB', extra: feed0?.status === 'buyout' ? 'куплен' : '' },
           { label: 'Вывод из оборота', date: lk?.created_at || (cz.status === 'retired' ? cz.withdrawDate : ''),
             src: lk ? 'МАРКО' : 'ЧЗ' },
@@ -1613,7 +1619,7 @@ function Trace({ ctx, initial }) {
         ]
         return <div className="card" style={{ marginBottom: 22 }}>
           <div className="card-h"><b style={{ fontSize: 12.5 }}>Путь кода</b>
-            <span className="hint">{cz.error ? 'срез ЧЗ недоступен' : 'живой срез Честного знака + журнал'}</span></div>
+            <span className="hint">{cz.error ? 'срез ЧЗ недоступен' : 'живой срез Честного знака + WB + журнал'}</span></div>
           <div className="card-b" style={{ display: 'flex', gap: 18, flexWrap: 'wrap', rowGap: 14 }}>
             {stages.map((st) => <div key={st.label} style={{ flex: '0 1 auto', minWidth: 128 }}>
               <div style={{ display: 'flex', gap: 6, alignItems: 'center' }}>
@@ -1621,8 +1627,8 @@ function Trace({ ctx, initial }) {
                 <span style={{ fontSize: 12.5 }}>{st.label}</span>
               </div>
               <div className="mono" style={{ fontSize: 11.5, margin: '3px 0 0 12px' }}>
-                {st.date ? fmtDay(st.date) : <span className="faint">нет данных</span>}</div>
-              <div className="faint" style={{ fontSize: 10.5, margin: '1px 0 0 12px' }}>
+                {st.date ? traceDay(st.date) : <span className="faint">нет данных</span>}</div>
+              <div className="faint" style={{ fontSize: 10.5, margin: '1px 0 0 12px', maxWidth: 150, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }} title={st.extra || ''}>
                 {st.date ? `${st.src}${st.extra ? ' · ' + st.extra : ''}` : ''}</div>
             </div>)}
           </div>
@@ -1649,12 +1655,13 @@ function Trace({ ctx, initial }) {
             <pre>{JSON.stringify(data.cz, null, 2)}</pre></details>
         </div>
       </div>}
-      {wbFeed && <div className="card" style={{ marginBottom: 22 }}>
+      {(() => { const feed = wbFeed || data.wb_feed
+        return feed ? <div className="card" style={{ marginBottom: 22 }}>
         <div className="card-h"><b style={{ fontSize: 12.5 }}>Заказ WB · лента телеметрии</b>
-          <span className="hint">live · {wbFeed.fetched_at ? fmtD(wbFeed.fetched_at) : ''} · выгрузка кэшируется на 3 ч</span></div>
+          <span className="hint">{wbFeed ? 'live' : 'кэш кабинета'} · {feed.fetched_at ? fmtD(feed.fetched_at) : ''}</span></div>
         <div className="card-b">
-          {wbFeed.note ? <p style={{ fontSize: 12.5, color: 'var(--muted)', margin: 0 }}>{wbFeed.note}</p>
-            : wbFeed.orders.length ? wbFeed.orders.map((o) => <div key={o.srid} style={{ marginBottom: 10 }}>
+          {feed.note ? <p style={{ fontSize: 12.5, color: 'var(--muted)', margin: 0 }}>{feed.note}</p>
+            : feed.orders.length ? feed.orders.map((o) => <div key={o.srid} style={{ marginBottom: 10 }}>
               <div style={{ display: 'flex', gap: 8, alignItems: 'baseline', flexWrap: 'wrap', marginBottom: 4 }}>
                 <span className="km" style={{ fontSize: 11 }}>{o.srid}</span>
                 <Badge dict={WF_STATUS} v={o.status} />
@@ -1673,6 +1680,21 @@ function Trace({ ctx, initial }) {
               : <p style={{ fontSize: 12.5, color: 'var(--muted)', margin: 0 }}>
                 Заказы этого кода в ленте не найдены — окно выгрузки 31 день, более старые заказы WB не отдаёт.</p>}
         </div>
+      </div> : null })()}
+      {data.supplies?.length > 0 && <div className="card" style={{ marginBottom: 22 }}>
+        <div className="card-h"><b style={{ fontSize: 12.5 }}>Поставка WB · отгрузка</b>
+          <span className="hint">этап приёмки на складе WB</span></div>
+        <div className="card-b">{data.supplies.map((s) => <div key={s.id} style={{ marginBottom: 8 }}>
+          <span className="mono" style={{ fontSize: 12 }}>{s.id}</span>
+          {s.name && <span className="faint" style={{ fontSize: 12 }}> · {s.name}</span>}
+          <div className="twrap" style={{ marginTop: 4 }}><table className="t small"><tbody>
+            <tr><td className="faint" style={{ width: '40%' }}>Создана</td><td className="mono">{s.createdAt ? fmtD(s.createdAt) : '—'}</td></tr>
+            <tr><td className="faint">Закрыта</td><td className="mono">{s.closedAt ? fmtD(s.closedAt) : '—'}</td></tr>
+            <tr><td className="faint">Просканирована на складе WB</td>
+              <td className="mono">{s.scanDt ? fmtD(s.scanDt) : '—'}</td></tr>
+            {s.rejectDt && <tr><td className="faint">Отклонена</td><td className="mono">{fmtD(s.rejectDt)}</td></tr>}
+          </tbody></table></div>
+        </div>)}</div>
       </div>}
       {wbMeta && <div className="card" style={{ marginBottom: 22 }}>
         <div className="card-h"><b style={{ fontSize: 12.5 }}>Закрепления на WB</b>

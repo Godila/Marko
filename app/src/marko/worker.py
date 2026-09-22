@@ -196,6 +196,27 @@ def _wb_returns_loop():
             except Exception:
                 db.rollback()
                 log.exception("registry warm failed")
+            # кэш поставок (даты отгрузки/приёмки на склад WB для трассировки
+            # КМ): read-only, лимиты щедрые — раз в час вместе с прогревом
+            try:
+                from sqlalchemy.dialects.postgresql import insert as pg_insert
+                from marko.platform.models import PlatformKV
+                by_id = {str(s.get("id")): {
+                    "id": s.get("id"), "name": s.get("name"),
+                    "createdAt": s.get("createdAt"), "closedAt": s.get("closedAt"),
+                    "scanDt": s.get("scanDt"), "rejectDt": s.get("rejectDt"),
+                    "done": bool(s.get("done"))} for s in client.supplies()}
+                db.execute(pg_insert(PlatformKV).values(
+                    key="wb_supplies", value={"fetched_at": time.time(),
+                                              "by_id": by_id}
+                ).on_conflict_do_update(
+                    index_elements=[PlatformKV.key],
+                    set_={"value": {"fetched_at": time.time(),
+                                    "by_id": by_id}}))
+                db.commit()
+            except Exception:
+                db.rollback()
+                log.exception("supplies cache failed")
             res = run_returns_once(db, client)
             for text in res.get("alerts", []):
                 asyncio.run(send(text))

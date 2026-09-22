@@ -30,6 +30,7 @@ def order_doc(rid_or_srid: str) -> str:
 def order_row(o: WbOrder) -> dict:
     """Сериализация строки реестра для консольных API (lookup, трассировка)."""
     return {"order_doc": o.order_doc, "order_id": o.order_id,
+            "supply_id": o.supply_id,
             "delivery_type": o.delivery_type, "nm_id": o.nm_id,
             "order_created_at": o.order_created_at,
             "first_seen": o.first_seen, "last_seen": o.last_seen}
@@ -55,12 +56,16 @@ def upsert_orders(db: Session, order_rows: list[dict], chunk: int = 10_000) -> i
         row = {
             "order_doc": doc,
             "order_id": _int_or_none(o.get("id")),
+            "supply_id": str(o.get("supplyId") or "")[:32] or None,
             "delivery_type": str(o.get("deliveryType") or "").strip().lower()[:8],
             "nm_id": _int_or_none(o.get("nmId")),
             "order_created_at": str(o.get("createdAt") or "")[:32],
         }
-        if prev and row["order_id"] is None:
-            row["order_id"] = prev["order_id"]     # дедуп позиций id не теряет
+        if prev:
+            if row["order_id"] is None:
+                row["order_id"] = prev["order_id"]       # дедуп позиций id не теряет
+            if row["supply_id"] is None:
+                row["supply_id"] = prev["supply_id"]
         by_doc[doc] = row
     vals = list(by_doc.values())
     if not vals:
@@ -72,6 +77,7 @@ def upsert_orders(db: Session, order_rows: list[dict], chunk: int = 10_000) -> i
         stmt = stmt.on_conflict_do_update(
             index_elements=[WbOrder.order_doc],
             set_={"order_id": func.coalesce(stmt.excluded.order_id, WbOrder.order_id),
+                  "supply_id": func.coalesce(stmt.excluded.supply_id, WbOrder.supply_id),
                   "delivery_type": stmt.excluded.delivery_type,
                   "nm_id": stmt.excluded.nm_id,
                   "order_created_at": stmt.excluded.order_created_at,

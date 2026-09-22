@@ -155,6 +155,21 @@ def trace_get(
             item = db.get(Item, body["km"])         # live-проверка обновила колонки
             if item is not None:
                 body["item"] = item_row(item)
+    # телеметрия ленты из кэша кабинета (kv, без сети): этап «Заказ WB»
+    # виден сразу; кнопка нужна только чтобы обновить/наполнить кэш
+    kv_feed = db.get(PlatformKV, "trace_wb_feed")
+    if kv_feed and time.time() - kv_feed.value.get("fetched_at", 0) < 3 * 3600 + 60:
+        by_doc = kv_feed.value.get("by_doc") or {}
+        from datetime import timezone
+        from marko.connector_wb.registry import order_doc as _od
+        from marko.journal.models import Event as _Ev
+        docs = {_od(s) for (s,) in
+                db.query(_Ev.srid).filter(_Ev.km == body["km"], _Ev.srid != "").all()}
+        feed = [by_doc[d] for d in sorted(docs) if d in by_doc]
+        if feed:
+            body["wb_feed"] = {"fetched_at": datetime.fromtimestamp(
+                kv_feed.value["fetched_at"], tz=timezone.utc).isoformat(),
+                "orders": feed}
     return body
 
 

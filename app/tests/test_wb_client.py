@@ -89,3 +89,14 @@ def test_order_feed_wire():
     method, path, body = bodies[0]
     assert method == "POST" and path == "/api/analytics/v1/order-feed"
     assert '"nmIds":[42]' in body and '"start"' in body and '"limit"' in body
+
+
+def test_supplies_pagination():
+    pages = [{"supplies": [{"id": "WB-GI-1"}], "next": 100},
+             {"supplies": [{"id": "WB-GI-2"}], "next": 0}]
+
+    def handler(r):
+        return httpx.Response(200, json=pages.pop(0) if pages else {"supplies": [], "next": 0})
+
+    c = WBClient(token="t", transport=httpx.MockTransport(handler), sleeper=lambda s: None)
+    assert [s["id"] for s in c.supplies()] == ["WB-GI-1", "WB-GI-2"]

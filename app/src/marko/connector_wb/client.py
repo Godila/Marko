@@ -145,6 +145,26 @@ class WBClient:
         data = r.json().get("data") or {}
         return data.get("orders") or []
 
+    def supplies(self, limit: int = 1000) -> list[dict]:
+        """Поставки FBS (пагинация по next, лимиты щедрые 300/мин): createdAt
+        (создана) / closedAt (закрыта) / scanDt (просканирована на складе WB) /
+        done / rejectDt — этап отгрузки для трассировки КМ."""
+        out: list[dict] = []
+        cursor = 0
+        for _ in range(100):  # потолок страниц — страховка от зацикливания
+            r = self._fetch("GET", self.orders_base + "/api/v3/supplies",
+                            params={"next": cursor, "limit": limit})
+            data = r.json()
+            batch = data.get("supplies") or []
+            out.extend(batch)
+            nxt = data.get("next", 0)
+            if not nxt or not batch or nxt == cursor:
+                break
+            cursor = nxt
+        else:
+            log.error("supplies pagination cap hit")
+        return out
+
 
 def load_wb_token(path: str) -> str:
     with open(path, encoding="utf-8") as f:

@@ -50,3 +50,11 @@ def test_upsert_orders_stores_numeric_order_id(db):
     # апсерт без id не затирает уже известный номер (coalesce)
     upsert_orders(db, [_row("eAL.rabc.1.0")])
     assert db.get(WbOrder, "eAL.rabc").order_id == 5632423
+
+
+def test_upsert_orders_stores_supply_id(db):
+    upsert_orders(db, [dict(_row("eAL.rabc.0.0"), id=1, supplyId="WB-GI-123")])
+    assert db.get(WbOrder, "eAL.rabc").supply_id == "WB-GI-123"
+    # апсерт без supplyId не затирает известную поставку
+    upsert_orders(db, [_row("eAL.rabc.1.0")])
+    assert db.get(WbOrder, "eAL.rabc").supply_id == "WB-GI-123"

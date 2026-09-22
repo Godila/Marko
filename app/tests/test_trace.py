@@ -366,3 +366,61 @@ def test_trace_wb_feed_errors_and_scopes(db, client, monkeypatch):
     r = client.post("/v1/trace/wb-feed", headers=AUTH,
                     json={"km": "0104630520676025215NOFEED1"})
     assert r.status_code == 200 and r.json()["orders"] == [] and "note" in r.json()
+
+
+# --- v2.1: кэш ленты в автозагрузке + поставки (этап отгрузки на склад WB) ---
+
+def test_trace_includes_wb_feed_from_cache(db, client):
+    """Лента телеметрии живёт в кэше кабинета: GET /v1/trace отдаёт её сам
+    (без сети) — этап «Заказ WB» виден сразу после первого wb-feed-клика."""
+    from marko.platform.models import PlatformKV
+    import time as _t
+    _sale(db, srid=f"{WB_DOC}.3.0")
+    db.add(__import__("marko.connector_wb.models", fromlist=["WbOrder"]).WbOrder(
+        order_doc=WB_DOC, order_id=1, delivery_type="fbs", nm_id=1))
+    from sqlalchemy.dialects.postgresql import insert as pg_insert
+    db.execute(pg_insert(PlatformKV).values(
+        key="trace_wb_feed",
+        value={"fetched_at": _t.time(),
+               "by_doc": {WB_DOC: dict(FEED_ORDER, srid=f"{WB_DOC}.9.9")}}
+    ).on_conflict_do_update(index_elements=[PlatformKV.key],
+                            set_={"value": {"fetched_at": _t.time(),
+                                            "by_doc": {WB_DOC: dict(FEED_ORDER, srid=f"{WB_DOC}.9.9")}}}))
+    db.commit()
+    body = client.get("/v1/trace", params={"km": KM, "live": 0}, headers=AUTH).json()
+    assert body["wb_feed"]["orders"][0]["destinationCity"] == "Казань"
+    # протухший кэш — ключа нет
+    kv = db.get(PlatformKV, "trace_wb_feed")
+    kv.value = {"fetched_at": 0, "by_doc": {WB_DOC: FEED_ORDER}}
+    db.commit()
+    body2 = client.get("/v1/trace", params={"km": KM, "live": 0}, headers=AUTH).json()
+    assert "wb_feed" not in body2
+
+
+def test_trace_supplies_from_cache(db, client):
+    from marko.connector_wb.models import WbOrder
+    from marko.platform.models import PlatformKV
+    import time as _t
+    from sqlalchemy.dialects.postgresql import insert as pg_insert
+    _sale(db, srid=f"{WB_DOC}.3.0")
+    db.add(WbOrder(order_doc=WB_DOC, order_id=5658758170,
+                   supply_id="WB-GI-273320060", delivery_type="fbs", nm_id=1))
+    sup = {"id": "WB-GI-273320060", "name": "03.09 17:46",
+           "createdAt": "2026-09-03T14:46:07Z", "closedAt": "2026-09-04T15:48:53Z",
+           "scanDt": "2026-09-04T19:17:06Z", "rejectDt": None, "done": True}
+    db.execute(pg_insert(PlatformKV).values(
+        key="wb_supplies", value={"fetched_at": _t.time(),
+                                  "by_id": {"WB-GI-273320060": sup}}
+    ).on_conflict_do_update(index_elements=[PlatformKV.key],
+                            set_={"value": {"fetched_at": _t.time(),
+                                            "by_id": {"WB-GI-273320060": sup}}}))
+    db.commit()
+    body = client.get("/v1/trace", params={"km": KM, "live": 0}, headers=AUTH).json()
+    assert body["supplies"][0]["scanDt"].startswith("2026-09-04")
+    assert body["supplies"][0]["done"] is True
+    assert body["orders"][0]["supply_id"] == "WB-GI-273320060"
+    # без кэша поставок — секция пуста, не падает
+    kv = db.get(PlatformKV, "wb_supplies")
+    db.delete(kv); db.commit()
+    body2 = client.get("/v1/trace", params={"km": KM, "live": 0}, headers=AUTH).json()
+    assert body2["supplies"] == []
