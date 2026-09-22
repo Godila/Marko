@@ -39,6 +39,9 @@ const ITEM_STATES = {
 const CHIP_ORDER = ['PENDING_WITHDRAW', 'PENDING_RETURN', 'WITHDRAWN', 'RETURNED',
   'ANOMALY_RESALE', 'ANOMALY_NO_RECEIPT', 'ANOMALY_RERETURN', 'ANOMALY_UNKNOWN_TRANSITION',
   'NEW']
+// сумма всех ANOMALY_* из stats журнала: чип «аномалии» и счётчик рельса
+const anomalyTotal = (st) => Object.entries(st || {})
+  .reduce((a, [k, v]) => k.startsWith('ANOMALY') ? a + v : a, 0)
 // статус КИЗ по данным Честного ЗНАКа (cises/info); пусто → «—» (не проверялся)
 const CIS_STATUS = { introduced: ['в обороте', 'blue'], in_circulation: ['в обороте', 'blue'],
   retired: ['выбыл', 'green'], written_off: ['списан', 'grey'] }
@@ -155,11 +158,13 @@ const ANOMALY_HELP = {
     ],
   },
   ANOMALY_RESALE: {
-    what: 'Код продан второй раз, пока первая продажа ждала вывода из оборота. Чаще всего это не подделка, а порядок событий: возврат покупателя приезжает в отчётах WB на 0–2 дня позже продажи.',
-    why: ['возврат первой продажи ещё в пути (лаг отчёта WB 0–2 дня);', 'WB отдал ту же продажу повторно под другим номером;', 'редко: реальная переклейка кода — это вопрос к ЧЗ, не к «разобрать».'],
-    todo: 'Проверьте код в карточке товара на WB: если это та же единица после возврата покупателя — примите событие, код снова уйдёт «к выводу». При подозрении на переклейку не разрешайте — разберите с ЧЗ.',
+    what: 'Повторная продажа кода, ждавшего вывода. Такие строки созданы до 22.09.2026: сейчас перепродажа возврата признана штатным циклом WB (возврат/невыкуп → WB перевыставляет единицу → новая продажа), новые строки не создаются.',
+    why: ['код вернулся (возврат или невыкуп) и WB продал его снова — цена второй продажи обычно ниже;',
+      'возврат в отчёте реализации WB для этого потока не отражается (строки op=2 не приходит);',
+      'редко: реальная переклейка кода — это вопрос к ЧЗ, не к «разобрать».'],
+    todo: 'Нажмите «Обновить статусы ЧЗ»: коды, которые ЧЗ уже считает выбывшими по чеку ККТ WB, перейдут в «выведен (WB)» автоматически. Коды в обороте ЧЗ — пресет ниже: обязательство вывода по последней продаже.',
     presets: [
-      { label: 'Принять перепродажу', target: 'PENDING_WITHDRAW', note: 'перепродажа принята: возврат в пути или дубль WB' },
+      { label: 'Принять перепродажу', target: 'PENDING_WITHDRAW', note: 'перепродажа принята: обязательство вывода по последней продаже' },
     ],
   },
   ANOMALY_RERETURN: {
@@ -171,8 +176,9 @@ const ANOMALY_HELP = {
     ],
   },
   ANOMALY_UNKNOWN_TRANSITION: {
-    what: 'Событие пришло в состоянии, где машина состояний не знает, что с ним делать: например, продажа уже выведенного кода или событие поверх другой аномалии. Нужен взгляд человека.',
-    why: ['продажа/возврат приехали после того, как код уже выведен или возвращён;', 'событие поверх неразобранной аномалии — исходная причина затёрта, история осталась в таблице событий.'],
+    what: 'Событие пришло в состоянии, где машина состояний не знает, что с ним делать: например, повторный возврат уже возвращённого кода или событие поверх другой неразобранной аномалии. Нужен взгляд человека.',
+    why: ['событие поверх неразобранной аномалии — исходная причина затёрта, история осталась в таблице событий;',
+      'редкий порядок событий, не предусмотренный штатными переходами (продажа и возврат больше не виноваты — перепродажа возврата теперь норма).'],
     todo: 'Сверьте судьбу кода в ЛК ЧЗ (в обороте / выведен / выбыл) и выберите корректное состояние вручную.',
     presets: [
       { label: 'К выводу', target: 'PENDING_WITHDRAW', note: 'ручное решение: ожидает вывода' },
@@ -360,7 +366,7 @@ function Overview({ ctx, pulse }) {
   const dlHot = dl && parseUtc(dl) - Date.now() <= 48 * 36e5
   const doWithdraw = () => { if (!pendW) return notify('Нет позиций к выводу', 'Журнал не содержит КМ в статусе «к выводу».', 'warn')
     confirm('Собрать вывод из оборота?',
-      `Из ${pendW} КМ будет создан черновик LK_RECEIPT (без фискального чека — отдельным документом). КМ сразу перейдут в «Выведен», подача в ЧЗ — отдельным шагом.`,
+      `Из ${pendW > 100 ? `первых 100 из ${pendW}` : pendW} КМ будет создан черновик LK_RECEIPT (без фискального чека — отдельным документом). КМ сразу перейдут в «Выведен», подача в ЧЗ — отдельным шагом.`,
       `ИНН ${inn}`, 'Собрать документ', async () => {
         try { const r = await api('/v1/batches/withdraw', { method: 'POST', body: JSON.stringify({ inn }) })
           if (r.doc_id === 0) notify('Нет позиций к выводу', '', 'warn')
@@ -455,6 +461,37 @@ function Overview({ ctx, pulse }) {
 }
 
 /* ================= вывод из оборота ================= */
+/* реквизиты эмиттера LK_RECEIPT (ИНН/ФИАС/первичка) — настройки вывода из
+   оборота, живут в разделе, который ими пользуется (перенос из Справочников) */
+function EmitterDefaults({ ctx }) {
+  const { notify, inn, setInn } = ctx
+  const [em, setEm] = useState(null)
+  useEffect(() => {   // один раз при входе: тик не должен затирать несохранённые правки
+    api('/v1/emitter/defaults').then(setEm).catch(() => setEm({ fias_id: '', primary_custom_name: '' }))
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [])
+  const saveEm = () => api('/v1/emitter/defaults', { method: 'PUT', body: JSON.stringify(em || {}) })
+    .then(() => notify('Реквизиты эмиттера сохранены', 'Применятся к следующим черновикам LK_RECEIPT.'))
+    .catch((e) => notify('Не сохранено', e.message, 'bad'))
+  return <div className="card">
+    <div className="card-h"><h2>Реквизиты эмиттера</h2><span className="hint">для черновиков LK_RECEIPT</span></div>
+    <div className="card-b">
+      <div className="field"><label>ИНН продавца</label>
+        <input className="mono" style={{ maxWidth: 220 }} value={inn}
+          onChange={(e) => { setInn(e.target.value); localStorage.setItem('inn', e.target.value) }} /></div>
+      <div className="field"><label>ФИАС места отгрузки (МОД)</label>
+        <input className="mono" style={{ fontSize: 12 }} value={(em || {}).fias_id || ''}
+          onChange={(e) => setEm({ ...(em || {}), fias_id: e.target.value })} />
+        <span style={{ fontSize: 12, color: 'var(--muted)' }}>Прод ЧЗ отклоняет DISTANCE без ФИАС — не оставляйте пустым.</span></div>
+      <div className="field"><label>Наименование первички для чеков без фискального знака</label>
+        <input value={(em || {}).primary_custom_name || ''}
+          onChange={(e) => setEm({ ...(em || {}), primary_custom_name: e.target.value })} /></div>
+      <div style={{ display: 'flex', justifyContent: 'flex-end' }}>
+        <button className="btn pri" disabled={!em} onClick={saveEm}>Сохранить реквизиты</button></div>
+    </div>
+  </div>
+}
+
 function Withdraw({ ctx }) {
   const { notify, confirm, bump, inn } = ctx
   const [pend, setPend] = useState(null)
@@ -464,7 +501,7 @@ function Withdraw({ ctx }) {
   const doWithdraw = () => { const n = pend ? pend.length : 0
     if (!n) return notify('Нет позиций к выводу', 'Журнал не содержит КМ в статусе «к выводу».', 'warn')
     confirm('Собрать вывод из оборота?',
-      `Перед сбором коды проверяются в Честном Знаке: уже выведенные WB в документ не попадут (перейдут в «выведен (WB)»). Из остальных будет создан черновик LK_RECEIPT (позиции без фискального чека — отдельным документом «Иное»). КМ сразу перейдут в «Выведен»; подача в ЧЗ — отдельным шагом.`,
+      `Перед сбором коды проверяются в Честном Знаке: уже выведенные WB в документ не попадут (перейдут в «выведен (WB)»). Из остальных${n > 100 ? ` — первые 100 из ${n}` : ''} будет создан черновик LK_RECEIPT (позиции без фискального чека — отдельным документом «Иное»). КМ сразу перейдут в «Выведен»; подача в ЧЗ — отдельным шагом.`,
       `ИНН ${inn}`, 'Собрать документ', async () => {
         try { const r = await api('/v1/batches/withdraw', { method: 'POST', body: JSON.stringify({ inn }) })
           if (r.doc_id === 0) notify('Нет позиций к выводу', '', 'warn')
@@ -489,7 +526,7 @@ function Withdraw({ ctx }) {
       <div className="kpi"><div className="n bad">{lk.filter((d) => d.status === 'error').length}</div><div className="l">ошибок</div></div>
     </div>
     <div className="card">
-      <div className="card-h"><h2>Готовы к выводу</h2><span className="hint">шт: {pend ? pend.length : '…'} · ИНН из «Справочников»</span></div>
+      <div className="card-h"><h2>Готовы к выводу</h2><span className="hint">шт: {pend ? pend.length : '…'} · реквизиты — в карточке ниже</span></div>
       <div className="twrap"><table className="t fit">
         <colgroup><col style={{ width: 248 }} /><col style={{ width: 783 }} /><col style={{ width: 205 }} /></colgroup>
         <thead><tr><th>Код маркировки</th><th>Наименование</th><th>Последний сигнал</th></tr></thead>
@@ -507,6 +544,7 @@ function Withdraw({ ctx }) {
       <div className="card-h"><h2>Документы LK_RECEIPT</h2><span className="hint">автопроверка статуса — каждые 10 мин</span></div>
       {docs && <DocTable docs={lk} ctx={ctx} empty="Документов вывода пока нет" />}
     </div>
+    <EmitterDefaults ctx={ctx} />
   </>
 }
 
@@ -844,11 +882,10 @@ function DeclarationCard({ d, ctx, onDel }) {
 
 /* ================= справочники ================= */
 function Refs({ ctx }) {
-  const { notify, confirm, inn, setInn } = ctx
+  const { notify, confirm } = ctx
   const [tab, setTab] = useState('fields')
   const [decls, setDecls] = useState(null)
   const [defs, setDefs] = useState(null)
-  const [em, setEm] = useState(null)
   const [rules, setRules] = useState(null)
   const [producers, setProducers] = useState(null)
   const [checkBusy, setCheckBusy] = useState(false)
@@ -867,12 +904,11 @@ function Refs({ ctx }) {
     api('/v1/nkmt/rules').then(setRules).catch(() => setRules([]))
     api('/v1/nkmt/producers').then(setProducers).catch(() => setProducers([]))
     api('/v1/nkmt/dicts/hints').then(setHints).catch(() => {}) }, [ctx.tick])
-  // формы дефолтов и эмиттера грузятся один раз при входе: 60-секундный тик
-  // консоли не должен затирать несохранённые правки оператора
+  // формы дефолтов грузятся один раз при входе: 60-секундный тик консоли
+  // не должен затирать несохранённые правки оператора
   useEffect(() => {
     api('/v1/nkmt/defaults').then(setDefs)
       .catch((e) => { setDefs({}); notify('Дефолты не загрузились', e.message, 'bad') })
-    api('/v1/emitter/defaults').then(setEm).catch(() => setEm({ fias_id: '', primary_custom_name: '' }))
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [])
   const addDecl = () => { if (!dnum || !ddate) return notify('Заполните номер и дату', '', 'warn')
@@ -955,15 +991,12 @@ function Refs({ ctx }) {
     if (k === 'declaration_date') d.declaration_number = d.declaration_number ?? ''
     setDefs(d) }
   const tryResolve = () => api('/v1/nkmt/resolve', { method: 'POST',
-      body: JSON.stringify({ brand: rzBrand, product_type: rzType }) })
+    body: JSON.stringify({ brand: rzBrand, product_type: rzType }) })
     .then(setRz).catch((e) => notify('Проверка не удалась', e.message, 'bad'))
-  const saveEm = () => api('/v1/emitter/defaults', { method: 'PUT', body: JSON.stringify(em || {}) })
-    .then(() => notify('Реквизиты эмиттера сохранены', 'Применятся к следующим черновикам LK_RECEIPT.'))
-    .catch((e) => notify('Не сохранено', e.message, 'bad'))
   const tabs = [['fields', 'Поля'], ['decls', 'Декларации'],
-    ['producers', 'Производители'], ['rules', 'Правила'], ['emitter', 'Эмиттер ЧЗ']]
+    ['producers', 'Производители'], ['rules', 'Правила']]
   return <>
-    <Head title="Справочники" sub="Значения для карточек НК и документов. Приоритет подстановки: файл → правило РД → дефолт."
+    <Head title="Справочники" sub="Значения для карточек НК. Приоритет подстановки: файл → правило РД → дефолт."
       tools={<Sync tick={ctx.tick} />} />
     <div className="chiprow" style={{ marginBottom: 14 }}>
       {tabs.map(([k, l]) => <button key={k} className="chip" aria-pressed={tab === k}
@@ -1197,23 +1230,6 @@ function Refs({ ctx }) {
           {rules && !rules.length && <tr><td colSpan={6}><div className="empty"><b>Правил нет</b>Пример: вид «ШАПКА» → декларация №…, производитель и размер ONE SIZE. Правило без бренда и видов не создаётся — оно подходило бы всем строкам.</div></td></tr>}
         </tbody></table></div>
     </div>}
-    {tab === 'emitter' && <div className="card">
-      <div className="card-h"><h2>Эмиттер документов ЧЗ</h2><span className="hint">реквизиты для LK_RECEIPT</span></div>
-      <div className="card-b">
-        <div className="field"><label>ИНН продавца</label>
-          <input className="mono" style={{ maxWidth: 220 }} value={inn}
-            onChange={(e) => { setInn(e.target.value); localStorage.setItem('inn', e.target.value) }} /></div>
-        <div className="field"><label>ФИАС места отгрузки (МОД)</label>
-          <input className="mono" style={{ fontSize: 12 }} value={(em || {}).fias_id || ''}
-            onChange={(e) => setEm({ ...(em || {}), fias_id: e.target.value })} />
-          <span style={{ fontSize: 12, color: 'var(--muted)' }}>Прод ЧЗ отклоняет DISTANCE без ФИАС — не оставляйте пустым.</span></div>
-        <div className="field"><label>Наименование первички для чеков без фискального знака</label>
-          <input value={(em || {}).primary_custom_name || ''}
-            onChange={(e) => setEm({ ...(em || {}), primary_custom_name: e.target.value })} /></div>
-        <div style={{ display: 'flex', justifyContent: 'flex-end' }}>
-          <button className="btn pri" onClick={saveEm}>Сохранить реквизиты</button></div>
-      </div>
-    </div>}
   </>
 }
 
@@ -1362,21 +1378,25 @@ function OrderCard({ data, ctx }) {
   </div>
 }
 
-/* декларативный конфиг колонок журнала — фундамент под будущее управление
-   составом колонок (переключатели пока не делаем): w — ширина col в px
-   (фиксированный лейаут; без w — колонка забирает остаток), ell — однострочная
-   обрезка с кликом-раскрытием, mono — кодовая колонка (DESIGN.md 11) */
+/* декларативный конфиг колонок журнала: w — ширина col в px (фиксированный
+   лейаут; без w — колонка забирает остаток), ell — однострочная обрезка с
+   кликом-раскрытием, mono — кодовая колонка (DESIGN.md 11), sort — аксессор
+   ключа сортировки (ISO-строки, кликабельный заголовок) */
 const JOURNAL_COLUMNS = [
-  { key: 'km', label: 'Код маркировки', w: 248, render: (it) => <KmCell km={it.km} /> },
-  { key: 'name', label: 'Наименование', w: 238, ell: true, text: (it) => it.cis_product_name || '',
+  { key: 'km', label: 'Код маркировки', w: 240, render: (it) => <KmCell km={it.km} /> },
+  { key: 'name', label: 'Наименование', w: 212, ell: true, text: (it) => it.cis_product_name || '',
     render: (it) => it.cis_product_name || <span className="faint">—</span> },
-  { key: 'state', label: 'Состояние', w: 126, render: (it) => <Badge dict={ITEM_STATES} v={it.state} /> },
-  { key: 'sig', label: 'Последний сигнал', w: 194, ell: true, text: (it) => evLine(it),
-    render: (it) => evLine(it) },
-  { key: 'order', label: 'Заказ WB', w: 224, ell: true, mono: true, text: (it) => it.last_event?.srid || '',
+  { key: 'state', label: 'Состояние', w: 120, render: (it) => <Badge dict={ITEM_STATES} v={it.state} /> },
+  { key: 'sale', label: 'Выкуп', w: 84, mono: true, sort: (it) => it.sale_dt || '',
+    render: (it) => it.sale_dt ? fmtDay(it.sale_dt) : <span className="faint">—</span> },
+  { key: 'sig', label: 'Последний сигнал', w: 182, ell: true, sort: (it) => it.last_event?.fiscal_dt || '',
+    text: (it) => evLine(it), render: (it) => evLine(it) },
+  { key: 'order', label: 'Заказ WB', w: 204, ell: true, mono: true, sort: (it) => it.order_dt || '',
+    text: (it) => it.last_event?.srid || '',
     render: (it) => it.last_event?.srid || <span className="faint">—</span> },
-  { key: 'cz', label: 'ЧЗ', w: 120, render: (it) => it.cis_status ? <Badge dict={CIS_STATUS} v={it.cis_status} /> : <span className="faint">—</span> },
-  { key: 'upd', label: 'Обновлён', w: 86, mono: true, render: (it) => fmtD(it.updated_at) },
+  { key: 'cz', label: 'ЧЗ', w: 106, render: (it) => it.cis_status ? <Badge dict={CIS_STATUS} v={it.cis_status} /> : <span className="faint">—</span> },
+  { key: 'upd', label: 'Обновлён', w: 88, mono: true, sort: (it) => it.updated_at || '',
+    render: (it) => fmtD(it.updated_at) },
 ]
 
 // ID заказа WB: [префикс.]тело[.n.m]. Тела реальных rid двух видов (фикстура
@@ -1394,6 +1414,9 @@ function Journal({ ctx, initial }) {
   const [stats, setStats] = useState({})
   const [state, setState] = useState(initial || '')
   const [q, setQ] = useState('')
+  const [from, setFrom] = useState('')
+  const [to, setTo] = useState('')
+  const [sort, setSort] = useState({ k: 'upd', d: 'desc' })
   const [syncBusy, setSyncBusy] = useState(false)
   const lastLookup = useRef('')
   useEffect(() => { api(`/v1/journal?limit=1000${state && state !== 'ANOMALY' ? `&state=${encodeURIComponent(state)}` : ''}`)
@@ -1403,11 +1426,25 @@ function Journal({ ctx, initial }) {
   // вставка ID заказа — фильтр по документу (без хвоста '.n.m'): строка с
   // любым суффиксом этого заказа остаётся видимой под открывшейся карточкой
   const qDoc = isOrderId(q) ? qv.replace(/\.\d+\.\d+$/, '') : null
+  // период — по бизнес-дате последнего сигнала (чек WB); строки без сигнала
+  // (например, выведенные только нашим документом) в период не попадают
+  const sigDay = (it) => String(it.last_event?.fiscal_dt || '').slice(0, 10)
   const shown = (rows || []).filter((it) =>
     (state !== 'ANOMALY' || it.state.startsWith('ANOMALY'))
     && (!qv || it.km.toLowerCase().includes(qv) || evLine(it).toLowerCase().includes(qv)
-      || (qDoc && (it.last_event?.srid || '').toLowerCase().startsWith(qDoc))))
-  const anomalies = Object.entries(stats).filter(([k]) => k.startsWith('ANOMALY')).reduce((a, [, v]) => a + v, 0)
+      || (qDoc && (it.last_event?.srid || '').toLowerCase().startsWith(qDoc)))
+    && (!from || (sigDay(it) && sigDay(it) >= from)) && (!to || (sigDay(it) && sigDay(it) <= to)))
+  const keyOf = (JOURNAL_COLUMNS.find((c) => c.key === sort.k)
+    || JOURNAL_COLUMNS.find((c) => c.key === 'upd')).sort
+  const sorted = shown.slice().sort((a, b) => { const ka = keyOf(a), kb = keyOf(b)
+    if (!ka && !kb) return 0
+    if (!ka) return 1                                   // без даты — всегда вниз
+    if (!kb) return -1
+    if (ka === kb) return 0
+    return (sort.d === 'asc' ? 1 : -1) * (ka < kb ? -1 : 1) })
+  const toggleSort = (k) => setSort((s) =>
+    s.k === k ? { k, d: s.d === 'desc' ? 'asc' : 'desc' } : { k, d: 'desc' })
+  const anomalies = anomalyTotal(stats)
   const total = Object.values(stats).reduce((a, v) => a + v, 0)
   const lookupOrder = async (val) => { const rid = val.trim()
     lastLookup.current = rid
@@ -1415,7 +1452,7 @@ function Journal({ ctx, initial }) {
       openDrawer(<>Заказ WB ·&nbsp;<span className="mono"
         style={{ fontSize: 12, color: 'var(--muted)' }}>{r.order_doc}</span></>,
         <OrderCard data={r} ctx={ctx} />)
-    } catch (e) { lastLookup.current = ''; notify('Lookup не удался', e.message, 'bad') } }
+    } catch (e) { lastLookup.current = ''; notify('Поиск заказа не удался', e.message, 'bad') } }
   const onQ = (e) => { const v = e.target.value; setQ(v)
     if (isOrderId(v) && v.trim() !== lastLookup.current) lookupOrder(v) }
   const doSync = () => confirm('Обновить статусы ЧЗ?',
@@ -1444,14 +1481,27 @@ function Journal({ ctx, initial }) {
         <input value={q} placeholder="Поиск по КМ, событию или ID заказа WB…"
           onChange={onQ}
           onKeyDown={(e) => { if (e.key === 'Enter' && isOrderId(q)) lookupOrder(q) }} /></div>
-      <span className="faint" style={{ fontSize: 12 }}>показано <span className="mono">{shown.length}</span>
+      <span className="faint" style={{ fontSize: 12 }} title="Период по дате последнего сигнала WB (чек). Строки без сигнала WB в период не попадают.">сигнал с</span>
+      <input type="date" className="dt" aria-label="Последний сигнал: с" value={from}
+        onChange={(e) => setFrom(e.target.value)} />
+      <span className="faint" style={{ fontSize: 12 }}>по</span>
+      <input type="date" className="dt" aria-label="Последний сигнал: по" value={to}
+        onChange={(e) => setTo(e.target.value)} />
+      {(from || to) && <button className="btn sm" onClick={() => { setFrom(''); setTo('') }}>Сбросить период</button>}
+      <span className="faint" style={{ fontSize: 12, marginLeft: 'auto' }}>показано <span className="mono">{shown.length}</span>
         {isOrderId(q) && <> · Enter — карточка заказа WB</>}</span>
     </div>
     <div className="card">
       <div className="twrap"><table className="t fit">
         <colgroup>{JOURNAL_COLUMNS.map((c) => <col key={c.key} style={c.w ? { width: c.w } : undefined} />)}</colgroup>
-        <thead><tr>{JOURNAL_COLUMNS.map((c) => <th key={c.key}>{c.label}</th>)}</tr></thead>
-        <tbody>{shown.map((it) => { const [lbl] = ITEM_STATES[it.state] || [it.state]
+        <thead><tr>{JOURNAL_COLUMNS.map((c) => <th key={c.key}
+          className={c.sort ? 'sortable' : undefined}
+          aria-sort={c.sort && sort.k === c.key ? (sort.d === 'asc' ? 'ascending' : 'descending') : undefined}
+          tabIndex={c.sort ? 0 : undefined}
+          onClick={c.sort ? () => toggleSort(c.key) : undefined}
+          onKeyDown={c.sort ? (e) => { if (e.key === 'Enter') toggleSort(c.key) } : undefined}>
+          {c.label}{c.sort && sort.k === c.key && <span className="arr">{sort.d === 'asc' ? '▲' : '▼'}</span>}</th>)}</tr></thead>
+        <tbody>{sorted.map((it) => { const [lbl] = ITEM_STATES[it.state] || [it.state]
           const anom = it.state.startsWith('ANOMALY')
           return <tr key={it.km} className={anom ? 'rowhot' : ''} style={{ cursor: 'pointer' }}
             onClick={() => openDrawer(<>КМ · {lbl} ·&nbsp;<span className="mono"
@@ -1803,15 +1853,20 @@ function Trace({ ctx, initial }) {
 }
 
 /* ================= консоль ================= */
-const NAV = [
-  ['overview', 'Обзор', I.pulse],
-  ['withdraw', 'Вывод из оборота', I.swap],
-  ['returns', 'Возвраты', I.back],
-  ['catalog', 'Каталог НК', I.grid],
-  ['refs', 'Справочники', I.book],
-  ['journal', 'Журнал КМ', I.list],
-  ['trace', 'Трассировка', I.clock],
+/* два пространства консоли: оборот/маркетплейсы и нацкаталог — разными
+   специалистами; мосты (трассировка → каталог) остаются прямыми переходами */
+const NAV_SECTIONS = [
+  ['Оборот и маркетплейсы', [
+    ['overview', 'Обзор', I.pulse],
+    ['withdraw', 'Вывод из оборота', I.swap],
+    ['returns', 'Возвраты', I.back],
+    ['journal', 'Журнал КМ', I.list],
+    ['trace', 'Трассировка', I.clock]]],
+  ['Нацкаталог', [
+    ['catalog', 'Каталог НК', I.grid],
+    ['refs', 'Справочники', I.book]]],
 ]
+const NAV = NAV_SECTIONS.flatMap(([, items]) => items)   // плоский: topnav, navCnt
 
 function Console({ me, logout }) {
   const [view, setView] = useState('overview')
@@ -1852,7 +1907,7 @@ function Console({ me, logout }) {
     catalog: pulse ? Object.entries(pulse.batches || {})
       .filter(([k]) => !['published', 'error'].includes(k)).reduce((a, [, v]) => a + v, 0) : 0,
     refs: null,
-    journal: Object.entries(s).filter(([k]) => k.startsWith('ANOMALY')).reduce((a, [, v]) => a + v, 0),
+    journal: anomalyTotal(s),
     trace: null }
   const navBtn = (v) => { const [key, lbl, icon] = NAV.find((x) => x[0] === v)
     return <button key={key} className="nav-item" aria-current={view === key}
@@ -1861,7 +1916,10 @@ function Console({ me, logout }) {
   return <div id="app">
     <aside className="rail">
       <div className="brand"><Mark size={34} /><div><b>МАРКО</b><span>Честный знак · нацкат · WB</span></div></div>
-      <nav className="nav" aria-label="Разделы">{NAV.map((x) => navBtn(x[0]))}</nav>
+      <nav className="nav" aria-label="Разделы">{NAV_SECTIONS.flatMap(([cap, items]) => [
+        <div key={cap} className="nav-cap">{cap}</div>,
+        ...items.map((x) => navBtn(x[0])),
+      ])}</nav>
       <div className="rail-foot">
         <span className="who">оператор · {(me.scopes || []).join(', ')}</span>
         <button onClick={logout}>Выйти из консоли</button>
