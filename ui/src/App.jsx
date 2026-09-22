@@ -1596,8 +1596,9 @@ function Trace({ ctx, initial }) {
       </div>
       {data && (() => {
         // «Путь кода»: этапы из живого среза ЧЗ (live-запрос при загрузке),
-        // ленты WB (кэш кабинета — без сети) и хронологии; пустой этап =
-        // «нет данных», не прячем
+        // ленты WB (кэш кабинета — без сети) и хронологии. Пустой этап не
+        // прячем и не называем просто «нет данных»: empty = почему пусто —
+        // «ещё не произошло» / «в очереди» / «WB не отдаёт ретроспективу»
         const cz = data.cz || {}
         const sale = data.timeline.find((e) => e.kind === 'sale')
         const ret = data.timeline.find((e) => e.kind === 'return')
@@ -1605,17 +1606,29 @@ function Trace({ ctx, initial }) {
         const feed0 = ((wbFeed?.orders?.length ? wbFeed.orders : data.wb_feed?.orders) || [])[0]
         const order0 = data.orders[0]
         const sup0 = data.supplies?.[0]
+        const inCirculation = cz.status === 'introduced' || cz.status === 'in_circulation'
+        // вывод из оборота: наш документ → дата; ЧЗ выбыл → вывод был; иначе
+        // пояснение по состоянию (в очереди нашего вывода / ещё в обороте)
+        let wd = '', wsrc = 'МАРКО', wempty = ''
+        if (lk) wd = lk.created_at
+        else if (cz.status === 'retired' || cz.status === 'written_off') {
+          wsrc = 'ЧЗ'; wempty = cz.status === 'written_off' ? 'списан в ЧЗ' : 'вывел WB'
+        } else if (it?.state === 'PENDING_WITHDRAW') wempty = 'в очереди на вывод'
+        else if (inCirculation) { wsrc = 'ЧЗ'; wempty = 'ещё в обороте' }
         const stages = [
           { label: 'Производство', date: cz.producedDate, src: 'ЧЗ' },
           { label: 'Эмиссия', date: cz.emissionDate, src: 'ЧЗ', extra: cz.emissionType },
           { label: 'Ввод в оборот', date: cz.introducedDate, src: 'ЧЗ' },
-          { label: 'Заказ WB', date: feed0?.createdAt || order0?.order_created_at, src: 'WB' },
+          { label: 'Заказ WB', date: feed0?.createdAt || order0?.order_created_at, src: 'WB',
+            empty: feed0 || order0 ? '' : (sale ? 'старше окна ленты 31 дн' : '') },
           { label: 'Отгрузка на склад WB', date: sup0?.scanDt || sup0?.closedAt,
-            src: 'WB', extra: sup0?.id },
-          { label: 'Выкуп', date: sale?.ts, src: 'WB', extra: feed0?.status === 'buyout' ? 'куплен' : '' },
-          { label: 'Вывод из оборота', date: lk?.created_at || (cz.status === 'retired' ? cz.withdrawDate : ''),
-            src: lk ? 'МАРКО' : 'ЧЗ' },
-          { label: 'Возврат', date: ret?.ts, src: 'WB', extra: feed0?.status?.startsWith('return') ? 'по ленте' : '' },
+            src: 'WB', extra: sup0?.id,
+            empty: (feed0 || order0) ? 'WB не отдаёт состав закрытых поставок' : '' },
+          { label: 'Выкуп', date: sale?.ts, src: 'WB', extra: feed0?.status === 'buyout' ? 'куплен' : '',
+            empty: inCirculation && !sale ? 'ещё не продан' : '' },
+          { label: 'Вывод из оборота', date: wd, src: wsrc, empty: wempty },
+          { label: 'Возврат', date: ret?.ts, src: 'WB', extra: feed0?.status?.startsWith('return') ? 'по ленте' : '',
+            empty: sale && !ret ? 'не было' : '' },
         ]
         return <div className="card" style={{ marginBottom: 22 }}>
           <div className="card-h"><b style={{ fontSize: 12.5 }}>Путь кода</b>
@@ -1627,8 +1640,9 @@ function Trace({ ctx, initial }) {
                 <span style={{ fontSize: 12.5 }}>{st.label}</span>
               </div>
               <div className="mono" style={{ fontSize: 11.5, margin: '3px 0 0 12px' }}>
-                {st.date ? traceDay(st.date) : <span className="faint">нет данных</span>}</div>
-              <div className="faint" style={{ fontSize: 10.5, margin: '1px 0 0 12px', maxWidth: 150, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }} title={st.extra || ''}>
+                {st.date ? traceDay(st.date)
+                  : <span className="faint">{st.empty || 'нет данных'}</span>}</div>
+              <div className="faint" style={{ fontSize: 10.5, margin: '1px 0 0 12px', maxWidth: 170, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }} title={st.extra || ''}>
                 {st.date ? `${st.src}${st.extra ? ' · ' + st.extra : ''}` : ''}</div>
             </div>)}
           </div>
