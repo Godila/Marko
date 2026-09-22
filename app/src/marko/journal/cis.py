@@ -14,6 +14,7 @@ from sqlalchemy.orm import Session
 from marko.connector_mt import manager
 from marko.journal import log_action
 from marko.journal.models import Item
+from marko.journal.state import TRANSLATE_ON_RETIRED
 from marko.mt.models import MtDoc
 
 SUBMITTED = ("submitted", "checked_ok")
@@ -36,7 +37,8 @@ def sync_cis_status(db: Session, kms: list[str] | None = None,
                     client=None, snapshot: bool = False) -> dict:
     """Проверить КИЗ в ЧЗ и обновить журнал; kms=None → все позиции.
 
-    RETIRED + PENDING_WITHDRAW + нет активной претензии → «выведен (WB)»
+    RETIRED + состояние из TRANSLATE_ON_RETIRED (штатные «к выводу» и
+    легаси-аномалии перепродажи) + нет активной претензии → «выведен (WB)»
     с событием cz_retired:{km} (идемпотентно: гвард по состоянию + uq).
     Остальные случаи — только колонки: WITHDRAWN/'us' не перепомечаем (наш
     вывод мог дойти между синками), PENDING_RETURN с retired — норма (код
@@ -69,11 +71,15 @@ def sync_cis_status(db: Session, kms: list[str] | None = None,
         echo = info.get("cis") or e.get("cis") or info.get("requestedCis")
         if echo:
             by_cis[str(echo)] = e
+    pos_map = {k: i for i, k in enumerate(ask)}
+
+    def entry_of(km: str) -> dict:
+        return by_cis.get(km) or infos[pos_map[km]]
+
     claims = active_claims(db)
     now = datetime.now()
-    pos_map = {k: i for i, k in enumerate(ask)}
     for it in items:
-        entry = by_cis.get(it.km) or infos[pos_map[it.km]]
+        entry = entry_of(it.km)
         info = (entry or {}).get("cisInfo") or {}
         status = str(info.get("status") or "").lower()
         if (entry or {}).get("errorMessage") or not status:
@@ -84,15 +90,16 @@ def sync_cis_status(db: Session, kms: list[str] | None = None,
         it.cis_checked_at = now
         res["statuses"][status] = res["statuses"].get(status, 0) + 1
         res["checked"] += 1
-        if (status == "retired" and it.state == "PENDING_WITHDRAW"
+        if (status == "retired" and it.state in TRANSLATE_ON_RETIRED
                 and it.km not in claims):
             # state ДО log_action (паттерн emitter): каждый commit —
-            # консистентный снапшот
+            # консистентный снапшот; from — след, из чего вычистили
+            from_state = it.state
             it.state = "WITHDRAWN"
             it.withdrawn_by = "wb"
             log_action(db, source="cz", source_event_id=f"cz_retired:{it.km}",
                        kind="withdraw", km=it.km, srid="",
-                       payload={"by": "wb_kkt", "via": "cises_info",
+                       payload={"by": "wb_kkt", "via": "cises_info", "from": from_state,
                                 "withdrawReason": info.get("withdrawReason")})
             res["translated"] += 1
             continue
@@ -100,8 +107,8 @@ def sync_cis_status(db: Session, kms: list[str] | None = None,
     if missing:
         # срез по кодам без позиции: только наблюдение, журнал не трогаем
         out = []
-        for i, km in enumerate(missing):
-            entry = by_cis.get(km) or infos[len(known) + i]
+        for km in missing:
+            entry = entry_of(km)
             info = (entry or {}).get("cisInfo") or {}
             status = str(info.get("status") or "").lower()
             if (entry or {}).get("errorMessage"):
@@ -115,7 +122,7 @@ def sync_cis_status(db: Session, kms: list[str] | None = None,
     if snapshot and kms:
         res["cis"] = {}
         for km in ask:
-            entry = by_cis.get(km) or infos[pos_map[km]]
+            entry = entry_of(km)
             if (entry or {}).get("errorMessage"):
                 res["cis"][km] = {"error": str(entry["errorMessage"])[:256]}
             else:

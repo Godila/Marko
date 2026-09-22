@@ -155,6 +155,68 @@ def test_echo_matching_survives_reorder(db, mt):
         and db.get(Item, km2).cis_status == "introduced"
 
 
+def test_legacy_resale_retired_translates(db, mt):
+    """Легаси-строки ANOMALY_RESALE (созданы до 22.09.2026, когда перепродажа
+    считалась аномалией): по построению их последний элемент — продажа, retired
+    без нашей претензии = вывод чеком ККТ WB — авто-перевод «выведен (WB)»."""
+    km = "0104630520676025215CISRS01"
+    _sale(db, km)
+    it = db.get(Item, km)
+    it.state = "ANOMALY_RESALE"; db.commit()     # легаси-строку иначе не создать
+    res = sync_cis_status(db, kms=[km],
+                          client=FakeCz({km: {"cisInfo": {"status": "RETIRED"}}}))
+    assert res["translated"] == 1
+    it = db.get(Item, km)
+    assert it.state == "WITHDRAWN" and it.withdrawn_by == "wb"
+    ev = db.query(Event).filter_by(source="cz", kind="withdraw", km=km).one()
+    assert ev.payload["from"] == "ANOMALY_RESALE"
+    assert sync_cis_status(db, kms=[km], client=FakeCz(
+        {km: {"cisInfo": {"status": "RETIRED"}}}))["translated"] == 0
+
+
+def test_unknown_transition_not_translated(db, mt):
+    """UNKNOWN не авто-переводим: он бывает рождён возвратом (op=2 поверх
+    легаси-RESALE), где retired — ожидаемое «код ждёт возврата в оборот»;
+    авто-перевод молча терял бы обязательство LP_RETURN (ревью, P1)."""
+    km = "0104630520676025215CISUN01"
+    _sale(db, km)
+    it = db.get(Item, km)
+    it.state = "ANOMALY_UNKNOWN_TRANSITION"; db.commit()
+    res = sync_cis_status(db, kms=[km],
+                          client=FakeCz({km: {"cisInfo": {"status": "RETIRED"}}}))
+    assert res["checked"] == 1 and res["translated"] == 0
+    it = db.get(Item, km)
+    assert it.state == "ANOMALY_UNKNOWN_TRANSITION"
+    assert it.cis_status == "retired"           # колонки обновились, состояние нет
+
+
+def test_legacy_resale_with_claim_blocked(db, mt):
+    """Гвард претензий действует и на легаси-аномалии: поданный LK_RECEIPT
+    без закрытого возврата — retired может быть нашим выводом, не WB."""
+    km = "0104630520676025215CIS015"
+    _sale(db, km)
+    withdraw_batch(db, INN)
+    db.query(MtDoc).filter(MtDoc.type == "LK_RECEIPT").one().status = "submitted"
+    it = db.get(Item, km)
+    it.state = "ANOMALY_RESALE"; db.commit()
+    res = sync_cis_status(db, client=FakeCz({km: {"cisInfo": {"status": "RETIRED"}}}))
+    assert res["translated"] == 0
+    assert db.get(Item, km).state == "ANOMALY_RESALE"    # колонки обновились,
+    assert db.get(Item, km).cis_status == "retired"      # состояние — нет
+
+
+def test_return_anomalies_not_translated(db, mt):
+    """Аномалии возврата (NO_RECEIPT/RERETURN) авто-переводом не трогаем:
+    retired там семантически двусмыслен, решение о LP_RETURN — за оператором."""
+    km = "0104630520676025215CIS016"
+    apply_event(db, source="wb_excise", source_event_id=f"ret:{km}", kind="return",
+                km=km, srid="s", payload={"price": 1})   # → ANOMALY_NO_RECEIPT
+    res = sync_cis_status(db, client=FakeCz({km: {"cisInfo": {"status": "RETIRED"}}}))
+    assert res["checked"] == 1 and res["translated"] == 0
+    it = db.get(Item, km)
+    assert it.state == "ANOMALY_NO_RECEIPT" and it.cis_status == "retired"
+
+
 def test_unknown_kms_return_infos_without_items(db, mt):
     """Явные kms с кодами вне журнала: разовый срез ЧЗ без записи позиций —
     проверка «чужого» кода из трассировки (empty-state «Проверить в ЧЗ»)."""

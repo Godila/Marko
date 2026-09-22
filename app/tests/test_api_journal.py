@@ -453,15 +453,24 @@ def test_resolve_no_receipt_feeds_return_batch(db, client):
 
 def test_resolve_withdrawn_sets_source(db, client):
     from marko.journal.models import Item
-    apply_event(db, source="wb_excise", source_event_id="s-1", kind="sale",
-                km=KM, srid="s1", payload={"price": 1})
-    apply_event(db, source="wb_excise", source_event_id="s-2", kind="sale",
-                km=KM, srid="s2", payload={"price": 1})       # → ANOMALY_RESALE
+    _anomaly(db)   # ANOMALY_NO_RECEIPT: sale+sale больше не аномалия (перепродажа возврата)
     r = client.post(f"/v1/journal/{KM}/resolve", headers=AUTH,
                     json={"target": "WITHDRAWN", "note": "уже выведен"})
     assert r.status_code == 200
     it = db.get(Item, KM)
     assert it.state == "WITHDRAWN" and it.withdrawn_by == "wb"
+
+
+def test_resale_flow_never_anomaly(db, client):
+    """Перепродажа возврата сквозь API: повторная продажа не создаёт красной
+    строки — код остаётся «к выводу» со свежим чеком в последнем сигнале."""
+    _sale(db, KM, "s-1")
+    apply_event(db, source="wb_excise", source_event_id="s-2", kind="sale",
+                km=KM, srid="s2", payload={"price": 3479, "fiscal_dt": "2026-09-18"})
+    r = client.get("/v1/journal", headers=AUTH)
+    row = [it for it in r.json() if it["km"] == KM][0]
+    assert row["state"] == "PENDING_WITHDRAW"
+    assert row["last_event"]["fiscal_dt"] == "2026-09-18"
 
 
 # --- lookup заказа WB (маппинг КМ ↔ ID заказа для отладки) ---
@@ -479,6 +488,29 @@ def _wb_order(db, doc=WB_DOC, delivery_type="fbs", nm_id=412477053):
 def _wb_sale(db, km, srid, ev=None):
     apply_event(db, source="wb_excise", source_event_id=ev or f"{srid}:{km}",
                 kind="sale", km=km, srid=srid, payload={"price": 1793, "srid": srid})
+
+
+def test_journal_milestones_enrichment(db, client):
+    # обогащение только у /v1/journal: sale_dt (последняя датированная
+    # продажа из событий) и order_dt (реестр wb.orders по документу заказа);
+    # wb/lookup остаётся на чистом item_row — контракт не расширяется
+    _wb_order(db)
+    _wb_sale(db, KM, f"{WB_DOC}.0.0", ev="m1")           # без fiscal_dt — не победит
+    apply_event(db, source="wb_excise", source_event_id="m2", kind="sale",
+                km=KM, srid=f"{WB_DOC}.1.0",
+                payload={"price": 3479, "fiscal_dt": "2026-09-18"})
+    apply_event(db, source="wb_excise", source_event_id="m3", kind="sale",
+                km=KM, srid=f"{WB_DOC}.2.0",
+                payload={"price": 3100, "fiscal_dt": "2026-09-12"})
+    rows = {it["km"]: it for it in client.get("/v1/journal", headers=AUTH).json()}
+    assert rows[KM]["sale_dt"] == "2026-09-18"           # max по дате чека
+    assert rows[KM]["order_dt"] == "2026-09-11T15:34:06Z"
+    # строка без продаж и без реестра: ключи присутствуют, значения пустые
+    apply_event(db, source="wb_excise", source_event_id="m4", kind="return",
+                km="0104630520676025215TEST777", srid="eX.abc", payload={"price": 1})
+    rows = {it["km"]: it for it in client.get("/v1/journal", headers=AUTH).json()}
+    assert rows["0104630520676025215TEST777"]["sale_dt"] == ""
+    assert rows["0104630520676025215TEST777"]["order_dt"] == ""
 
 
 def test_wb_lookup_found_tail_mismatch(db, client):

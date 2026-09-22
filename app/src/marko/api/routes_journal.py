@@ -15,6 +15,7 @@ from marko.connector_wb.models import WbReturn
 from marko.connector_wb.returns import _parse_iso, run_returns_once
 from marko.emitter.batch import lk_receipts, return_batch, to_csv, withdraw_batch
 from marko.journal import item_row, log_action
+from marko.journal.milestones import enrich
 from marko.journal.lookup import order_lookup
 from marko.journal.models import Item
 from marko.mt.models import MtDoc
@@ -83,8 +84,10 @@ def journal_list(
     q = db.query(Item)
     if state:
         q = q.filter_by(state=state)
-    return [item_row(it)
+    rows = [item_row(it)
             for it in q.order_by(Item.updated_at.desc()).limit(limit).all()]
+    # даты-вехи (выкуп/заказ WB) — только в списке журнала, bulk-запросами
+    return enrich(db, rows)
 
 
 @router.get("/wb/lookup")
