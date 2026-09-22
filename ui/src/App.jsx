@@ -1487,7 +1487,7 @@ function Trace({ ctx, initial }) {
   const [feedBusy, setFeedBusy] = useState(false)
   const run = async (val, keepWb = false) => { const km = (val ?? q).trim()
     if (!km) return
-    setBusy(true); setUnknownCz(null)
+    setBusy(true); setUnknownCz(null); setTab('hist')
     if (!keepWb) { setWbMeta(null); setWbFeed(null) }
     try { setData(await api(`/v1/trace?km=${encodeURIComponent(km)}&live=1`)) }
     catch (e) { setData(null); notify('Трассировка не удалась', e.message, 'bad') }
@@ -1545,6 +1545,7 @@ function Trace({ ctx, initial }) {
           <pre>{JSON.stringify(full?.payload ?? d, null, 2)}</pre></details></div>) }
   const it = data?.item
   const name = data?.item?.cis_product_name || data?.card?.name || ''
+  const [tab, setTab] = useState('hist')
   return <>
     <Head title="Трассировка кода маркировки" sub="Жизненный цикл одного КМ: путь от производства и эмиссии до выкупа и возврата. При поиске код проверяется в Честном знаке живьём; телеметрия WB — кнопками."
       tools={<Sync tick={ctx.tick} />} />
@@ -1557,29 +1558,28 @@ function Trace({ ctx, initial }) {
       <span className="faint" style={{ fontSize: 12 }}>{busy ? 'ищем…' : 'Enter — тоже'}</span>
     </div>
     {data && <>
-      <div className="card" style={{ marginBottom: 22 }}>
+      <div className="card" style={{ marginBottom: 18 }}>
         <div className="card-h"><b style={{ fontSize: 12.5 }}>{data.km === data.input.trim() ? 'Код' : 'Код (нормализован)'}</b>
-          <span className="hint">событий: {data.counts.events}</span></div>
+          <span className="hint">{it?.cis_checked_at ? `Честный знак проверен ${fmtD(it.cis_checked_at)}` : `событий: ${data.counts.events}`}</span></div>
         <div className="card-b">
-          <div style={{ display: 'flex', gap: 10, flexWrap: 'wrap', alignItems: 'center', marginBottom: 12 }}>
+          <div style={{ display: 'flex', gap: 10, flexWrap: 'wrap', alignItems: 'center' }}>
             <KmCell km={data.km} />
             {it && <Badge dict={ITEM_STATES} v={it.state} />}
             {it?.withdrawn_by === 'wb' && <span className="bdg grey">вывел WB</span>}
-            {it?.cis_status ? <Badge dict={CIS_STATUS} v={it.cis_status} /> : <span className="faint">ЧЗ: не проверялся</span>}
+            {it?.cis_status ? <Badge dict={CIS_STATUS} v={it.cis_status} />
+              : <span className="faint" style={{ fontSize: 12 }}>ЧЗ не проверялся</span>}
             {unknownCz && !it && (unknownCz.status
               ? <Badge dict={CIS_STATUS} v={unknownCz.status} />
               : <span className="bdg grey">{unknownCz.error || 'нет данных ЧЗ'}</span>)}
           </div>
-          <div className="twrap"><table className="t small"><tbody>
-            <tr><td className="faint" style={{ width: '40%' }}>Наименование</td>
-              <td>{name || <span className="faint">—</span>}</td></tr>
-            <tr><td className="faint">GTIN</td><td className="mono">{data.gtin}</td></tr>
-            {data.card && <tr><td className="faint">Карточка НК</td>
-              <td>{data.card.article} · {data.card.name} <Badge dict={CARD_STATUS} v={data.card.status} /></td></tr>}
-            {it?.cis_checked_at && <tr><td className="faint">Проверен в ЧЗ</td>
-              <td className="mono">{fmtD(it.cis_checked_at)}</td></tr>}
-            {it && <tr><td className="faint">Последний сигнал</td><td>{evLine(it)}</td></tr>}
-          </tbody></table></div>
+          {name && <div style={{ marginTop: 8, fontSize: 13.5, fontWeight: 600 }}>
+            {name} <span className="mono faint" style={{ fontSize: 11, fontWeight: 400 }}>GTIN {data.gtin}</span></div>}
+          {data.card && <div className="faint" style={{ fontSize: 12, marginTop: 2 }}>
+            Карточка НК: {data.card.article} · {data.card.name} <Badge dict={CARD_STATUS} v={data.card.status} /></div>}
+          {!data.found && <div className="empty" style={{ marginTop: 10 }}>
+            <b>Код не наблюдается контуром МАРКО</b>
+            Продаж и возвратов по нему через наш FBS не было — код другой партии или кабинета. Проверку в Честном знаке кнопка ниже выполняет и для таких кодов.
+          </div>}
           <div className="row" style={{ gap: 8, marginTop: 12, flexWrap: 'wrap' }}>
             <button className="btn" disabled={czBusy} onClick={checkCis}>Проверить в ЧЗ</button>
             <button className="btn" disabled={feedBusy || !data.timeline.some((e) => e.srid)}
@@ -1588,17 +1588,12 @@ function Trace({ ctx, initial }) {
               title={data.orders.length || data.returns.some((r) => r.order_id > 0) ? '' : 'по событиям кода нет известных номеров сборочных заданий'} onClick={fetchWbMeta}>Закрепления sgtin WB</button>
             {data.card && <button className="btn" onClick={() => go('catalog')}>Открыть каталог НК</button>}
           </div>
-          {!data.found && <div className="empty" style={{ marginTop: 12 }}>
-            <b>Код не наблюдается контуром МАРКО</b>
-            Продаж и возвратов по нему через наш FBS не было — код другой партии или кабинета. Проверку в Честном знаке кнопка выше выполняет и для таких кодов.
-          </div>}
         </div>
       </div>
-      {data && (() => {
-        // «Путь кода»: этапы из живого среза ЧЗ (live-запрос при загрузке),
-        // ленты WB (кэш кабинета — без сети) и хронологии. Пустой этап не
-        // прячем и не называем просто «нет данных»: empty = почему пусто —
-        // «ещё не произошло» / «в очереди» / «WB не отдаёт ретроспективу»
+      {(() => {
+        // «Путь кода» — рельса: фаза = участок системы (mono-eyebrow), точка =
+        // состояние этапа. done — факт (дата), wait — требует нашего действия,
+        // todo — ещё не произошло, na — ретроспективно недоступно (WB)
         const cz = data.cz || {}
         const sale = data.timeline.find((e) => e.kind === 'sale')
         const ret = data.timeline.find((e) => e.kind === 'return')
@@ -1607,184 +1602,198 @@ function Trace({ ctx, initial }) {
         const order0 = data.orders[0]
         const sup0 = data.supplies?.[0]
         const inCirculation = cz.status === 'introduced' || cz.status === 'in_circulation'
-        // вывод из оборота: наш документ → дата; ЧЗ выбыл → вывод был; иначе
-        // пояснение по состоянию (в очереди нашего вывода / ещё в обороте)
-        let wd = '', wsrc = 'МАРКО', wempty = ''
+        const hasOrder = !!(feed0 || order0)
+        let wd = null, wState = 'todo', wNote = ''
         if (lk) wd = lk.created_at
-        else if (cz.status === 'retired' || cz.status === 'written_off') {
-          wsrc = 'ЧЗ'; wempty = cz.status === 'written_off' ? 'списан в ЧЗ' : 'вывел WB'
-        } else if (it?.state === 'PENDING_WITHDRAW') wempty = 'в очереди на вывод'
-        else if (inCirculation) { wsrc = 'ЧЗ'; wempty = 'ещё в обороте' }
-        const stages = [
-          { label: 'Производство', date: cz.producedDate, src: 'ЧЗ' },
-          { label: 'Эмиссия', date: cz.emissionDate, src: 'ЧЗ', extra: cz.emissionType },
-          { label: 'Ввод в оборот', date: cz.introducedDate, src: 'ЧЗ' },
-          { label: 'Заказ WB', date: feed0?.createdAt || order0?.order_created_at, src: 'WB',
-            empty: feed0 || order0 ? '' : (sale ? 'старше окна ленты 31 дн' : '') },
-          { label: 'Отгрузка на склад WB', date: sup0?.scanDt || sup0?.closedAt,
-            src: 'WB', extra: sup0?.id,
-            empty: (feed0 || order0) ? 'WB не отдаёт состав закрытых поставок' : '' },
-          { label: 'Выкуп', date: sale?.ts, src: 'WB', extra: feed0?.status === 'buyout' ? 'куплен' : '',
-            empty: inCirculation && !sale ? 'ещё не продан' : '' },
-          { label: 'Вывод из оборота', date: wd, src: wsrc, empty: wempty },
-          { label: 'Возврат', date: ret?.ts, src: 'WB', extra: feed0?.status?.startsWith('return') ? 'по ленте' : '',
-            empty: sale && !ret ? 'не было' : '' },
+        else if (cz.status === 'retired' || cz.status === 'written_off')
+          wNote = cz.status === 'written_off' ? 'списан в ЧЗ' : 'вывел WB'
+        else if (it?.state === 'PENDING_WITHDRAW') { wState = 'wait'; wNote = 'в очереди на вывод' }
+        else if (inCirculation) wNote = 'ещё в обороте'
+        const phases = [
+          { cap: 'Честный знак', steps: [
+            { label: 'Произведён', date: cz.producedDate },
+            { label: 'Эмиссия', date: cz.emissionDate, note: cz.emissionType || '' },
+            { label: 'Ввод в оборот', date: cz.introducedDate },
+          ].map((s) => ({ ...s, state: s.date ? 'done' : 'todo',
+            note: s.date ? (cz.error ? '' : s.note) : (cz.error ? 'срез недоступен' : '') })) },
+          { cap: 'Wildberries', steps: [
+            { label: 'Заказ оформлен', date: feed0?.createdAt || order0?.order_created_at,
+              note: '', todo: hasOrder || !sale ? '' : 'старше окна ленты 31 дн' },
+            { label: 'Отгрузка на склад', date: sup0?.scanDt || sup0?.closedAt, note: sup0?.id || '',
+              na: hasOrder && !sup0, todoNote: hasOrder ? 'WB не отдаёт состав закрытых поставок' : '' },
+            { label: 'Выкуп', date: sale?.ts, note: feed0?.status === 'buyout' ? 'куплен' : '',
+              todoNote: inCirculation && !sale ? 'ещё не продан' : '' },
+            { label: 'Возврат', date: ret?.ts, note: feed0?.status?.startsWith('return') ? 'по ленте' : '',
+              todoNote: sale && !ret ? 'не было' : '' },
+          ].map((s) => ({ ...s,
+            state: s.date ? 'done' : (s.na ? 'na' : 'todo'),
+            note: s.date ? s.note : (s.todoNote || s.note || '') })) },
+          { cap: 'После продажи', steps: [
+            { label: 'Вывод из оборота', date: wd, state: wd ? 'done' : wState,
+              note: wd ? (lk ? 'наш документ' : '') : wNote },
+          ] },
         ]
-        return <div className="card" style={{ marginBottom: 22 }}>
+        return <div className="card" style={{ marginBottom: 18 }}>
           <div className="card-h"><b style={{ fontSize: 12.5 }}>Путь кода</b>
-            <span className="hint">{cz.error ? 'срез ЧЗ недоступен' : 'живой срез Честного знака + WB + журнал'}</span></div>
-          <div className="card-b" style={{ display: 'flex', gap: 18, flexWrap: 'wrap', rowGap: 14 }}>
-            {stages.map((st) => <div key={st.label} style={{ flex: '0 1 auto', minWidth: 128 }}>
-              <div style={{ display: 'flex', gap: 6, alignItems: 'center' }}>
-                <span className="dotsep" style={{ background: st.date ? 'var(--info)' : 'var(--line-strong)', marginTop: 0 }} />
-                <span style={{ fontSize: 12.5 }}>{st.label}</span>
-              </div>
-              <div className="mono" style={{ fontSize: 11.5, margin: '3px 0 0 12px' }}>
-                {st.date ? traceDay(st.date)
-                  : <span className="faint">{st.empty || 'нет данных'}</span>}</div>
-              <div className="faint" style={{ fontSize: 10.5, margin: '1px 0 0 12px', maxWidth: 170, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }} title={st.extra || ''}>
-                {st.date ? `${st.src}${st.extra ? ' · ' + st.extra : ''}` : ''}</div>
-            </div>)}
+            <span className="hint">{cz.error ? 'срез Честного знака недоступен' : 'живой срез Честного знака + WB + журнал'}</span></div>
+          <div className="card-b">
+            <div className="path">
+              {phases.map((ph) => <div key={ph.cap} className="path-ph">
+                <div className="path-cap">{ph.cap}</div>
+                <div className="path-rail">
+                  {ph.steps.map((st) => <div key={st.label} className={`path-st ${st.state}`} title={st.note}>
+                    <span className="path-dot" />
+                    <div className="path-lbl">{st.label}</div>
+                    <div className="path-val">{st.date ? traceDay(st.date)
+                      : <span className="faint">{st.state === 'todo' && !st.note ? '—' : ''}</span>}</div>
+                    {st.note && <div className="path-note">{st.note}</div>}
+                  </div>)}
+                </div>
+              </div>)}
+            </div>
           </div>
         </div>
       })()}
-      {data.cz && !data.cz.error && <div className="card" style={{ marginBottom: 22 }}>
-        <div className="card-h"><b style={{ fontSize: 12.5 }}>Честный знак · полный срез</b>
-          <span className="hint">cises/info · {it?.cis_checked_at ? `проверен ${fmtD(it.cis_checked_at)}` : 'живой запрос'}</span></div>
-        <div className="card-b"><div className="twrap"><table className="t small"><tbody>
-          <tr><td className="faint" style={{ width: '40%' }}>Статус КИ</td>
-            <td>{data.cz.status ? <Badge dict={CIS_STATUS} v={data.cz.status} /> : '—'}</td></tr>
-          {CZ_FIELDS.map(([k, lbl]) => data.cz[k] ? <tr key={k}>
-            <td className="faint">{lbl}</td>
-            <td className={['emissionDate', 'applicationDate', 'producedDate', 'introducedDate'].includes(k) ? 'mono' : undefined}>
-              {['emissionDate', 'applicationDate', 'producedDate', 'introducedDate'].includes(k) ? fmtD(data.cz[k]) : String(data.cz[k])}</td>
-          </tr> : null)}
-          {(data.cz.certDoc || []).map((c, i) => <tr key={`cert${i}`}>
-            <td className="faint">{i ? '' : 'Декларация'}</td>
-            <td className="mono" style={{ wordBreak: 'break-all' }}>
-              {c.number}{c.date ? ` · ${fmtDay(c.date)}` : ''}</td></tr>)}
-        </tbody></table></div>
-          <details style={{ marginTop: 8 }}>
-            <summary style={{ fontSize: 12, color: 'var(--muted)', cursor: 'pointer' }}>Сырой срез ЧЗ</summary>
-            <pre>{JSON.stringify(data.cz, null, 2)}</pre></details>
-        </div>
-      </div>}
-      {(() => { const feed = wbFeed || data.wb_feed
-        return feed ? <div className="card" style={{ marginBottom: 22 }}>
-        <div className="card-h"><b style={{ fontSize: 12.5 }}>Заказ WB · лента телеметрии</b>
-          <span className="hint">{wbFeed ? 'live' : 'кэш кабинета'} · {feed.fetched_at ? fmtD(feed.fetched_at) : ''}</span></div>
-        <div className="card-b">
-          {feed.note ? <p style={{ fontSize: 12.5, color: 'var(--muted)', margin: 0 }}>{feed.note}</p>
-            : feed.orders.length ? feed.orders.map((o) => <div key={o.srid} style={{ marginBottom: 10 }}>
-              <div style={{ display: 'flex', gap: 8, alignItems: 'baseline', flexWrap: 'wrap', marginBottom: 4 }}>
-                <span className="km" style={{ fontSize: 11 }}>{o.srid}</span>
-                <Badge dict={WF_STATUS} v={o.status} />
-                {o.cancelType && <span className="faint" style={{ fontSize: 12 }}>{WF_CANCEL[o.cancelType] || o.cancelType}</span>}
-              </div>
-              <div className="twrap"><table className="t small"><tbody>
-                <tr><td className="faint" style={{ width: '40%' }}>Создан</td><td className="mono">{o.createdAt ? fmtD(o.createdAt) : '—'}</td></tr>
-                <tr><td className="faint">Обновлён</td><td className="mono">{o.updatedAt ? fmtD(o.updatedAt) : '—'}</td></tr>
-                <tr><td className="faint">Склад</td>
-                  <td>{o.warehouseName || '—'} · {o.isMp ? 'склад продавца' : 'склад WB'}</td></tr>
-                <tr><td className="faint">Доставка</td>
-                  <td>{[o.destinationCity, o.destinationDistrict].filter(Boolean).join(', ') || '—'}</td></tr>
-                <tr><td className="faint">Цена продавца</td><td>{o.sellerPrice != null ? rub(o.sellerPrice) : '—'}{o.isB2b ? ' · B2B' : ''}</td></tr>
-              </tbody></table></div>
-            </div>)
-              : <p style={{ fontSize: 12.5, color: 'var(--muted)', margin: 0 }}>
-                Заказы этого кода в ленте не найдены — окно выгрузки 31 день, более старые заказы WB не отдаёт.</p>}
-        </div>
-      </div> : null })()}
-      {data.supplies?.length > 0 && <div className="card" style={{ marginBottom: 22 }}>
-        <div className="card-h"><b style={{ fontSize: 12.5 }}>Поставка WB · отгрузка</b>
-          <span className="hint">этап приёмки на складе WB</span></div>
-        <div className="card-b">{data.supplies.map((s) => <div key={s.id} style={{ marginBottom: 8 }}>
-          <span className="mono" style={{ fontSize: 12 }}>{s.id}</span>
-          {s.name && <span className="faint" style={{ fontSize: 12 }}> · {s.name}</span>}
-          <div className="twrap" style={{ marginTop: 4 }}><table className="t small"><tbody>
-            <tr><td className="faint" style={{ width: '40%' }}>Создана</td><td className="mono">{s.createdAt ? fmtD(s.createdAt) : '—'}</td></tr>
-            <tr><td className="faint">Закрыта</td><td className="mono">{s.closedAt ? fmtD(s.closedAt) : '—'}</td></tr>
-            <tr><td className="faint">Просканирована на складе WB</td>
-              <td className="mono">{s.scanDt ? fmtD(s.scanDt) : '—'}</td></tr>
-            {s.rejectDt && <tr><td className="faint">Отклонена</td><td className="mono">{fmtD(s.rejectDt)}</td></tr>}
-          </tbody></table></div>
-        </div>)}</div>
-      </div>}
-      {wbMeta && <div className="card" style={{ marginBottom: 22 }}>
-        <div className="card-h"><b style={{ fontSize: 12.5 }}>Закрепления на WB</b>
-          <span className="hint">live · {wbMeta.fetched_at ? fmtD(wbMeta.fetched_at) : ''}</span></div>
-        <div className="card-b">
-          {wbMeta.note ? <p style={{ fontSize: 12.5, color: 'var(--muted)', margin: 0 }}>{wbMeta.note}</p>
-            : wbMeta.orders.map((o) => <div key={o.id} style={{ marginBottom: 10 }}>
-              <span className="mono" style={{ fontSize: 12 }}>заказ {o.id}</span>
-              {!o.sgtins.length && <span className="faint" style={{ fontSize: 12 }}> — кодов не закреплено</span>}
-              {o.sgtins.map((s, i) => <div key={i} style={{ display: 'flex', gap: 8, alignItems: 'baseline', flexWrap: 'wrap', marginTop: 2 }}>
-                <span className="km" style={{ fontSize: 11 }}>{s.sgtin || '—'}</span>
-                <span>{SGTIN_DECISION[s.decision] || <span className="mono" style={{ fontSize: 12 }}>{s.decision || '—'}</span>}</span>
-                {s.sgtin && s.sgtin.startsWith(data.km) && <span className="bdg blue">этот код</span>}
-              </div>)}
-            </div>)}
-        </div>
-      </div>}
-      <div className="card" style={{ marginBottom: 22 }}>
-        <div className="card-h"><b style={{ fontSize: 12.5 }}>Хронология</b>
-          <span className="hint">клик по строке — сырые данные события</span></div>
-        {data.timeline.length ? <ul className="feed">
-          {data.timeline.map((e) => <li key={e.id} tabIndex={0} style={{ cursor: 'pointer' }}
-            onClick={() => evDrawer(e)}
-            onKeyDown={(ev2) => { if (ev2.key === 'Enter') evDrawer(e) }}>
-            <time>{fmtDay(e.ts)}</time>
-            <span className="dotsep" style={{ background: TRACE_DOT[e.kind] || 'var(--line-strong)' }} />
-            <div style={{ flex: 1, minWidth: 0 }}>
-              <div style={{ display: 'flex', gap: 8, alignItems: 'baseline', flexWrap: 'wrap' }}>
-                <Badge dict={TRACE_SYSTEMS} v={e.system} />
-                <span>{e.title}</span>
-              </div>
-              {e.detail && <div className="sm" style={{ color: 'var(--muted)', marginTop: 2 }}>{e.detail}</div>}
-              {e.observed && e.observed.slice(0, 10) !== String(e.ts).slice(0, 10) &&
-                <div className="sm faint" style={{ fontSize: 10.5, marginTop: 1 }}>наблюдено платформой {fmtDay(e.observed)}</div>}
-            </div>
-          </li>)}
-        </ul> : <div className="empty"><b>Событий нет</b>Код не встречался ни в одном контуре платформы.</div>}
-      </div>
-      {data.docs.length > 0 && <div className="card" style={{ marginBottom: 22 }}>
-        <div className="card-h"><b style={{ fontSize: 12.5 }}>Документы ЧЗ ({data.docs.length})</b>
-          <span className="hint">клик — позиции и uuid</span></div>
-        <div className="twrap"><table className="t small fit">
-          <colgroup><col style={{ width: 90 }} /><col style={{ width: 150 }} /><col style={{ width: 130 }} /><col style={{ width: 120 }} /></colgroup>
-          <thead><tr><th>№</th><th>Тип</th><th>Статус</th><th>Создан</th></tr></thead>
-          <tbody>{data.docs.map((d) => <tr key={d.id} style={{ cursor: 'pointer' }} onClick={() => docDrawer(d)}>
-            <td className="mono">№{d.id}</td>
-            <td className="mono ell" title={d.type}>{d.type}</td>
-            <td><Badge dict={DOC_STATUS} v={d.status} /></td>
-            <td className="mono">{fmtD(d.created_at)}</td>
-          </tr>)}</tbody></table></div>
-      </div>}
-      {(data.orders.length > 0 || data.returns.length > 0) && <div className="card">
-        <div className="card-h"><b style={{ fontSize: 12.5 }}>Wildberries</b></div>
-        {data.orders.length > 0 && <><b style={{ fontSize: 12.5 }}>Заказы ({data.orders.length})</b>
-          <div className="twrap" style={{ margin: '6px 0 14px' }}><table className="t small fit">
-            <colgroup><col style={{ width: 278 }} /><col style={{ width: 130 }} /><col style={{ width: 90 }} /><col style={{ width: 110 }} /><col style={{ width: 150 }} /></colgroup>
-            <thead><tr><th>Документ</th><th>ID задания</th><th>Тип</th><th>nm_id</th><th>Создан</th></tr></thead>
-            <tbody>{data.orders.map((o) => <tr key={o.order_doc}>
-              <td className="mono ell" title={o.order_doc}>{o.order_doc}</td>
-              <td className="mono">{o.order_id ?? '—'}</td>
-              <td>{WB_DELIVERY[o.delivery_type] || o.delivery_type || '—'}</td>
-              <td className="mono">{o.nm_id ?? '—'}</td>
-              <td className="mono">{o.order_created_at ? fmtDay(o.order_created_at) : '—'}</td>
-            </tr>)}</tbody></table></div></>}
-        {data.returns.length > 0 && <><b style={{ fontSize: 12.5 }}>Возвраты на ПВЗ ({data.returns.length})</b>
-          <div className="twrap" style={{ margin: '6px 0 0' }}><table className="t small fit">
-            <colgroup><col style={{ width: 278 }} /><col style={{ width: 130 }} /><col style={{ width: 190 }} /><col style={{ width: 140 }} /><col style={{ width: 110 }} /></colgroup>
-            <thead><tr><th>Возврат (srid)</th><th>ID задания</th><th>Статус</th><th>Причина</th><th>Дедлайн</th></tr></thead>
-            <tbody>{data.returns.map((r) => <tr key={r.srid}>
-              <td className="mono ell" title={r.srid}>{r.srid}</td>
-              <td className="mono">{r.order_id || '—'}</td>
-              <td className="ell" title={`${r.status || ''}${r.is_active ? '' : ' · завершён'}`}>{r.status || '—'}</td>
-              <td className="ell" title={r.reason || ''}>{r.reason || '—'}</td>
-              <td className="mono">{r.expired_dt ? fmtDay(r.expired_dt) : '—'}</td>
-            </tr>)}</tbody></table></div></>}
-      </div>}
+      {(() => {
+        // детали — по табам: хронология всегда, остальное — когда есть что
+        // показывать (пустой таб не появляется)
+        const feed = wbFeed || data.wb_feed
+        const hasWb = !!(feed || (data.supplies || []).length
+          || data.orders.length || data.returns.length || wbMeta)
+        const tabs = [
+          ['hist', `Хронология${data.counts.events ? ` · ${data.counts.events}` : ''}`],
+          ...(hasWb ? [['wb', 'Wildberries']] : []),
+          ...(data.docs.length ? [['docs', `Документы ЧЗ · ${data.docs.length}`]] : []),
+          ...((data.cz && !data.cz.error) ? [['cz', 'Срез ЧЗ']] : []),
+        ]
+        return <>
+          <div className="chiprow" style={{ marginBottom: 12 }}>
+            {tabs.map(([k, lbl]) => <button key={k} className="chip"
+              aria-pressed={tab === k} onClick={() => setTab(k)}>{lbl}</button>)}
+          </div>
+          {tab === 'hist' && <div className="card">
+            {data.timeline.length ? <ul className="feed">
+              {data.timeline.map((e) => <li key={e.id} tabIndex={0} style={{ cursor: 'pointer' }}
+                onClick={() => evDrawer(e)}
+                onKeyDown={(ev2) => { if (ev2.key === 'Enter') evDrawer(e) }}>
+                <time>{fmtDay(e.ts)}</time>
+                <span className="dotsep" style={{ background: TRACE_DOT[e.kind] || 'var(--line-strong)' }} />
+                <div style={{ flex: 1, minWidth: 0 }}>
+                  <div style={{ display: 'flex', gap: 8, alignItems: 'baseline', flexWrap: 'wrap' }}>
+                    <Badge dict={TRACE_SYSTEMS} v={e.system} />
+                    <span>{e.title}</span>
+                  </div>
+                  {e.detail && <div className="sm" style={{ color: 'var(--muted)', marginTop: 2 }}>{e.detail}</div>}
+                  {e.observed && e.observed.slice(0, 10) !== String(e.ts).slice(0, 10) &&
+                    <div className="sm faint" style={{ fontSize: 10.5, marginTop: 1 }}>наблюдено платформой {fmtDay(e.observed)}</div>}
+                </div>
+              </li>)}
+            </ul> : <div className="empty"><b>Событий нет</b>Код не встречался ни в одном контуре платформы.</div>}
+          </div>}
+          {tab === 'wb' && <div className="card"><div className="card-b">
+            {feed && <><b style={{ fontSize: 12.5 }}>Заказ · лента телеметрии</b>
+              <span className="hint" style={{ marginLeft: 8 }}>{wbFeed ? 'live' : 'кэш кабинета'}{feed.fetched_at ? ` · ${fmtD(feed.fetched_at)}` : ''}</span>
+              <div style={{ marginTop: 6, marginBottom: 16 }}>
+                {feed.note ? <p style={{ fontSize: 12.5, color: 'var(--muted)', margin: 0 }}>{feed.note}</p>
+                  : feed.orders.length ? feed.orders.map((o) => <div key={o.srid} style={{ marginBottom: 10 }}>
+                    <div style={{ display: 'flex', gap: 8, alignItems: 'baseline', flexWrap: 'wrap', marginBottom: 4 }}>
+                      <span className="km" style={{ fontSize: 11 }}>{o.srid}</span>
+                      <Badge dict={WF_STATUS} v={o.status} />
+                      {o.cancelType && <span className="faint" style={{ fontSize: 12 }}>{WF_CANCEL[o.cancelType] || o.cancelType}</span>}
+                    </div>
+                    <div className="twrap"><table className="t small"><tbody>
+                      <tr><td className="faint" style={{ width: '40%' }}>Создан</td><td className="mono">{o.createdAt ? fmtD(o.createdAt) : '—'}</td></tr>
+                      <tr><td className="faint">Обновлён</td><td className="mono">{o.updatedAt ? fmtD(o.updatedAt) : '—'}</td></tr>
+                      <tr><td className="faint">Склад</td>
+                        <td>{o.warehouseName || '—'} · {o.isMp ? 'склад продавца' : 'склад WB'}</td></tr>
+                      <tr><td className="faint">Доставка</td>
+                        <td>{[o.destinationCity, o.destinationDistrict].filter(Boolean).join(', ') || '—'}</td></tr>
+                      <tr><td className="faint">Цена продавца</td><td>{o.sellerPrice != null ? rub(o.sellerPrice) : '—'}{o.isB2b ? ' · B2B' : ''}</td></tr>
+                    </tbody></table></div>
+                  </div>)
+                    : <p style={{ fontSize: 12.5, color: 'var(--muted)', margin: 0 }}>
+                      Заказы этого кода в ленте не найдены — окно выгрузки 31 день, более старые заказы WB не отдаёт.</p>}
+              </div></>}
+            {wbMeta && <><b style={{ fontSize: 12.5 }}>Закрепления sgtin</b>
+              <span className="hint" style={{ marginLeft: 8 }}>live{wbMeta.fetched_at ? ` · ${fmtD(wbMeta.fetched_at)}` : ''}</span>
+              <div style={{ margin: '6px 0 16px' }}>
+                {wbMeta.note ? <p style={{ fontSize: 12.5, color: 'var(--muted)', margin: 0 }}>{wbMeta.note}</p>
+                  : wbMeta.orders.map((o) => <div key={o.id} style={{ marginBottom: 10 }}>
+                    <span className="mono" style={{ fontSize: 12 }}>заказ {o.id}</span>
+                    {!o.sgtins.length && <span className="faint" style={{ fontSize: 12 }}> — кодов не закреплено</span>}
+                    {o.sgtins.map((s, i) => <div key={i} style={{ display: 'flex', gap: 8, alignItems: 'baseline', flexWrap: 'wrap', marginTop: 2 }}>
+                      <span className="km" style={{ fontSize: 11 }}>{s.sgtin || '—'}</span>
+                      <span>{SGTIN_DECISION[s.decision] || <span className="mono" style={{ fontSize: 12 }}>{s.decision || '—'}</span>}</span>
+                      {s.sgtin && s.sgtin.startsWith(data.km) && <span className="bdg blue">этот код</span>}
+                    </div>)}
+                  </div>)}
+              </div></>}
+            {(data.supplies || []).length > 0 && <><b style={{ fontSize: 12.5 }}>Поставка · отгрузка</b>
+              <div style={{ margin: '6px 0 16px' }}>{data.supplies.map((s) => <div key={s.id} style={{ marginBottom: 8 }}>
+                <span className="mono" style={{ fontSize: 12 }}>{s.id}</span>
+                {s.name && <span className="faint" style={{ fontSize: 12 }}> · {s.name}</span>}
+                <div className="twrap" style={{ marginTop: 4 }}><table className="t small"><tbody>
+                  <tr><td className="faint" style={{ width: '40%' }}>Создана</td><td className="mono">{s.createdAt ? fmtD(s.createdAt) : '—'}</td></tr>
+                  <tr><td className="faint">Закрыта</td><td className="mono">{s.closedAt ? fmtD(s.closedAt) : '—'}</td></tr>
+                  <tr><td className="faint">Просканирована на складе WB</td>
+                    <td className="mono">{s.scanDt ? fmtD(s.scanDt) : '—'}</td></tr>
+                  {s.rejectDt && <tr><td className="faint">Отклонена</td><td className="mono">{fmtD(s.rejectDt)}</td></tr>}
+                </tbody></table></div>
+              </div>)}</div></>}
+            {data.orders.length > 0 && <><b style={{ fontSize: 12.5 }}>Реестр заказов ({data.orders.length})</b>
+              <div className="twrap" style={{ margin: '6px 0 16px' }}><table className="t small fit">
+                <colgroup><col style={{ width: 278 }} /><col style={{ width: 130 }} /><col style={{ width: 90 }} /><col style={{ width: 110 }} /><col style={{ width: 150 }} /></colgroup>
+                <thead><tr><th>Документ</th><th>ID задания</th><th>Тип</th><th>nm_id</th><th>Создан</th></tr></thead>
+                <tbody>{data.orders.map((o) => <tr key={o.order_doc}>
+                  <td className="mono ell" title={o.order_doc}>{o.order_doc}</td>
+                  <td className="mono">{o.order_id ?? '—'}</td>
+                  <td>{WB_DELIVERY[o.delivery_type] || o.delivery_type || '—'}</td>
+                  <td className="mono">{o.nm_id ?? '—'}</td>
+                  <td className="mono">{o.order_created_at ? fmtDay(o.order_created_at) : '—'}</td>
+                </tr>)}</tbody></table></div></>}
+            {data.returns.length > 0 && <><b style={{ fontSize: 12.5 }}>Возвраты на ПВЗ ({data.returns.length})</b>
+              <div className="twrap" style={{ margin: '6px 0 0' }}><table className="t small fit">
+                <colgroup><col style={{ width: 278 }} /><col style={{ width: 130 }} /><col style={{ width: 190 }} /><col style={{ width: 140 }} /><col style={{ width: 110 }} /></colgroup>
+                <thead><tr><th>Возврат (srid)</th><th>ID задания</th><th>Статус</th><th>Причина</th><th>Дедлайн</th></tr></thead>
+                <tbody>{data.returns.map((r) => <tr key={r.srid}>
+                  <td className="mono ell" title={r.srid}>{r.srid}</td>
+                  <td className="mono">{r.order_id || '—'}</td>
+                  <td className="ell" title={`${r.status || ''}${r.is_active ? '' : ' · завершён'}`}>{r.status || '—'}</td>
+                  <td className="ell" title={r.reason || ''}>{r.reason || '—'}</td>
+                  <td className="mono">{r.expired_dt ? fmtDay(r.expired_dt) : '—'}</td>
+                </tr>)}</tbody></table></div></>}
+          </div></div>}
+          {tab === 'docs' && <div className="card">
+            <div className="twrap"><table className="t small fit">
+              <colgroup><col style={{ width: 90 }} /><col style={{ width: 150 }} /><col style={{ width: 130 }} /><col style={{ width: 120 }} /></colgroup>
+              <thead><tr><th>№</th><th>Тип</th><th>Статус</th><th>Создан</th></tr></thead>
+              <tbody>{data.docs.map((d) => <tr key={d.id} style={{ cursor: 'pointer' }} onClick={() => docDrawer(d)}>
+                <td className="mono">№{d.id}</td>
+                <td className="mono ell" title={d.type}>{d.type}</td>
+                <td><Badge dict={DOC_STATUS} v={d.status} /></td>
+                <td className="mono">{fmtD(d.created_at)}</td>
+              </tr>)}</tbody></table></div>
+          </div>}
+          {tab === 'cz' && <div className="card"><div className="card-b">
+            <div className="twrap"><table className="t small"><tbody>
+              <tr><td className="faint" style={{ width: '40%' }}>Статус КИ</td>
+                <td>{data.cz.status ? <Badge dict={CIS_STATUS} v={data.cz.status} /> : '—'}</td></tr>
+              {CZ_FIELDS.map(([k, lbl]) => data.cz[k] ? <tr key={k}>
+                <td className="faint">{lbl}</td>
+                <td className={['emissionDate', 'applicationDate', 'producedDate', 'introducedDate'].includes(k) ? 'mono' : undefined}>
+                  {['emissionDate', 'applicationDate', 'producedDate', 'introducedDate'].includes(k) ? fmtD(data.cz[k]) : String(data.cz[k])}</td>
+              </tr> : null)}
+              {(data.cz.certDoc || []).map((c, i) => <tr key={`cert${i}`}>
+                <td className="faint">{i ? '' : 'Декларация'}</td>
+                <td className="mono" style={{ wordBreak: 'break-all' }}>
+                  {c.number}{c.date ? ` · ${fmtDay(c.date)}` : ''}</td></tr>)}
+            </tbody></table></div>
+            <details style={{ marginTop: 8 }}>
+              <summary style={{ fontSize: 12, color: 'var(--muted)', cursor: 'pointer' }}>Сырой срез ЧЗ</summary>
+              <pre>{JSON.stringify(data.cz, null, 2)}</pre></details>
+          </div></div>}
+        </>
+      })()}
     </>}
     {!data && !busy && <div className="card"><div className="empty">
       <b>Введите код маркировки</b>

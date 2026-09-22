@@ -102,6 +102,24 @@ a{color:var(--info)}
 .feed time{font:500 11.5px var(--mono);color:var(--faint);flex:0 0 78px;padding-top:2px}
 .feed .dotsep{width:6px;height:6px;border-radius:50%;background:var(--line-strong);flex:0 0 6px;margin-top:7px}
 
+/* путь кода (трассировка): рельса этапов — фаза = участок системы,
+   точка = состояние этапа (факт/ждёт нас/не наступило/недоступно) */
+.path{display:flex;overflow-x:auto;padding:2px 0 4px}
+.path-ph{flex:0 0 auto}
+.path-ph + .path-ph{margin-left:24px;padding-left:24px;border-left:1px solid var(--line)}
+.path-cap{font:600 10px/1 var(--mono);letter-spacing:.09em;color:var(--faint);margin-bottom:12px;white-space:nowrap}
+.path-rail{display:flex;align-items:flex-start}
+.path-st{position:relative;padding-right:20px;min-width:92px}
+.path-st::after{content:'';position:absolute;top:5px;left:14px;right:6px;height:2px;background:var(--line)}
+.path-st:last-child::after{display:none}
+.path-dot{position:relative;z-index:1;width:12px;height:12px;border-radius:50%;background:var(--ink)}
+.path-st.wait .path-dot{background:var(--wait)}
+.path-st.todo .path-dot{background:var(--surface);border:2px solid var(--line-strong)}
+.path-st.na .path-dot{background:var(--surface);border:2px dashed var(--line-strong)}
+.path-lbl{font-size:12px;line-height:1.25;margin-top:7px;white-space:nowrap}
+.path-val{font:500 11px var(--mono);margin-top:2px;white-space:nowrap}
+.path-note{font-size:10.5px;color:var(--faint);margin-top:1px;white-space:nowrap}
+
 /* ============ автоматика ============ */
 .loops{list-style:none}
 .loops li{display:flex;justify-content:space-between;gap:12px;padding:10px 18px;border-bottom:1px solid var(--line);font-size:13px;align-items:center}
