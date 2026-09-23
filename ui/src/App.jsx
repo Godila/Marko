@@ -62,7 +62,7 @@ const BATCH_STATUS = { new: ['новый', 'grey'], partial: ['частично'
   error: ['ошибка', 'red'] }
 const GTIN_STATUS = { new: ['новый', 'grey'], update: ['обновится', 'blue'], conflict: ['конфликт', 'red'] }
 const SRC_RU = { file: 'файл', rule: 'правило', default: 'дефолт' }
-const WB_DELIVERY = { fbs: 'FBS (наша отгрузка)', fbo: 'FBW (склад WB)' }
+const WB_DELIVERY = { fbs: 'FBS (наша отгрузка)', fbo: 'FBO (склад WB)' }
 // трассировка: система-источник события (бейдж) и цвет точки ленты по виду
 // события. Система ≠ статус: цвета — из базовой пятёрки, красный системам
 // не выдаётся (DESIGN.md §8: красное = требует человека)
@@ -610,14 +610,17 @@ function Returns({ ctx, pulse }) {
       <div className="card-h"><h2>Возвраты покупателей</h2>
         <span className="hint">финансовый след WB · опрос раз в 2 часа</span></div>
       <div className="twrap"><table className="t fit">
-        <colgroup><col style={{ width: 104 }} /><col style={{ width: 210 }} /><col style={{ width: 252 }} />
-          <col style={{ width: 160 }} /><col style={{ width: 148 }} /></colgroup>
-        <thead><tr><th>Дата</th><th>Заказ</th><th>Код маркировки</th><th>Склад</th><th>Статус</th></tr></thead>
+        <colgroup><col style={{ width: 104 }} /><col style={{ width: 200 }} /><col style={{ width: 252 }} />
+          <col style={{ width: 118 }} /><col style={{ width: 148 }} /></colgroup>
+        <thead><tr><th>Дата</th><th>Заказ</th><th>Код маркировки</th><th>Контур</th><th>Статус</th></tr></thead>
         <tbody>{(cr || []).map((r) => <tr key={r.srid}>
           <td className="mono">{fmtD(r.date)}</td>
           <td className="ell mono" title={r.order_doc || r.srid}>{r.order_doc || r.srid}</td>
           <td>{r.km ? <KmCell km={r.km} /> : <span className="faint">ждёт данных продажи</span>}</td>
-          <td className="ell" title={r.warehouse || ''}>{r.warehouse || '—'}</td>
+          <td title={r.warehouse || ''}>{r.contour
+            ? <span className={`bdg ${r.contour === 'fbs' ? 'blue' : 'grey'}`}>
+                {r.contour === 'fbs' ? 'FBS · фулфилмент' : 'FBO · зона WB'}</span>
+            : <span className="faint">—</span>}</td>
           <td>{r.applied && r.state ? <Badge dict={ITEM_STATES} v={r.state} />
             : r.applied ? <span className="faint">наблюдение</span>
               : <span className="faint">стейджинг</span>}</td></tr>)}
@@ -641,7 +644,9 @@ function Returns({ ctx, pulse }) {
           const dl = pickDeadline(r)
           const c = !r.completed_dt && dl.iso ? leftCls(dl.iso) : ''
           return <tr key={r.srid} className={c === 'danger' || c === 'over' ? 'rowhot' : ''}>
-            <td className="num">{r.order_id}</td>
+            <td className="num">{r.order_id}
+              {r.delivery_type && <div className="faint mono" style={{ fontSize: 10.5, marginTop: 2 }}>
+                {r.delivery_type === 'fbs' ? 'FBS · наш' : 'FBO · склад WB'}</div>}</td>
             <td className="ell" title={r.subject || r.srid}>{r.subject || r.srid}</td>
             <td className="ell" title={r.reason || ''}>{r.reason || '—'}</td>
             <td className="ell" title={r.status || ''}>{r.status}</td>
@@ -1429,7 +1434,10 @@ const JOURNAL_COLUMNS = [
     text: (it) => evLine(it), render: (it) => evLine(it) },
   { key: 'order', label: 'Заказ WB', w: 204, ell: true, mono: true, sort: (it) => it.order_dt || '',
     text: (it) => it.last_event?.srid || '',
-    render: (it) => it.last_event?.srid || <span className="faint">—</span> },
+    render: (it) => it.last_event?.srid
+      ? <>{it.last_event.srid}{it.delivery_type
+          && <div className="faint" style={{ fontSize: 11 }}>{WB_DELIVERY[it.delivery_type] || it.delivery_type}</div>}</>
+      : <span className="faint">—</span> },
   { key: 'cz', label: 'ЧЗ', w: 106, render: (it) => it.cis_status ? <Badge dict={CIS_STATUS} v={it.cis_status} /> : <span className="faint">—</span> },
   { key: 'upd', label: 'Обновлён', w: 88, mono: true, sort: (it) => it.updated_at || '',
     render: (it) => fmtD(it.updated_at) },

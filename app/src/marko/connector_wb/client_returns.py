@@ -29,6 +29,16 @@ def _now():
     return datetime.now(timezone.utc).replace(tzinfo=None)
 
 
+# «Склад WB РФ» в sales-отчёте = FBW-склад (FBO-остатки, зона WB); остальное —
+# склады продавца/фулфилмента. Реестр delivery_type точнее — он побеждает
+def contour_of(warehouse: str, delivery_type: str | None) -> str | None:
+    if delivery_type:
+        return delivery_type
+    if not warehouse:
+        return None
+    return "fbo" if "Склад WB" in warehouse else "fbs"
+
+
 def ingest_client_returns(db: Session, rows: list[dict]) -> dict:
     """UPSERT R-строк → матчинг по документу заказа → применение к журналу.
 

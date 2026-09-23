@@ -26,17 +26,20 @@ def sale_dates(db: Session, kms: list[str]) -> dict[str, tuple[str, str]]:
     return {km: (dt, srid) for km, srid, dt in rows}
 
 
-def order_dates(db: Session, docs: set[str]) -> dict[str, str]:
-    """order_doc → order_created_at из персистентного реестра wb.orders."""
+def order_dates(db: Session, docs: set[str]) -> dict[str, tuple[str, str]]:
+    """order_doc → (order_created_at, delivery_type) из персистентного
+    реестра wb.orders; контур ('fbs'/'fbo') — точный флаг заказа, где реестр
+    его видел (снапшот слеп назад: выкупленный уходит из него на 1–3 дн)."""
     if not docs:
         return {}
-    return {doc: created for doc, created in
-            db.query(WbOrder.order_doc, WbOrder.order_created_at)
+    return {doc: (created, dt or "") for doc, created, dt in
+            db.query(WbOrder.order_doc, WbOrder.order_created_at,
+                     WbOrder.delivery_type)
             .filter(WbOrder.order_doc.in_(docs)).all()}
 
 
 def enrich(db: Session, rows: list[dict]) -> list[dict]:
-    """Строки item_row + sale_dt / order_dt ('' = неизвестно).
+    """Строки item_row + sale_dt / order_dt / delivery_type ('' = неизвестно).
 
     Ключ заказа — srid последней продажи (дата заказа согласована с датой
     выкупа, а не с текстом соседней колонки «Последний сигнал»); для строк
@@ -53,5 +56,7 @@ def enrich(db: Session, rows: list[dict]) -> list[dict]:
     ords = order_dates(db, {d for d in doc_of.values() if d})
     for r in rows:
         r["sale_dt"] = sales[r["km"]][0] if r["km"] in sales else ""
-        r["order_dt"] = ords.get(doc_of[r["km"]], "")
+        created, delivery = ords.get(doc_of[r["km"]], ("", ""))
+        r["order_dt"] = created
+        r["delivery_type"] = delivery
     return rows

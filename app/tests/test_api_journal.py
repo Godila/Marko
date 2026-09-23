@@ -138,14 +138,45 @@ def test_wb_client_returns_list(db, client):
     from marko.connector_wb.client_returns import ingest_client_returns
     apply_event(db, source="wb_excise", source_event_id="cr1", kind="sale", km=KM,
                 srid="eAW.ccr1.0.0", payload={"price": 3123})
+    from marko.connector_wb.models import WbOrder
+    db.add(WbOrder(order_doc="eAW.ccr1", order_id=9001, delivery_type="fbs"))
+    db.commit()
     ingest_client_returns(db, [{"saleID": "R9", "srid": "eAW.ccr1.0.0",
                                 "date": "2026-09-21T09:00:00",
-                                "warehouseName": "Крыловская"}])
+                                "warehouseName": "Склад WB РФ"}])
+    ingest_client_returns(db, [{"saleID": "R10", "srid": "eAW.fbo1.0.0",
+                                "date": "2026-09-20T09:00:00",
+                                "warehouseName": "Склад WB РФ"}])
     r = client.get("/v1/wb/client-returns", headers=AUTH_RO)
     assert r.status_code == 200
-    row = r.json()[0]
-    assert row["sale_id"] == "R9" and row["km"] == KM and row["applied"] is True
-    assert row["warehouse"] == "Крыловская"
+    rows = {row["sale_id"]: row for row in r.json()}
+    # контур: реестр побеждает склад (R9: реестр fbs, склад говорит FBO);
+    # склад WB РФ без реестра → зона WB (R10)
+    assert rows["R9"]["contour"] == "fbs" and rows["R10"]["contour"] == "fbo"
+    assert rows["R9"]["km"] == KM and rows["R9"]["applied"] is True
+
+
+def test_journal_enrich_delivery_type(db, client):
+    """Контур заказа в строках журнала: реестр wb.orders отдаёт delivery_type
+    по документу последней продажи (оператор видит FBS/FBW сразу)."""
+    from marko.connector_wb.models import WbOrder
+    db.add(WbOrder(order_doc="eAW.dlv1", delivery_type="fbo", order_created_at="2026-09-01"))
+    db.commit()
+    apply_event(db, source="wb_excise", source_event_id="dlv1", kind="sale", km=KM,
+                srid="eAW.dlv1.0.0", payload={"price": 100, "fiscal_dt": "2026-09-02"})
+    r = client.get("/v1/journal?state=PENDING_WITHDRAW", headers=AUTH)
+    assert r.json()[0]["delivery_type"] == "fbo"
+
+
+def test_wb_returns_delivery_type(db, client):
+    from marko.connector_wb.returns import ingest_returns
+    from marko.connector_wb.models import WbOrder
+    db.add(WbOrder(order_doc="eAW.nv1", order_id=7001, delivery_type="fbs"))
+    db.commit()
+    ingest_returns(db, [{"srid": "mp.nv1.r", "orderId": 7001, "status": "Готов к выдаче",
+                         "expiredDt": "", "subjectName": "Худи", "isStatusActive": 1}])
+    r = client.get("/v1/wb/returns", headers=AUTH_RO)
+    assert r.json()[0]["delivery_type"] == "fbs"
 
 
 def test_wb_returns_poll_502_on_wb_error(db, client, monkeypatch):

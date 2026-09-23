@@ -501,14 +501,21 @@ def wb_client_returns_list(
     (ждут доезда эксайз-продажи). Окно 30 дней — как опрос WB в воркере."""
     since = (datetime.utcnow().date() - timedelta(days=30)).isoformat()
     states = dict(db.query(Item.km, Item.state).all())
+    from marko.connector_wb.client_returns import contour_of
+    from marko.connector_wb.models import WbOrder
+    rows = (db.query(WbClientReturn)
+            .filter(WbClientReturn.rdate >= since)
+            .order_by(WbClientReturn.rdate.desc()).limit(500).all())
+    delivery = dict(db.query(WbOrder.order_doc, WbOrder.delivery_type)
+                    .filter(WbOrder.order_doc.in_(
+                        [r.order_doc for r in rows if r.order_doc])).all())
     out = []
-    for r in (db.query(WbClientReturn)
-              .filter(WbClientReturn.rdate >= since)
-              .order_by(WbClientReturn.rdate.desc()).limit(500).all()):
+    for r in rows:
         out.append({"srid": r.srid, "sale_id": r.sale_id, "date": r.rdate,
                     "warehouse": r.warehouse, "km": r.km, "order_doc": r.order_doc,
                     "applied": r.applied_at is not None,
-                    "state": states.get(r.km)})
+                    "state": states.get(r.km),
+                    "contour": contour_of(r.warehouse, delivery.get(r.order_doc))})
     return out
 
 
@@ -518,8 +525,13 @@ def wb_returns_list(
     tok: PlatformToken = Depends(require_scope("read")),
     db: Session = Depends(get_db),
 ):
+    rows = db.query(WbReturn).order_by(WbReturn.updated_at.desc()).limit(500).all()
+    from marko.connector_wb.models import WbOrder
+    delivery = dict(db.query(WbOrder.order_id, WbOrder.delivery_type)
+                    .filter(WbOrder.order_id.in_(
+                        [r.order_id for r in rows if r.order_id])).all())
     out = []
-    for r in db.query(WbReturn).order_by(WbReturn.updated_at.desc()).limit(500).all():
+    for r in rows:
         p = r.payload or {}
         if active is not None and bool(p.get("isStatusActive")) != active:
             continue
@@ -528,7 +540,8 @@ def wb_returns_list(
                     "return_type": p.get("returnType"), "subject": p.get("subjectName"),
                     "office": p.get("dstOfficeAddress"), "order_dt": p.get("orderDt"),
                     "ready_dt": p.get("readyToReturnDt"), "completed_dt": p.get("completedDt"),
-                    "is_active": bool(p.get("isStatusActive"))})
+                    "is_active": bool(p.get("isStatusActive")),
+                    "delivery_type": delivery.get(r.order_id, "")})
     return out
 
 
