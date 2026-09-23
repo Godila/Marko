@@ -1373,6 +1373,10 @@ function KmCard({ it, ctx }) {
       <tr><td className="faint">nm_id</td><td className="mono">{ev.nm_id ?? '—'}</td></tr>
       <tr><td className="faint">Заказ (srid)</td>
         <td className="mono" style={{ wordBreak: 'break-all' }}>{ev.srid || '—'}</td></tr>
+      <tr><td className="faint">Контур заказа</td><td>{st.delivery_type
+        ? <span className={`bdg ${st.delivery_type === 'fbs' ? 'blue' : 'grey'}`}>
+            {WB_DELIVERY[st.delivery_type] || st.delivery_type}</span>
+        : <span className="faint" title="Эксайз-документ продажи и документ заказа WB живут в разных id-пространствах — контур известен только когда они совпали">неизвестен</span>}</td></tr>
     </tbody></table></div>
     <details style={{ marginTop: 10 }}>
       <summary style={{ fontSize: 12, color: 'var(--muted)', cursor: 'pointer' }}>Сырые данные события</summary>
@@ -1460,6 +1464,7 @@ function Journal({ ctx, initial }) {
   const [q, setQ] = useState('')
   const [from, setFrom] = useState('')
   const [to, setTo] = useState('')
+  const [contour, setContour] = useState('')
   const [sort, setSort] = useState({ k: 'upd', d: 'desc' })
   const [syncBusy, setSyncBusy] = useState(false)
   const lastLookup = useRef('')
@@ -1475,6 +1480,7 @@ function Journal({ ctx, initial }) {
   const sigDay = (it) => String(it.last_event?.fiscal_dt || '').slice(0, 10)
   const shown = (rows || []).filter((it) =>
     (state !== 'ANOMALY' || it.state.startsWith('ANOMALY'))
+    && (!contour || it.delivery_type === contour)
     && (!qv || it.km.toLowerCase().includes(qv) || evLine(it).toLowerCase().includes(qv)
       || (qDoc && (it.last_event?.srid || '').toLowerCase().startsWith(qDoc)))
     && (!from || (sigDay(it) && sigDay(it) >= from)) && (!to || (sigDay(it) && sigDay(it) <= to)))
@@ -1519,6 +1525,15 @@ function Journal({ ctx, initial }) {
         const [lbl, cls] = ITEM_STATES[s]
         return <button key={s} className={`chip${cls === 'red' ? ' alert' : ''}`} aria-pressed={state === s}
           onClick={() => setState(s)}>{lbl} <span className="n">{stats[s] || 0}</span></button> })}
+      {/* контур — известен не всегда (эксайз-документ ≠ документ заказа WB):
+          чипы с фактическими счётчиками, «все» сбрасывает */}
+      {(rows || []).some((it) => it.delivery_type) && <>
+        <span className="faint" style={{ fontSize: 11, textTransform: 'uppercase', letterSpacing: '.06em', alignSelf: 'center' }}>контур</span>
+        <button className="chip" aria-pressed={contour === ''} onClick={() => setContour('')}>все</button>
+        {['fbs', 'fbo'].filter((c) => (rows || []).some((it) => it.delivery_type === c)).map((c) =>
+          <button key={c} className="chip" aria-pressed={contour === c} onClick={() => setContour(c)}>
+            {WB_DELIVERY[c] || c} <span className="n">{(rows || []).filter((it) => it.delivery_type === c).length}</span></button>)}
+      </>}
     </div>
     <div className="frow" style={{ marginBottom: 14 }}>
       <div className="search" style={{ flex: '1 1 380px', maxWidth: 560 }}>{I.search}
