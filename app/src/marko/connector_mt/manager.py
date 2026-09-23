@@ -133,4 +133,17 @@ def check_doc(db: Session, mt_doc_id: int, client: MtClient | None = None) -> di
         # без custom_name) — иначе документ вечно висит submitted
         doc.status = "error"
     db.commit()
+    if doc.type == "LK_RECEIPT" and doc.status == "checked_ok":
+        # принятый вывод выбыл из оборота: сразу обновляем снимки ЧЗ позиций,
+        # иначе бейджи «в обороте» в журнале врут до следующего ручного
+        # cis-sync (живой прод 23.09: doc №9 CHECKED_OK, плашки введённые);
+        # импорт локальный — journal.cis не зависит от менеджера
+        from marko.journal.cis import sync_cis_status
+        kms = [p["cis"] for p in (doc.payload or {}).get("products", [])
+               if isinstance(p, dict) and p.get("cis")]
+        if kms:
+            try:
+                sync_cis_status(db, kms, client=c)
+            except Exception as e:  # снапшот не должен ронять проверку
+                log.warning("cis refresh after %s failed: %s", mt_doc_id, e)
     return info

@@ -337,6 +337,29 @@ def test_doc_check_404_means_registering(db, client, monkeypatch):
     assert client.post(f"/v1/docs/{doc.id}/check", headers=AUTH).status_code == 502
 
 
+def test_doc_check_ok_refreshes_cis_badges(db, client, monkeypatch):
+    """Принятый LK_RECEIPT выбыл из оборота: check_doc сразу обновляет
+    снимки ЧЗ позиций — бейджи «в обороте» не врут до ручного cis-sync."""
+    from marko.mt.models import MtDoc
+    from marko.journal.models import Item
+    _sale(db)
+    doc = MtDoc(type="LK_RECEIPT", status="submitted",
+                external_id="e2e-ok", payload={"products": [{"cis": KM}]})
+    db.add(doc)
+    db.commit()
+
+    class _CzOk:
+        def doc_info(self, token, doc_uuid):
+            return {"status": "CHECKED_OK"}
+        def cises_info(self, token, cises):
+            return [{"cisInfo": {"status": "RETIRED", "cis": k}} for k in cises]
+    _mt_online(monkeypatch, _CzOk())
+    r = client.post(f"/v1/docs/{doc.id}/check", headers=AUTH)
+    assert r.status_code == 200 and r.json()["status"] == "checked_ok"
+    it = db.get(Item, KM)
+    assert it.cis_status == "retired" and it.cis_checked_at is not None
+
+
 def test_withdraw_preflight_splits_batch(db, client, monkeypatch):
     """«Собрать вывод»: RETIRED без нашей претензии уходит в «вывел WB»,
     документ собирается только из реально ожидающих."""
