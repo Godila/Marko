@@ -628,6 +628,16 @@ def check_mt_doc(doc_id: int,
     except LookupError:
         raise HTTPException(404, "doc not found or not submitted")
     except Exception as e:
+        # 404 «Документ не найден в ГИС МТ» сразу после подачи — штатная
+        # задержка регистрации ЧЗ (живой прод 23.09: подача 13:32:28, код
+        # нашёлся в ЧЗ через ~минуту): не 502, а «подождите и повторите»
+        from marko.connector_mt.client import MtHttpError
+        doc = db.get(MtDoc, doc_id)
+        if isinstance(e, MtHttpError) and e.status == 404 and doc is not None:
+            audit(db, tok.principal_id, "doc.check",
+                  {"doc_id": doc_id, "pending": True})
+            return {"pending": True, "status": doc.status,
+                    "note": "ГИС МТ ещё регистрирует документ — повторите через минуту"}
         raise HTTPException(502, f"check failed: {e}")
     doc = db.get(MtDoc, doc_id)
     guard_fired = False

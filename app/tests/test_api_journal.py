@@ -276,6 +276,8 @@ def _mt_online(monkeypatch, cz):
     from marko.connector_mt import manager
     monkeypatch.setattr(manager, "get_token", lambda d, c=None: "T")
     monkeypatch.setattr(manager, "default_client", lambda: cz)
+    # check_doc/submit_doc резолвят клиент через внутренний _client()
+    monkeypatch.setattr(manager, "_client", lambda: cz)
 
 
 def test_cis_sync_route(db, client, monkeypatch):
@@ -304,6 +306,35 @@ def test_cis_sync_502_on_mt_error(db, client, monkeypatch):
     monkeypatch.setattr(manager, "default_client", boom)
     r = client.post("/v1/journal/cis-sync", headers=AUTH, json={})
     assert r.status_code == 502
+
+
+def test_doc_check_404_means_registering(db, client, monkeypatch):
+    """404 «Документ не найден в ГИС МТ» сразу после подачи — ЧЗ регистрирует
+    с задержкой: это «подождите», а не ошибка (живой прод 23.09, doc №9)."""
+    from marko.connector_mt import manager
+    from marko.connector_mt.client import MtHttpError
+    from marko.mt.models import MtDoc
+    doc = MtDoc(type="LK_RECEIPT", status="submitted",
+                external_id="b939-502", payload={})
+    db.add(doc)
+    db.commit()
+
+    class _Cz404:
+        def doc_info(self, token, doc_uuid):
+            raise MtHttpError(404, '{"error_message":"Документ не найден в ГИС МТ"}')
+    _mt_online(monkeypatch, _Cz404())
+    r = client.post(f"/v1/docs/{doc.id}/check", headers=AUTH)
+    assert r.status_code == 200
+    body = r.json()
+    assert body["pending"] is True and body["status"] == "submitted"
+    db.refresh(doc)
+    assert doc.status == "submitted"            # статус не тронут
+    # подальше 404 (не сразу после подачи) — прежний 502
+    class _Cz500:
+        def doc_info(self, token, doc_uuid):
+            raise MtHttpError(500, "cz down")
+    _mt_online(monkeypatch, _Cz500())
+    assert client.post(f"/v1/docs/{doc.id}/check", headers=AUTH).status_code == 502
 
 
 def test_withdraw_preflight_splits_batch(db, client, monkeypatch):

@@ -293,6 +293,8 @@ function DocTable({ docs, ctx, empty }) {
     })
   const checkDoc = async (d) => { try {
       const r = await api(`/v1/docs/${d.id}/check`, { method: 'POST' })
+      if (r.pending) return notify(`Документ №${d.id} ещё регистрируется в ГИС МТ`,
+        'ЧЗ отвечает «не найден» первые ~минуту после подачи. Повторите проверку чуть позже.', 'warn')
       notify(`Документ №${d.id}: ${DOC_STATUS[r.status]?.[0] || r.status}`, r.mt_status || ''); bump()
     } catch (e) { notify('Проверка не удалась', e.message, 'bad') } }
   const deleteDoc = async (d) => {
