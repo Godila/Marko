@@ -217,13 +217,22 @@ def _wb_returns_loop():
             except Exception:
                 db.rollback()
                 log.exception("supplies cache failed")
-            res = run_returns_once(db, client)
-            for text in res.get("alerts", []):
-                asyncio.run(send(text))
+            # goods-return и sales-R — независимые опросы: 429 одного не
+            # должен глушить другой (живой прод 23.09: квота goods-return
+            # истощена — sales-детектор не дошёл бы до вызова)
+            try:
+                res = run_returns_once(db, client)
+                for text in res.get("alerts", []):
+                    asyncio.run(send(text))
+            except (WbHttpError, WbLimitError) as e:
+                db.rollback()
+                log.error("wb returns poll failed: %s", e)
+            except Exception:
+                db.rollback()
+                log.exception("returns ingest failed")
             # клиентские возвраты покупателей (sales R): единственный детектор
             # после чек-сплита 01.09 (op=2 не приходит); гейт 1/2ч — реально
-            # раз в два часа, окно 30 дней покрывает пропуск. Свой try — отказ
-            # goods-return не должен глушить этот опрос (паттерн registry warm)
+            # раз в два часа, окно 30 дней покрывает пропуск
             try:
                 from marko.connector_wb.client_returns import ingest_client_returns
                 rrows = client.sales((datetime.now(MSK).date()
