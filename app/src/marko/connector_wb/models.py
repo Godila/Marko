@@ -5,6 +5,29 @@ from sqlalchemy.orm import Mapped, mapped_column
 from marko.db import Base
 
 
+class WbClientReturn(Base):
+    """Возврат покупателя по финансовому отчёту sales (saleID «R…»).
+
+    После чек-сплита 01.09 (FBS-контур) — единственный детектор клиентского
+    возврата: op=2 эксайза не приходит, goods-return их не показывает. srid
+    R-строки живёт в пространстве документов заказа продажи (order_doc),
+    КМ подтягивается журнальной продажей этого документа; строка, приехавшая
+    раньше эксайза, сидит в стейджинге (km IS NULL) и применяется при доезде.
+    """
+    __tablename__ = "client_returns"
+    __table_args__ = {"schema": "wb"}
+
+    srid: Mapped[str] = mapped_column(String(96), primary_key=True)
+    sale_id: Mapped[str] = mapped_column(String(32), default="")      # «R…»
+    rdate: Mapped[str] = mapped_column(String(32), default="")        # дата финансовой операции
+    warehouse: Mapped[str] = mapped_column(String(64), default="")    # контур: «Склад WB РФ»=FBO/WB-зона
+    order_doc: Mapped[str] = mapped_column(String(64), default="")    # документ заказа продажи
+    km: Mapped[str | None] = mapped_column(String(64), nullable=True) # None = ждёт эксайз-продажу
+    applied_at = mapped_column(DateTime, nullable=True)               # момент применения к журналу
+    payload: Mapped[dict] = mapped_column(JSON)
+    updated_at = mapped_column(DateTime, server_default=func.now(), onupdate=func.now())
+
+
 class WbReturn(Base):
     """Строка отчёта WB «Возвраты и перемещение товаров» (goods-return).
 

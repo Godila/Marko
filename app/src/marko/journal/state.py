@@ -23,6 +23,12 @@ RULES = {
     # emitter-действия (подаётся через journal.log_action, state ставит emitter напрямую)
     ("PENDING_WITHDRAW", "withdraw"): "WITHDRAWN",
     ("PENDING_RETURN", "return_apply"): "RETURNED",
+    # клиентский возврат (финансовый след sales R): ЧЗ-операции нет — по
+    # непроведённому выводу продажа отменена (код в обороте, товар у
+    # продавца) → обязательство снято; после НАШЕГО вывода код выбыл →
+    # к возврату в ЧЗ. Вывод WB ('wb') применением не трогают — зона WB.
+    ("PENDING_WITHDRAW", "client_return"): "RETURNED",
+    ("WITHDRAWN", "client_return"): "PENDING_RETURN",
 }
 
 # состояния, которые cis-sync авто-переводит в WITHDRAWN/'wb' при retired в ЧЗ

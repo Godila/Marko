@@ -1,5 +1,5 @@
 import time
-from datetime import datetime
+from datetime import datetime, timedelta
 from typing import Literal
 
 from fastapi import APIRouter, Depends, HTTPException, Query
@@ -11,7 +11,7 @@ from sqlalchemy.orm import Session
 
 from marko.api.deps import audit, get_db, require_scope
 from marko.connector_wb.client import WBClient, WbHttpError, WbLimitError, load_wb_token
-from marko.connector_wb.models import WbReturn
+from marko.connector_wb.models import WbClientReturn, WbReturn
 from marko.connector_wb.returns import _parse_iso, run_returns_once
 from marko.emitter.batch import lk_receipts, return_batch, to_csv, withdraw_batch
 from marko.journal import item_row, log_action
@@ -490,6 +490,26 @@ def batches_return(
     audit(db, tok.principal_id, "batch.return",
           {"inn": body.inn, "result": {"docs": docs, "blocked": blocked}})
     return {"docs": docs, "blocked": blocked}
+
+
+@router.get("/wb/client-returns")
+def wb_client_returns_list(
+    tok: PlatformToken = Depends(require_scope("read")),
+    db: Session = Depends(get_db),
+):
+    """Возвраты покупателей (sales R): применённые к журналу + стейджинг
+    (ждут доезда эксайз-продажи). Окно 30 дней — как опрос WB в воркере."""
+    since = (datetime.utcnow().date() - timedelta(days=30)).isoformat()
+    states = dict(db.query(Item.km, Item.state).all())
+    out = []
+    for r in (db.query(WbClientReturn)
+              .filter(WbClientReturn.rdate >= since)
+              .order_by(WbClientReturn.rdate.desc()).limit(500).all()):
+        out.append({"srid": r.srid, "sale_id": r.sale_id, "date": r.rdate,
+                    "warehouse": r.warehouse, "km": r.km, "order_doc": r.order_doc,
+                    "applied": r.applied_at is not None,
+                    "state": states.get(r.km)})
+    return out
 
 
 @router.get("/wb/returns")

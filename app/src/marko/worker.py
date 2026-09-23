@@ -220,6 +220,24 @@ def _wb_returns_loop():
             res = run_returns_once(db, client)
             for text in res.get("alerts", []):
                 asyncio.run(send(text))
+            # клиентские возвраты покупателей (sales R): единственный детектор
+            # после чек-сплита 01.09 (op=2 не приходит); гейт 1/2ч — реально
+            # раз в два часа, окно 30 дней покрывает пропуск. Свой try — отказ
+            # goods-return не должен глушить этот опрос (паттерн registry warm)
+            try:
+                from marko.connector_wb.client_returns import ingest_client_returns
+                rrows = client.sales((datetime.now(MSK).date()
+                                      - timedelta(days=30)).isoformat() + "T00:00:00")
+                cstats = ingest_client_returns(db, rrows)
+                if cstats["applied"]:
+                    asyncio.run(send(
+                        f"Возвраты покупателей: применено {cstats['applied']} "
+                        f"(наблюдений {cstats['observed']})"))
+            except WbLimitError:
+                pass
+            except Exception:
+                db.rollback()
+                log.exception("client returns poll failed")
         except (WbHttpError, WbLimitError) as e:
             log.error("wb returns poll failed: %s", e)
         except Exception:

@@ -75,6 +75,7 @@ def normalize_km(raw: str) -> str:
 TITLES = {
     ("wb_excise", "sale"): "Продажа (чек ККТ WB)",
     ("wb_excise", "return"): "Возврат покупателя (чек ККТ WB)",
+    ("wb_sales", "client_return"): "Возврат покупателя (финансовый след WB)",
     ("wb_excise", "skip_fbw"): "Строка вне контура FBS (FBW)",
     ("emitter", "withdraw"): "Вывод из оборота — документ LK_RECEIPT",
     ("emitter", "return_apply"): "Возврат в оборот — документ LP_RETURN",
@@ -86,10 +87,13 @@ TITLES = {
 
 
 def _ts(ev: Event) -> str:
-    """Момент события: дата чека для WB-строк (fiscal_dt), иначе момент
+    """Момент события: дата чека для WB-строк (fiscal_dt), дата финансового
+    возврата для sales R (иначе бэкфилл встанет днём ингеста), иначе момент
     записи в журнал — у наших действий «когда» и есть момент записи."""
     if ev.source == "wb_excise" and ev.payload.get("fiscal_dt"):
         return str(ev.payload["fiscal_dt"])
+    if ev.source == "wb_sales" and ev.payload.get("date"):
+        return str(ev.payload["date"])
     return ev.created_at.isoformat()
 
 

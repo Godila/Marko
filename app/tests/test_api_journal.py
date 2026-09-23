@@ -134,6 +134,20 @@ def test_wb_returns_list_and_scopes(db, client):
     assert r.status_code == 403
 
 
+def test_wb_client_returns_list(db, client):
+    from marko.connector_wb.client_returns import ingest_client_returns
+    apply_event(db, source="wb_excise", source_event_id="cr1", kind="sale", km=KM,
+                srid="eAW.ccr1.0.0", payload={"price": 3123})
+    ingest_client_returns(db, [{"saleID": "R9", "srid": "eAW.ccr1.0.0",
+                                "date": "2026-09-21T09:00:00",
+                                "warehouseName": "Крыловская"}])
+    r = client.get("/v1/wb/client-returns", headers=AUTH_RO)
+    assert r.status_code == 200
+    row = r.json()[0]
+    assert row["sale_id"] == "R9" and row["km"] == KM and row["applied"] is True
+    assert row["warehouse"] == "Крыловская"
+
+
 def test_wb_returns_poll_502_on_wb_error(db, client, monkeypatch):
     from marko.api import routes_journal
     from marko.connector_wb.client import WbHttpError

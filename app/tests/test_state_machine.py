@@ -15,6 +15,11 @@ from marko.journal.state import transition
     ("PENDING_RETURN", "return", "ANOMALY_RERETURN"),
     ("RETURNED", "sale", "PENDING_WITHDRAW"),
     ("WITHDRAWN", "sale", "WITHDRAWN"),
+    # клиентский возврат (финансовый след WB, без ЧЗ-операции): по непроведённому
+    # выводу — продажа отменена, код в обороте (товар на фулфилменте); после
+    # нашего вывода — к возврату в ЧЗ (LP_RETURN)
+    ("PENDING_WITHDRAW", "client_return", "RETURNED"),
+    ("WITHDRAWN", "client_return", "PENDING_RETURN"),
 ])
 def test_transitions(state, kind, expected):
     assert transition(state, kind) == expected

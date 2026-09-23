@@ -104,6 +104,40 @@ class WBClient:
                          params={"dateFrom": date_from, "dateTo": date_to})
         return r.json().get("report") or []
 
+    # ---- sales: 1 запрос/2ч на базовом токене; R-строки = клиентские возвраты ----
+    stat_base = "https://statistics-api.wildberries.ru"
+
+    def _gate_sales(self):
+        if self.db is None:
+            return
+        kv = self.db.get(PlatformKV, "wb_sales_usage")
+        now = time.time()
+        if kv and now - kv.value.get("last", 0) < 7200 - 120:
+            raise WbLimitError("sales 1/2h limit reached")
+        self.db.execute(pg_insert(PlatformKV).values(
+            key="wb_sales_usage", value={"last": now},
+        ).on_conflict_do_update(
+            index_elements=[PlatformKV.key],
+            set_={"value": {"last": now}},
+        ))
+        self.db.commit()
+
+    def sales(self, date_from: str) -> list[dict]:
+        """Финансовый отчёт продаж/возвратов покупателя (S/R-строки, КМ нет).
+
+        429-тело приходит объектом с полем status — отдаём пустой список,
+        пусть следующим циклом (гейт 1/2ч) доедет."""
+        self._gate_sales()
+        r = self._fetch("GET", self.stat_base + "/api/v1/supplier/sales",
+                        params={"dateFrom": date_from})
+        body = r.json()
+        if not isinstance(body, list):
+            # нестандартное тело (429-объект и т.п.): гейт уже сжёг окно —
+            # молчать нельзя, следующим циклом (через 2 ч) доедет
+            log.warning("wb sales unexpected body: %s", str(body)[:120])
+            return []
+        return body
+
     def orders(self, limit: int = 1000) -> list[dict]:
         out: list[dict] = []
         cursor = 0
