@@ -213,6 +213,9 @@ const fmtDay = (s) => {   // date-only fiscal_dt: без времени (UTC-п�
   if (typeof s === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(s)) return `${s.slice(8, 10)}.${s.slice(5, 7)}`
   return fmtD(s) }
 const evLine = (it) => { const ev = it.last_event || {}
+  // финансовый возврат покупателя: свой payload (sale_id/date), фискальных полей нет
+  if (ev.sale_id && ev.date && !ev.operation_type_id)
+    return `возврат покупателя · ${fmtDay(ev.date)}`
   const base = opRu(ev)
   return base + (ev.fiscal_dt ? ` · ${fmtDay(ev.fiscal_dt)}` : '')
     + (ev.fiscal_doc_number ? ` · чек ${ev.fiscal_doc_number}` : '')
@@ -549,19 +552,31 @@ function Withdraw({ ctx }) {
 }
 
 /* ================= возвраты ================= */
+// дедлайн забора невыкупа: WB перестал заполнять expiredDt (23.09: 0/750) —
+// считаем сами от готовности к выдаче: регламент WB — 7 дней, 8-й на склад WB
+const pickDeadline = (r) => {
+  if (r.expired_dt) return { iso: r.expired_dt, est: false }
+  const ready = r.ready_dt ? parseUtc(r.ready_dt) : NaN
+  return isNaN(ready) ? { iso: null, est: false }
+    : { iso: new Date(ready.getTime() + 7 * 864e5).toISOString(), est: true }
+}
+
 function Returns({ ctx, pulse }) {
   const { notify, confirm, bump, inn } = ctx
   const [rows, setRows] = useState(null)
   const [docs, setDocs] = useState(null)
   const [stats, setStats] = useState(null)
+  const [cr, setCr] = useState(null)
   useEffect(() => { api('/v1/wb/returns').then(setRows).catch(() => setRows([]))
     api('/v1/docs?limit=200').then(setDocs).catch(() => setDocs([]))
-    api('/v1/journal/stats').then(setStats).catch(() => {}) }, [ctx.tick])
+    api('/v1/journal/stats').then(setStats).catch(() => {})
+    api('/v1/wb/client-returns').then(setCr).catch(() => setCr([])) }, [ctx.tick])
   const sorted = (rows || []).slice().sort((a, b) => {
     if (!!a.completed_dt !== !!b.completed_dt) return a.completed_dt ? 1 : -1
-    return (a.expired_dt || '').localeCompare(b.expired_dt || '') })
-  const nearest = sorted.find((r) => !r.completed_dt && r.expired_dt)
-  const hot = nearest && parseUtc(nearest.expired_dt) - Date.now() <= 48 * 36e5
+    return (pickDeadline(a).iso || '9999').localeCompare(pickDeadline(b).iso || '9999') })
+  const nearest = sorted.find((r) => !r.completed_dt && pickDeadline(r).iso)
+  const nd = nearest && pickDeadline(nearest)
+  const hot = nd && parseUtc(nd.iso) - Date.now() <= 48 * 36e5
   const poll = () => confirm('Опросить WB goods-return вручную?',
     'Ручной опрос расходует ту же квоту, что и часовой автоматический.',
     'GET goods-return · окно 7 дней', 'Опросить', async () => {
@@ -570,56 +585,77 @@ function Returns({ ctx, pulse }) {
         bump()
       } catch (e) { notify('Опрос не удался', e.message, 'bad') } })
   const doReturn = () => { const n = (stats || {}).PENDING_RETURN || 0
-    if (!n) return notify('Нет позиций к возврату', 'КМ в статусе «к возврату» появятся, когда WB примет возврат (excise op=2).', 'warn')
-    confirm('Собрать возврат продавца?',
-      `Из ${n} КМ будет создан черновик LP_RETURN. Первичка — чеки из последних выводов; КМ без вывода будут пропущены.`,
+    if (!n) return notify('Нет кодов к возврату в ЧЗ', 'Появятся, когда покупатель вернёт товар, выведенный нашим документом (сигнал — финансовый след WB).', 'warn')
+    confirm('Собрать возврат в оборот?',
+      `Из ${n} КМ будет создан черновик LP_RETURN — коды, выведенные нашим документом, а товар вернулся к вам. Причина «возврат при дистанционной продаже», первичка — наш документ вывода. Подача — отдельным шагом.`,
       'LP_RETURN · REMOTE_SALE_RETURN · оплачено', 'Собрать документ', async () => {
         try { const r = await api('/v1/batches/return', { method: 'POST', body: JSON.stringify({ inn }) })
-          if (!r.docs) notify('Возврат не собран', `${r.blocked} КМ без вывода из оборота`, 'warn')
-          else notify('Создан черновик LP_RETURN', r.blocked ? `КМ без вывода пропущено: ${r.blocked}` : '')
+          if (!r.docs) notify('Возврат не собран', `${r.blocked} КМ без первички — документ вывода не найден`, 'warn')
+          else notify('Создан черновик LP_RETURN', r.blocked ? `КМ без первички пропущено: ${r.blocked}` : 'Подайте его в ЧЗ — ниже в документах.')
           bump()
         } catch (e) { notify('Ошибка сбора возврата', e.message, 'bad') } }) }
   const lp = (docs || []).filter((d) => d.type === 'LP_RETURN')
   return <>
-    <Head title="Возвраты" sub="Физическое движение: покупатель сдал товар на ПВЗ → забрать до дедлайна (WB хранит 7 дней) → КМ появляется в «к возврату» → собирается LP_RETURN."
+    <Head title="Возвраты" sub="Покупатель вернул купленное → код возвращаем в оборот (после нашего вывода — документом LP_RETURN). Невыкуп → забрать с ПВЗ и снова отгружать тем же кодом — в ЧЗ подавать нечего."
       tools={<Sync tick={ctx.tick} />} />
-    {hot && nearest && <div className="banner">{I.clock}
-      <div className="b-tx"><b>Заказ {nearest.order_id}: забрать до {fmtD(nearest.expired_dt)} (через {fmtLeft(nearest.expired_dt)})</b>
+    {hot && nd && <div className="banner">{I.clock}
+      <div className="b-tx"><b>Заказ {nearest.order_id}: забрать до {fmtD(nd.iso)}{nd.est ? ' (оценка)' : ''} — {fmtLeft(nd.iso)}</b>
         <div className="sm">{nearest.office || 'ПВЗ'} · просрочите — товар вернут на склад WB. Алерт уже ушёл в Telegram.</div></div></div>}
     <div className="strip">
-      <div className="kpi"><div className="n">{(stats || {}).PENDING_RETURN || 0}</div><div className="l">к возврату в ЧЗ</div></div>
-      <div className="kpi"><div className="n warn">{(rows || []).filter((r) => !r.completed_dt).length}</div><div className="l">активных на ПВЗ</div></div>
-      <div className="kpi"><div className="n good">{(stats || {}).RETURNED || 0}</div><div className="l">возвращено</div></div>
+      <div className="kpi"><div className="n">{cr ? cr.length : '—'}</div><div className="l">вернули покупатели · 30 дн</div></div>
+      <div className="kpi"><div className="n warn">{(stats || {}).PENDING_RETURN || 0}</div><div className="l">к возврату в ЧЗ</div></div>
+      <div className="kpi"><div className="n warn">{(rows || []).filter((r) => !r.completed_dt).length}</div><div className="l">невыкупы к забору</div></div>
     </div>
     <div className="card">
-      <div className="card-h"><h2>Возвраты на ПВЗ (WB goods-return)</h2>
+      <div className="card-h"><h2>Возвраты покупателей</h2>
+        <span className="hint">финансовый след WB · опрос раз в 2 часа</span></div>
+      <div className="twrap"><table className="t fit">
+        <colgroup><col style={{ width: 104 }} /><col style={{ width: 210 }} /><col style={{ width: 252 }} />
+          <col style={{ width: 160 }} /><col style={{ width: 148 }} /></colgroup>
+        <thead><tr><th>Дата</th><th>Заказ</th><th>Код маркировки</th><th>Склад</th><th>Статус</th></tr></thead>
+        <tbody>{(cr || []).map((r) => <tr key={r.srid}>
+          <td className="mono">{fmtD(r.date)}</td>
+          <td className="ell mono" title={r.order_doc || r.srid}>{r.order_doc || r.srid}</td>
+          <td>{r.km ? <KmCell km={r.km} /> : <span className="faint">ждёт данных продажи</span>}</td>
+          <td className="ell" title={r.warehouse || ''}>{r.warehouse || '—'}</td>
+          <td>{r.applied && r.state ? <Badge dict={ITEM_STATES} v={r.state} />
+            : r.applied ? <span className="faint">наблюдение</span>
+              : <span className="faint">стейджинг</span>}</td></tr>)}
+          {cr && !cr.length && <tr><td colSpan={5}><div className="empty"><b>Покупатели пока ничего не возвращали</b>Продажи фулфилмента идут с середины сентября — возвраты появятся здесь автоматически.</div></td></tr>}
+        </tbody></table></div>
+      <div className="card-b" style={{ borderTop: '1px solid var(--line)', display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 12, flexWrap: 'wrap' }}>
+        <span style={{ fontSize: 12.5, color: 'var(--muted)' }}>Возврат снимает обязанность вывода, а выведенным нашим документом кодам ставит «к возврату в ЧЗ».</span>
+        <button className="btn pri" onClick={doReturn}>Собрать возврат в ЧЗ</button></div>
+    </div>
+    <div className="card">
+      <div className="card-h"><h2>Невыкупы (WB goods-return)</h2>
         <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
           <span className="hint">квота {pulse?.quota?.goods_return_used ?? '—'}/{pulse?.quota?.goods_return_limit ?? 2} в час</span>
           <button className="btn sm" onClick={poll}>Обновить WB</button></div></div>
       <div className="twrap"><table className="t fit">
-        <colgroup><col style={{ width: 84 }} /><col style={{ width: 330 }} /><col style={{ width: 170 }} />
+        <colgroup><col style={{ width: 96 }} /><col style={{ width: 330 }} /><col style={{ width: 170 }} />
           <col style={{ width: 150 }} /><col style={{ width: 132 }} /><col style={{ width: 100 }} />
           <col style={{ width: 180 }} /></colgroup>
         <thead><tr><th>Заказ</th><th>Предмет</th><th>Причина</th><th>Статус</th><th>Забрать до</th><th>Выдан</th><th>ПВЗ</th></tr></thead>
         <tbody>{sorted.map((r) => {
-          const c = !r.completed_dt && r.expired_dt ? leftCls(r.expired_dt) : ''
+          const dl = pickDeadline(r)
+          const c = !r.completed_dt && dl.iso ? leftCls(dl.iso) : ''
           return <tr key={r.srid} className={c === 'danger' || c === 'over' ? 'rowhot' : ''}>
             <td className="num">{r.order_id}</td>
             <td className="ell" title={r.subject || r.srid}>{r.subject || r.srid}</td>
             <td className="ell" title={r.reason || ''}>{r.reason || '—'}</td>
             <td className="ell" title={r.status || ''}>{r.status}</td>
-            <td>{r.expired_dt ? <><span className={`cd ${c}`}>{fmtLeft(r.expired_dt)}</span>
-              <div className="faint mono" style={{ fontSize: 11, marginTop: 2 }}>{fmtD(r.expired_dt)}</div></> : '—'}</td>
+            <td>{dl.iso ? <><span className={`cd ${c}`}>{fmtLeft(dl.iso)}</span>
+              <div className="faint mono" style={{ fontSize: 11, marginTop: 2 }}
+                title={dl.est ? 'оценка: готовность к выдаче + 7 дней хранения' : ''}>
+                {dl.est ? '≈ ' : ''}{fmtD(dl.iso)}</div></> : '—'}</td>
             <td className="mono">{r.completed_dt ? fmtD(r.completed_dt) : '—'}</td>
             <td className="ell" title={r.office || ''}>{r.office || '—'}</td></tr> })}
-          {rows && !rows.length && <tr><td colSpan={7}><div className="empty"><b>Возвратов нет</b>Появятся из часового опроса WB — или нажмите «Обновить WB».</div></td></tr>}
+          {rows && !rows.length && <tr><td colSpan={7}><div className="empty"><b>Невыкупов нет</b>Появятся из часового опроса WB — или нажмите «Обновить WB».</div></td></tr>}
         </tbody></table></div>
-      <div className="card-b" style={{ borderTop: '1px solid var(--line)', display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 12, flexWrap: 'wrap' }}>
-        <span style={{ fontSize: 12.5, color: 'var(--muted)' }}>Товар, выданный продавцом, появляется в журнале как «к возврату».</span>
-        <button className="btn pri" onClick={doReturn}>Собрать возврат</button></div>
     </div>
     <div className="card">
-      <div className="card-h"><h2>Документы LP_RETURN</h2><span className="hint">первичка — чек из последнего вывода КМ</span></div>
+      <div className="card-h"><h2>Документы LP_RETURN</h2><span className="hint">первичка — документ вывода этого КМ</span></div>
       {docs && <DocTable docs={lp} ctx={ctx} empty="Документов возврата пока нет" />}
     </div>
   </>
@@ -1646,7 +1682,7 @@ function Trace({ ctx, initial }) {
         // todo — ещё не произошло, na — ретроспективно недоступно (WB)
         const cz = data.cz || {}
         const sale = data.timeline.find((e) => e.kind === 'sale')
-        const ret = data.timeline.find((e) => e.kind === 'return')
+        const ret = data.timeline.find((e) => e.kind === 'return' || e.kind === 'client_return')
         const lk = data.docs.find((d) => d.type === 'LK_RECEIPT')
         const feed0 = ((wbFeed?.orders?.length ? wbFeed.orders : data.wb_feed?.orders) || [])[0]
         const order0 = data.orders[0]
