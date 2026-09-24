@@ -168,6 +168,23 @@ def test_journal_enrich_delivery_type(db, client):
     assert r.json()[0]["delivery_type"] == "fbo"
 
 
+def test_journal_doc_ref_stages_withdraw(db, client):
+    """«Выведен» ≠ факт: строка журнала несёт ссылку на документ вывода и его
+    этап — UI отличает черновик/подан/принят (инцидент 23.09: две плашки
+    «выведен» + ЧЗ «в обороте» противоречили друг другу)."""
+    from marko.mt.models import MtDoc
+    _sale(db)
+    client.post("/v1/batches/withdraw", headers=AUTH, json={"inn": INN})
+    doc = db.query(MtDoc).filter_by(type="LK_RECEIPT").one()
+    assert doc.status == "draft"
+    row = client.get("/v1/journal?state=WITHDRAWN", headers=AUTH).json()[0]
+    assert row["doc_ref"] == {"id": doc.id, "status": "draft"}
+    doc.status = "checked_ok"
+    db.commit()
+    row2 = client.get("/v1/journal?state=WITHDRAWN", headers=AUTH).json()[0]
+    assert row2["doc_ref"]["status"] == "checked_ok"
+
+
 def test_wb_returns_delivery_type(db, client):
     from marko.connector_wb.returns import ingest_returns
     from marko.connector_wb.models import WbOrder

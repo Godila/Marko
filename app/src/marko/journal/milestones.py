@@ -38,8 +38,31 @@ def order_dates(db: Session, docs: set[str]) -> dict[str, tuple[str, str]]:
             .filter(WbOrder.order_doc.in_(docs)).all()}
 
 
+def doc_refs(db: Session, kms: list[str]) -> dict[str, dict]:
+    """КМ → последний документ ЧЗ с этим кодом {id, status}: этап «выведен»
+    (черновик/подан/принят) и «возвращён» — UI различает намерение и факт
+    (инцидент 23.09: плашки «выведен»+ЧЗ «в обороте» противоречили)."""
+    if not kms:
+        return {}
+    wanted = set(kms)
+    out: dict[str, dict] = {}
+    from marko.mt.models import MtDoc
+    for doc in (db.query(MtDoc)
+                .filter(MtDoc.type.in_(("LK_RECEIPT", "LP_RETURN")))
+                .order_by(MtDoc.id).all()):     # больший id побеждает
+        products = (doc.payload.get("products", []) if doc.type == "LK_RECEIPT"
+                    else doc.payload.get("products_list", []))
+        key = "cis" if doc.type == "LK_RECEIPT" else "ki"
+        for p in products:
+            km = p.get(key) if isinstance(p, dict) else None
+            if km in wanted:
+                out[km] = {"id": doc.id, "status": doc.status}
+    return out
+
+
 def enrich(db: Session, rows: list[dict]) -> list[dict]:
-    """Строки item_row + sale_dt / order_dt / delivery_type ('' = неизвестно).
+    """Строки item_row + sale_dt / order_dt / delivery_type ('' = неизвестно)
+    + doc_ref (этап документа вывода/возврата).
 
     Ключ заказа — srid последней продажи (дата заказа согласована с датой
     выкупа, а не с текстом соседней колонки «Последний сигнал»); для строк
@@ -54,9 +77,11 @@ def enrich(db: Session, rows: list[dict]) -> list[dict]:
             else (r.get("last_event") or {}).get("srid") or ""
         doc_of[r["km"]] = order_doc(srid)
     ords = order_dates(db, {d for d in doc_of.values() if d})
+    refs = doc_refs(db, [r["km"] for r in rows])
     for r in rows:
         r["sale_dt"] = sales[r["km"]][0] if r["km"] in sales else ""
         created, delivery = ords.get(doc_of[r["km"]], ("", ""))
         r["order_dt"] = created
         r["delivery_type"] = delivery
+        r["doc_ref"] = refs.get(r["km"])
     return rows

@@ -1429,11 +1429,32 @@ function OrderCard({ data, ctx }) {
    лейаут; без w — колонка забирает остаток), ell — однострочная обрезка с
    кликом-раскрытием, mono — кодовая колонка (DESIGN.md 11), sort — аксессор
    ключа сортировки (ISO-строки, кликабельный заголовок) */
+// плашка состояния с этапом документа: «выведен» — только факт (принят ЧЗ),
+// до этого честный этап «вывод: черновик/подан» — иначе противоречит колонке ЧЗ
+// (инцидент 23.09: две плашки «выведен» + «в обороте»); «выведен (WB)» — вывод
+// чеком ККТ Wildberries, без нашего документа
+const stateBadge = (it) => {
+  const d = it.doc_ref
+  if (it.state === 'WITHDRAWN' && it.withdrawn_by === 'us' && d) {
+    if (d.status === 'draft') return <span className="bdg amber">вывод: черновик №{d.id}</span>
+    if (d.status === 'submitted') return <span className="bdg blue">вывод: подан №{d.id}</span>
+    if (d.status === 'checked_ok') return <span className="bdg green">выведен · №{d.id}</span>
+    if (d.status === 'error') return <span className="bdg red">вывод: ошибка №{d.id}</span>
+  }
+  if (it.state === 'RETURNED' && d) {
+    if (d.status === 'draft') return <span className="bdg amber">возврат: черновик №{d.id}</span>
+    if (d.status === 'submitted') return <span className="bdg blue">возврат: подан №{d.id}</span>
+  }
+  if (it.state === 'WITHDRAWN' && it.withdrawn_by === 'wb')
+    return <span className="bdg green">выведен (WB)</span>
+  return <Badge dict={ITEM_STATES} v={it.state} />
+}
+
 const JOURNAL_COLUMNS = [
   { key: 'km', label: 'Код маркировки', w: 240, render: (it) => <KmCell km={it.km} /> },
   { key: 'name', label: 'Наименование', w: 212, ell: true, text: (it) => it.cis_product_name || '',
     render: (it) => it.cis_product_name || <span className="faint">—</span> },
-  { key: 'state', label: 'Состояние', w: 120, render: (it) => <Badge dict={ITEM_STATES} v={it.state} /> },
+  { key: 'state', label: 'Состояние', w: 138, render: stateBadge },
   { key: 'sale', label: 'Выкуп', w: 84, mono: true, sort: (it) => it.sale_dt || '',
     render: (it) => it.sale_dt ? fmtDay(it.sale_dt) : <span className="faint">—</span> },
   { key: 'sig', label: 'Последний сигнал', w: 182, ell: true, sort: (it) => it.last_event?.fiscal_dt || '',
