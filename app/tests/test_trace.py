@@ -362,7 +362,7 @@ def test_trace_wb_feed_errors_and_scopes(db, client, monkeypatch):
     assert client.post("/v1/trace/wb-feed", headers=AUTH_RO, json={"km": KM}).status_code == 403
     # событий нет → note без сети
     monkeypatch.setattr(routes_journal, "WBClient",
-                        lambda **kw: pytest.fail("без событий WB не зывается"))
+                        lambda **kw: pytest.fail("без событий WB не зовётся"))
     r = client.post("/v1/trace/wb-feed", headers=AUTH,
                     json={"km": "0104630520676025215NOFEED1"})
     assert r.status_code == 200 and r.json()["orders"] == [] and "note" in r.json()

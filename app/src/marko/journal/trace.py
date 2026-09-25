@@ -6,6 +6,8 @@ Read-only агрегатор над журналом, документами Ч�
 своя строка в SYSTEMS + события его источника в journal.events.
 """
 import re
+import time
+from datetime import datetime, timezone
 
 from sqlalchemy import or_
 from sqlalchemy.orm import Session
@@ -177,17 +179,29 @@ def _orders(db: Session, docs: set[str]) -> list[dict]:
 def _returns(db: Session, srids: set[str], docs: set[str]) -> list[dict]:
     """Возвраты на ПВЗ в пространстве документов этого кода: точные srid
     событий + doc-префикс (хвосты '.n.m' расходятся, см. lookup)."""
-    sf = ([WbReturn.srid.in_(srids)] if srids else []) + \
-         [WbReturn.srid.like(_esc(d) + ".%", escape="\\") for d in docs]
+    sf = _wbret_sf(srids, docs)
     if not sf:
         return []
-    out = []
-    for r in db.query(WbReturn).filter(or_(*sf)).order_by(WbReturn.srid).all():
-        p = r.payload or {}
-        out.append({"srid": r.srid, "order_id": r.order_id, "status": r.status,
-                    "reason": p.get("reason"), "expired_dt": r.expired_dt,
-                    "is_active": bool(p.get("isStatusActive"))})
-    return out
+    return [_return_row(r) for r in
+            db.query(WbReturn).filter(or_(*sf)).order_by(WbReturn.srid).all()]
+
+
+def _wbret_sf(srids: set[str], docs: set[str]) -> list:
+    """Фильтр строк WbReturn: точные srid + документы с хвостами '.n.m'
+    (хвосты расходятся между системами, инцидент 09.2026). Единая точка для
+    трассировки и справочника идентификаторов — дрейф трёх копий этого
+    фильтра стоил бы повторения инцидента."""
+    return ([WbReturn.srid.in_(srids)] if srids else []) + \
+        [WbReturn.srid.like(_esc(d) + ".%", escape="\\") for d in docs]
+
+
+def _return_row(r: WbReturn) -> dict:
+    """Сериализация строки возврата на ПВЗ — читают трассировка и справочник
+    идентификаторов одной таблицей UI; дрейф полей ломал бы её молча."""
+    p = r.payload or {}
+    return {"srid": r.srid, "order_id": r.order_id, "status": r.status,
+            "reason": p.get("reason"), "expired_dt": r.expired_dt,
+            "is_active": bool(p.get("isStatusActive"))}
 
 
 def _card(db: Session, gtin: str) -> dict | None:
@@ -241,8 +255,26 @@ def km_wb_order_ids(db: Session, km_input: str) -> list[int]:
     ids = {oid for (oid,) in db.query(WbOrder.order_id)
            .filter(WbOrder.order_doc.in_(docs),
                    WbOrder.order_id.isnot(None)).all()}
-    ret_sf = or_(WbReturn.srid.in_(docs),
-                 *[WbReturn.srid.like(_esc(d) + ".%", escape="\\") for d in docs])
+    ret_sf = or_(*_wbret_sf(docs, docs))
     ids.update(oid for (oid,) in db.query(WbReturn.order_id)
                .filter(ret_sf, WbReturn.order_id > 0).all())
     return sorted(i for i in ids if i)
+
+
+FEED_TTL = 3 * 3600 + 60   # окно чуть ДЛИННЕЕ квоты WB 1/3ч: кэш не должен
+# истечь раньше, чем освободится квота, иначе клик в зазоре ловит 429
+
+
+def feed_from_cache(db: Session, docs: set[str]) -> dict | None:
+    """Телеметрия ленты заказов из кэша кабинета (kv trace_wb_feed, без
+    сети). Читают /v1/trace (все документы кода) и справочник идентификаторов
+    (документ заказа); пустой или протухший кэш — None."""
+    kv = db.get(PlatformKV, "trace_wb_feed")
+    if not kv or time.time() - kv.value.get("fetched_at", 0) >= FEED_TTL:
+        return None
+    by_doc = kv.value.get("by_doc") or {}
+    rows = [by_doc[d] for d in sorted(docs) if d in by_doc]
+    if not rows:
+        return None
+    return {"fetched_at": datetime.fromtimestamp(
+        kv.value["fetched_at"], tz=timezone.utc).isoformat(), "orders": rows}

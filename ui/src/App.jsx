@@ -52,6 +52,9 @@ const ORDER_LOOKUP_STATUS = {
   fbw: 'Заказ вне контура FBS: строки по нему приходили, но в журнал не попадают (FBW-остатки на складе WB).',
   unknown: 'Такого заказа нет ни в реестре WB, ни в журнале. Проверьте номер — возможно, это заказ другого кабинета или опечатка.',
 }
+// тип ключа справочника идентификаторов — атрибут, не статус (DESIGN.md §8):
+// подпись без цвета, статусы внутри раздела — из существующих словарей
+const KEY_TYPES = { order: 'заказ WB', km: 'код маркировки', gtin: 'GTIN', nm: 'артикул WB (nmId)', supply: 'поставка WB' }
 const DOC_STATUS = { draft: ['черновик', 'grey'], signing: ['подписывается', 'blue'],
   submitted: ['подан', 'blue'], checked_ok: ['принят ЧЗ', 'green'], error: ['ошибка', 'red'] }
 const CARD_STATUS = { ok: ['новая', 'grey'], fed: ['подана', 'blue'], moderation: ['модерация', 'amber'],
@@ -1418,7 +1421,7 @@ function OrderCard({ data, ctx }) {
               style={{ fontSize: 12, color: 'var(--muted)' }}>{it.state}</span></>,
               <KmCard it={it} ctx={ctx} />)}>
             <td><KmCell km={it.km} /></td>
-            <td><Badge dict={ITEM_STATES} v={it.state} /></td>
+            <td>{stateBadge(it)}</td>
             <td style={{ fontSize: 12.5 }}>{evLine(it)}</td></tr> })}
         </tbody></table></div>
       : <div className="empty"><b>Кодов по заказу нет</b>Пояснение выше — почему их нет и что делать.</div>}
@@ -1480,7 +1483,7 @@ const isOrderId = (s) => { const v = (s || '').trim().toLowerCase()
   return !v.startsWith('01') && !v.includes('!') && ORDER_ID_RE.test(v) }
 
 function Journal({ ctx, initial }) {
-  const { openDrawer, notify, confirm, bump } = ctx
+  const { openDrawer, notify, confirm, bump, go } = ctx
   const [rows, setRows] = useState(null)
   const [stats, setStats] = useState({})
   const [state, setState] = useState(initial || '')
@@ -1490,7 +1493,7 @@ function Journal({ ctx, initial }) {
   const [contour, setContour] = useState('')
   const [sort, setSort] = useState({ k: 'upd', d: 'desc' })
   const [syncBusy, setSyncBusy] = useState(false)
-  const lastLookup = useRef('')
+  const lastIdentify = useRef('')
   useEffect(() => { api(`/v1/journal?limit=1000${state && state !== 'ANOMALY' ? `&state=${encodeURIComponent(state)}` : ''}`)
       .then(setRows).catch(() => setRows([]))
     api('/v1/journal/stats').then(setStats).catch(() => {}) }, [ctx.tick, state])
@@ -1519,15 +1522,14 @@ function Journal({ ctx, initial }) {
     s.k === k ? { k, d: s.d === 'desc' ? 'asc' : 'desc' } : { k, d: 'desc' })
   const anomalies = anomalyTotal(stats)
   const total = Object.values(stats).reduce((a, v) => a + v, 0)
-  const lookupOrder = async (val) => { const rid = val.trim()
-    lastLookup.current = rid
-    try { const r = await api(`/v1/wb/lookup?rid=${encodeURIComponent(rid)}`)
-      openDrawer(<>Заказ WB ·&nbsp;<span className="mono"
-        style={{ fontSize: 12, color: 'var(--muted)' }}>{r.order_doc}</span></>,
-        <OrderCard data={r} ctx={ctx} />)
-    } catch (e) { lastLookup.current = ''; notify('Поиск заказа не удался', e.message, 'bad') } }
+  const openIdentify = (val) => { const rid = val.trim()
+    if (!rid || rid === lastIdentify.current) return
+    // ID заказа — территория справочника идентификаторов: там живые
+    // закрепления КиЗ WB; строка остаётся и фильтром по документу заказа
+    lastIdentify.current = rid
+    go('ids', rid) }
   const onQ = (e) => { const v = e.target.value; setQ(v)
-    if (isOrderId(v) && v.trim() !== lastLookup.current) lookupOrder(v) }
+    if (isOrderId(v)) openIdentify(v) }
   const doSync = () => confirm('Обновить статусы ЧЗ?',
     `Все коды журнала (${total}) будут проверены в Честном Знаке. Коды, которые ЧЗ уже считает выведенными и по которым у нас нет поданной заявки на вывод, перейдут в «выведен (WB)» с записью в журнал.`,
     `${total} КМ`, 'Проверить в ЧЗ', async () => {
@@ -1562,7 +1564,7 @@ function Journal({ ctx, initial }) {
       <div className="search" style={{ flex: '1 1 380px', maxWidth: 560 }}>{I.search}
         <input value={q} placeholder="Поиск по КМ, событию или ID заказа WB…"
           onChange={onQ}
-          onKeyDown={(e) => { if (e.key === 'Enter' && isOrderId(q)) lookupOrder(q) }} /></div>
+          onKeyDown={(e) => { if (e.key === 'Enter' && isOrderId(q)) openIdentify(q) }} /></div>
       <span className="faint" style={{ fontSize: 12 }} title="Период по дате последнего сигнала WB (чек). Строки без сигнала WB в период не попадают.">сигнал с</span>
       <input type="date" className="dt" aria-label="Последний сигнал: с" value={from}
         onChange={(e) => setFrom(e.target.value)} />
@@ -1571,7 +1573,7 @@ function Journal({ ctx, initial }) {
         onChange={(e) => setTo(e.target.value)} />
       {(from || to) && <button className="btn sm" onClick={() => { setFrom(''); setTo('') }}>Сбросить период</button>}
       <span className="faint" style={{ fontSize: 12, marginLeft: 'auto' }}>показано <span className="mono">{shown.length}</span>
-        {isOrderId(q) && <> · Enter — карточка заказа WB</>}</span>
+        {isOrderId(q) && <> · Enter — справочник идентификаторов</>}</span>
     </div>
     <div className="card">
       <div className="twrap"><table className="t fit">
@@ -1851,7 +1853,7 @@ function Trace({ ctx, initial }) {
               <div style={{ margin: '6px 0 16px' }}>
                 {wbMeta.note ? <p style={{ fontSize: 12.5, color: 'var(--muted)', margin: 0 }}>{wbMeta.note}</p>
                   : wbMeta.orders.map((o) => <div key={o.id} style={{ marginBottom: 10 }}>
-                    <span className="mono" style={{ fontSize: 12 }}>заказ {o.id}</span>
+                    <span className="mono" style={{ fontSize: 12 }}>задание {o.id}</span>
                     {!o.sgtins.length && <span className="faint" style={{ fontSize: 12 }}> — кодов не закреплено</span>}
                     {o.sgtins.map((s, i) => <div key={i} style={{ display: 'flex', gap: 8, alignItems: 'baseline', flexWrap: 'wrap', marginTop: 2 }}>
                       <span className="km" style={{ fontSize: 11 }}>{s.sgtin || '—'}</span>
@@ -1861,39 +1863,11 @@ function Trace({ ctx, initial }) {
                   </div>)}
               </div></>}
             {(data.supplies || []).length > 0 && <><b style={{ fontSize: 12.5 }}>Поставка · отгрузка</b>
-              <div style={{ margin: '6px 0 16px' }}>{data.supplies.map((s) => <div key={s.id} style={{ marginBottom: 8 }}>
-                <span className="mono" style={{ fontSize: 12 }}>{s.id}</span>
-                {s.name && <span className="faint" style={{ fontSize: 12 }}> · {s.name}</span>}
-                <div className="twrap" style={{ marginTop: 4 }}><table className="t small"><tbody>
-                  <tr><td className="faint" style={{ width: '40%' }}>Создана</td><td className="mono">{s.createdAt ? fmtD(s.createdAt) : '—'}</td></tr>
-                  <tr><td className="faint">Закрыта</td><td className="mono">{s.closedAt ? fmtD(s.closedAt) : '—'}</td></tr>
-                  <tr><td className="faint">Просканирована на складе WB</td>
-                    <td className="mono">{s.scanDt ? fmtD(s.scanDt) : '—'}</td></tr>
-                  {s.rejectDt && <tr><td className="faint">Отклонена</td><td className="mono">{fmtD(s.rejectDt)}</td></tr>}
-                </tbody></table></div>
-              </div>)}</div></>}
+              <div style={{ margin: '6px 0 16px' }}>{data.supplies.map((s) => <SupplyBlock key={s.id} s={s} />)}</div></>}
             {data.orders.length > 0 && <><b style={{ fontSize: 12.5 }}>Реестр заказов ({data.orders.length})</b>
-              <div className="twrap" style={{ margin: '6px 0 16px' }}><table className="t small fit">
-                <colgroup><col style={{ width: 278 }} /><col style={{ width: 130 }} /><col style={{ width: 90 }} /><col style={{ width: 110 }} /><col style={{ width: 150 }} /></colgroup>
-                <thead><tr><th>Документ</th><th>ID задания</th><th>Тип</th><th>nm_id</th><th>Создан</th></tr></thead>
-                <tbody>{data.orders.map((o) => <tr key={o.order_doc}>
-                  <td className="mono ell" title={o.order_doc}>{o.order_doc}</td>
-                  <td className="mono">{o.order_id ?? '—'}</td>
-                  <td>{WB_DELIVERY[o.delivery_type] || o.delivery_type || '—'}</td>
-                  <td className="mono">{o.nm_id ?? '—'}</td>
-                  <td className="mono">{o.order_created_at ? fmtDay(o.order_created_at) : '—'}</td>
-                </tr>)}</tbody></table></div></>}
+              <div style={{ marginBottom: 16 }}><OrdersMiniTable orders={data.orders} /></div></>}
             {data.returns.length > 0 && <><b style={{ fontSize: 12.5 }}>Возвраты на ПВЗ ({data.returns.length})</b>
-              <div className="twrap" style={{ margin: '6px 0 0' }}><table className="t small fit">
-                <colgroup><col style={{ width: 278 }} /><col style={{ width: 130 }} /><col style={{ width: 190 }} /><col style={{ width: 140 }} /><col style={{ width: 110 }} /></colgroup>
-                <thead><tr><th>Возврат (srid)</th><th>ID задания</th><th>Статус</th><th>Причина</th><th>Дедлайн</th></tr></thead>
-                <tbody>{data.returns.map((r) => <tr key={r.srid}>
-                  <td className="mono ell" title={r.srid}>{r.srid}</td>
-                  <td className="mono">{r.order_id || '—'}</td>
-                  <td className="ell" title={`${r.status || ''}${r.is_active ? '' : ' · завершён'}`}>{r.status || '—'}</td>
-                  <td className="ell" title={r.reason || ''}>{r.reason || '—'}</td>
-                  <td className="mono">{r.expired_dt ? fmtDay(r.expired_dt) : '—'}</td>
-                </tr>)}</tbody></table></div></>}
+              <ReturnsMiniTable returns={data.returns} /></>}
           </div></div>}
           {tab === 'docs' && <div className="card">
             <div className="twrap"><table className="t small fit">
@@ -1934,6 +1908,239 @@ function Trace({ ctx, initial }) {
   </>
 }
 
+/* ================= справочник идентификаторов WB ================= */
+/* любой ключ (rid/ID задания/КМ/GTIN/nmId/поставка) → всё известное.
+   Точечный запрос — не на 60с-тике; закреплённые КиЗ подтягиваются живьём
+   (orders/meta, кэш 10 мин), обновление — кнопкой. КМ — территория
+   трассировки: авто-переход туда */
+function OrdersMiniTable({ orders }) {
+  return <div className="twrap" style={{ marginTop: 6 }}><table className="t small fit">
+    <colgroup><col style={{ width: 278 }} /><col style={{ width: 130 }} /><col style={{ width: 90 }} /><col style={{ width: 110 }} /><col style={{ width: 150 }} /></colgroup>
+    <thead><tr><th>Документ</th><th>ID задания</th><th>Тип</th><th>nm_id</th><th>Создан</th></tr></thead>
+    <tbody>{orders.map((o) => <tr key={o.order_doc}>
+      <td className="mono ell" title={o.order_doc}>{o.order_doc}</td>
+      <td className="mono">{o.order_id ?? '—'}</td>
+      <td>{WB_DELIVERY[o.delivery_type] || o.delivery_type || '—'}</td>
+      <td className="mono">{o.nm_id ?? '—'}</td>
+      <td className="mono">{o.order_created_at ? fmtDay(o.order_created_at) : '—'}</td>
+    </tr>)}</tbody></table></div>
+}
+
+function ReturnsMiniTable({ returns }) {
+  return <div className="twrap" style={{ marginTop: 6 }}><table className="t small fit">
+    <colgroup><col style={{ width: 278 }} /><col style={{ width: 130 }} /><col style={{ width: 190 }} /><col style={{ width: 140 }} /><col style={{ width: 110 }} /></colgroup>
+    <thead><tr><th>Возврат (srid)</th><th>ID задания</th><th>Статус</th><th>Причина</th><th>Дедлайн</th></tr></thead>
+    <tbody>{returns.map((r) => <tr key={r.srid}>
+      <td className="mono ell" title={r.srid}>{r.srid}</td>
+      <td className="mono">{r.order_id || '—'}</td>
+      <td className="ell" title={`${r.status || ''}${r.is_active ? '' : ' · завершён'}`}>{r.status || '—'}</td>
+      <td className="ell" title={r.reason || ''}>{r.reason || '—'}</td>
+      <td className="mono">{r.expired_dt ? fmtDay(r.expired_dt) : '—'}</td>
+    </tr>)}</tbody></table></div>
+}
+
+function SupplyBlock({ s }) {
+  return <div style={{ marginBottom: 8 }}>
+    <span className="mono" style={{ fontSize: 12 }}>{s.id}</span>
+    {s.name && <span className="faint" style={{ fontSize: 12 }}> · {s.name}</span>}
+    <div className="twrap" style={{ marginTop: 4 }}><table className="t small"><tbody>
+      <tr><td className="faint" style={{ width: '40%' }}>Создана</td><td className="mono">{s.createdAt ? fmtD(s.createdAt) : '—'}</td></tr>
+      <tr><td className="faint">Закрыта</td><td className="mono">{s.closedAt ? fmtD(s.closedAt) : '—'}</td></tr>
+      <tr><td className="faint">Просканирована на складе WB</td><td className="mono">{s.scanDt ? fmtD(s.scanDt) : '—'}</td></tr>
+      {s.rejectDt && <tr><td className="faint">Отклонена</td><td className="mono">{fmtD(s.rejectDt)}</td></tr>}
+    </tbody></table></div>
+  </div>
+}
+
+function Identifiers({ ctx, initial }) {
+  const { notify, openDrawer, go } = ctx
+  const [q, setQ] = useState(initial || '')
+  const [data, setData] = useState(null)
+  const [busy, setBusy] = useState(false)
+  const [rfBusy, setRfBusy] = useState(false)
+  const seqRef = useRef(0)
+  const run = async (val, refresh = false) => {
+    const key = (val ?? q).trim()
+    if (!key) return
+    const seq = ++seqRef.current          // медленный запрос не должен
+    if (refresh) setRfBusy(true); else setBusy(true)   // перезаписать свежий
+    try {
+      const r = await api(`/v1/identify?key=${encodeURIComponent(key)}&live=1${refresh ? '&refresh=1' : ''}`)
+      if (seq !== seqRef.current) return
+      if (r.type === 'km') {
+        notify('Распознан код маркировки', 'Открыта трассировка кода')
+        go('trace', r.key)
+        return
+      }
+      setData(r)
+    } catch (e) {
+      if (seq === seqRef.current) { setData(null); notify('Поиск не удался', e.message, 'bad') }
+    } finally {
+      if (seq === seqRef.current) { setBusy(false); setRfBusy(false) }
+    }
+  }
+  useEffect(() => { if (initial) run(initial) }, [])
+  const kmDrawer = (it) => { const [lbl] = ITEM_STATES[it.state] || [it.state]
+    return openDrawer(<>КМ · {lbl} ·&nbsp;<span className="mono"
+      style={{ fontSize: 12, color: 'var(--muted)' }}>{it.state}</span></>,
+      <KmCard it={it} ctx={ctx} />) }
+  const itemsTable = (items) => <div className="twrap" style={{ marginTop: 6 }}>
+    <table className="t small fit">
+      <colgroup><col style={{ width: 248 }} /><col style={{ width: 150 }} /><col style={{ width: 88 }} /><col style={{ width: 240 }} /></colgroup>
+      <thead><tr><th>Код</th><th>Состояние</th><th>Выкуп</th><th>Последний сигнал</th></tr></thead>
+      <tbody>{items.map((it) => <tr key={it.km} style={{ cursor: 'pointer' }} onClick={() => kmDrawer(it)}>
+        <td><KmCell km={it.km} /></td>
+        <td>{stateBadge(it)}</td>
+        <td className="mono">{it.sale_dt ? fmtDay(it.sale_dt) : <span className="faint">—</span>}</td>
+        <EllCell title={evLine(it)}>{evLine(it)}</EllCell>
+      </tr>)}</tbody></table></div>
+  const live = data?.live
+  return <>
+    <Head title="Идентификаторы WB" sub="Любой ключ Wildberries — заказ, задание, КМ, GTIN, артикул или поставка — и всё, что платформа о нём знает. КиЗ непроданных заказов — живые закрепления WB."
+      tools={<Sync tick={ctx.tick} />} />
+    <div className="frow" style={{ marginBottom: 14 }}>
+      <div className="search" style={{ flex: '1 1 380px', maxWidth: 560 }}>{I.search}
+        <input value={q} placeholder="rid заказа, ID сборочного задания, КМ/КИЗ, GTIN, nmId или поставка…"
+          onChange={(e) => setQ(e.target.value)}
+          onKeyDown={(e) => { if (e.key === 'Enter') run() }} /></div>
+      <button className="btn pri" disabled={busy || !q.trim()} onClick={() => run()}>Найти</button>
+      <span className="faint" style={{ fontSize: 12 }}>
+        {busy ? 'ищем…' : data ? `распознан: ${KEY_TYPES[data.type] || data.type}` : 'Enter — тоже'}</span>
+    </div>
+    {data?.type === 'order' && <>
+      {live && <div className="card" style={{ marginBottom: 18 }}>
+        <div className="card-h"><b style={{ fontSize: 12.5 }}>Закреплённые КиЗ · Wildberries</b>
+          <span className="hint">
+            {live.state === 'live' || live.state === 'cache'
+              ? `${live.state === 'live' ? 'live' : 'кэш'}${live.error ? ' · частично' : ''}` : ''}
+            {live.orders?.[0]?.ts ? ` · ${fmtAgo(live.orders[0].ts)}` : ''}</span></div>
+        <div className="card-b">
+          {live.error && live.orders?.length
+            ? <p style={{ fontSize: 12.5, color: 'var(--muted)', margin: '0 0 10px' }}>
+              {live.error} — часть заданий показана из кэша, обновите позже</p> : null}
+          {['skipped', 'error', 'empty'].includes(live.state)
+            ? <div className="empty" style={{ marginTop: 0 }}>
+              <b>{live.state === 'error' ? 'WB не ответил' : live.state === 'empty' ? 'WB не вернул закреплений' : 'Живые закрепления недоступны'}</b>
+              {live.note || live.error || 'Повторите позже или обновите закрепления кнопкой ниже.'}
+            </div>
+            : live.orders.map((o) => <div key={o.id} style={{ marginBottom: 14 }}>
+              <div style={{ display: 'flex', gap: 8, alignItems: 'baseline' }}>
+                <span className="mono" style={{ fontSize: 12 }}>задание {o.id}</span>
+                {!o.sgtins.length && <span className="faint" style={{ fontSize: 12 }}>— кодов не закреплено</span>}
+              </div>
+              {o.sgtins.map((s, i) => <div key={i} style={{ marginTop: 6 }}>
+                <div style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' }}>
+                  {s.km ? <KmCell km={s.km} />
+                    : <span className="mono" style={{ fontSize: 12, wordBreak: 'break-all' }}>{s.sgtin || '—'}</span>}
+                  {s.item ? <Badge dict={ITEM_STATES} v={s.item.state} />
+                    : <span className="faint" style={{ fontSize: 12 }} title="Кода нет в журнале — нормально для непроданных заказов: строки продаж придут после выкупа">нет в журнале</span>}
+                  {s.item && <button className="btn sm" onClick={() => kmDrawer(s.item)}>Карточка КМ</button>}
+                </div>
+                <div style={{ display: 'flex', gap: 10, alignItems: 'baseline', flexWrap: 'wrap', marginTop: 2 }}>
+                  <span style={{ fontSize: 12.5, color: 'var(--muted)' }}>
+                    {SGTIN_DECISION[s.decision] || <span className="mono" style={{ fontSize: 12 }}>{s.decision || '—'}</span>}</span>
+                  {s.sgtin && s.km && s.sgtin !== s.km && <span className="faint mono" style={{ fontSize: 11, wordBreak: 'break-all' }}>{s.sgtin}</span>}
+                </div>
+              </div>)}
+            </div>)}
+          <div className="row" style={{ gap: 8, flexWrap: 'wrap' }}>
+            <button className="btn sm" disabled={rfBusy} onClick={() => run(data.raw, true)}>{I.refresh} Обновить закрепления</button>
+            <span className="faint" style={{ fontSize: 12 }}>живой запрос WB · кэш 10 мин</span>
+          </div>
+        </div>
+      </div>}
+      <div className="card" style={{ marginBottom: 18 }}>
+        <div className="card-h"><b style={{ fontSize: 12.5 }}>Заказ WB</b>
+          <span className="hint">{data.note || `ключ: ${data.raw}`}</span></div>
+        <div className="card-b"><OrderCard data={data.order} ctx={ctx} /></div>
+      </div>
+      {(data.wb_feed || (data.supplies || []).length > 0 || (data.returns || []).length > 0
+        || (data.client_returns || []).length > 0) && <div className="card" style={{ marginBottom: 18 }}>
+        <div className="card-h"><b style={{ fontSize: 12.5 }}>Контур WB</b></div>
+        <div className="card-b">
+          {data.wb_feed && <><b style={{ fontSize: 12.5 }}>Лента телеметрии</b>
+            <span className="hint" style={{ marginLeft: 8 }}>кэш кабинета{data.wb_feed.fetched_at ? ` · ${fmtD(data.wb_feed.fetched_at)}` : ''}</span>
+            <div style={{ margin: '6px 0 16px' }}>{data.wb_feed.orders.map((o) => (
+              <div key={o.srid} style={{ display: 'flex', gap: 8, alignItems: 'baseline', flexWrap: 'wrap', marginBottom: 4 }}>
+                <span className="km" style={{ fontSize: 11 }}>{o.srid}</span>
+                <Badge dict={WF_STATUS} v={o.status} />
+                {o.cancelType && <span className="faint" style={{ fontSize: 12 }}>{WF_CANCEL[o.cancelType] || o.cancelType}</span>}
+                <span className="faint" style={{ fontSize: 12 }}>
+                  {o.warehouseName || '—'}{o.destinationCity ? ` · ${o.destinationCity}` : ''} · обновлён {o.updatedAt ? fmtD(o.updatedAt) : '—'}</span>
+              </div>))}</div></>}
+          {(data.supplies || []).length > 0 && <><b style={{ fontSize: 12.5 }}>Поставка · отгрузка</b>
+            <div style={{ margin: '6px 0 16px' }}>{data.supplies.map((s) => <SupplyBlock key={s.id} s={s} />)}</div></>}
+          {(data.returns || []).length > 0 && <><b style={{ fontSize: 12.5 }}>Возвраты на ПВЗ ({data.returns.length})</b>
+            <div style={{ marginBottom: 16 }}><ReturnsMiniTable returns={data.returns} /></div></>}
+          {(data.client_returns || []).length > 0 && <><b style={{ fontSize: 12.5 }}>Возвраты покупателей ({data.client_returns.length})</b>
+            <div className="twrap" style={{ margin: '6px 0 0' }}><table className="t small fit">
+              <colgroup><col style={{ width: 278 }} /><col style={{ width: 88 }} /><col style={{ width: 170 }} /><col style={{ width: 248 }} /><col style={{ width: 130 }} /></colgroup>
+              <thead><tr><th>Возврат (srid)</th><th>Дата</th><th>Склад</th><th>КМ</th><th>Журнал</th></tr></thead>
+              <tbody>{data.client_returns.map((r) => <tr key={r.srid}>
+                <td className="mono ell" title={r.srid}>{r.srid}</td>
+                <td className="mono">{r.date ? fmtDay(r.date) : '—'}</td>
+                <td className="ell" title={r.warehouse || ''}>{r.warehouse || '—'}</td>
+                <td>{r.km ? <KmCell km={r.km} /> : <span className="faint" title="КМ подтянется, когда доедет эксайз-продажа">ждёт эксайза</span>}</td>
+                <td className="faint" style={{ fontSize: 12 }}>{r.applied ? 'применён' : 'стейджинг'}</td>
+              </tr>)}</tbody></table></div></>}
+        </div>
+      </div>}
+    </>}
+    {data?.type === 'nm' && <>
+      <div className="card" style={{ marginBottom: 18 }}>
+        <div className="card-h"><b style={{ fontSize: 12.5 }}>Артикул WB · nmId {data.key}</b>
+          <span className="hint">{data.note || `заказов: ${data.counts.orders} · кодов журнала: ${data.items.length}`}</span></div>
+        <div className="card-b">
+          {data.orders.length
+            ? <OrdersMiniTable orders={data.orders} />
+            : <div className="empty" style={{ marginTop: 0 }}><b>Заказов в реестре нет</b>{data.note || 'Артикул не встречался в снапшотах заказов WB.'}</div>}
+        </div>
+      </div>
+      {data.items.length > 0 && <div className="card">
+        <div className="card-h"><b style={{ fontSize: 12.5 }}>Коды маркировки журнала ({data.items.length})</b></div>
+        <div className="card-b">{itemsTable(data.items)}</div>
+      </div>}
+    </>}
+    {data?.type === 'gtin' && <>
+      <div className="card" style={{ marginBottom: 18 }}>
+        <div className="card-h"><b style={{ fontSize: 12.5 }}>GTIN {data.key}</b>
+          <span className="hint">{data.note || `кодов журнала: ${data.counts?.items ?? data.items.length}`}</span></div>
+        <div className="card-b">
+          {data.card ? <div className="twrap"><table className="t small"><tbody>
+            <tr><td className="faint" style={{ width: '40%' }}>Артикул</td><td className="mono">{data.card.article}</td></tr>
+            <tr><td className="faint">Наименование</td><td>{data.card.name}</td></tr>
+            <tr><td className="faint">Статус карточки</td><td><Badge dict={CARD_STATUS} v={data.card.status} /></td></tr>
+          </tbody></table></div>
+            : <div className="empty" style={{ marginTop: 0 }}><b>Карточка НК не найдена</b>Каталог НК не содержит этого GTIN.</div>}
+        </div>
+      </div>
+      {data.items.length > 0 && <div className="card">
+        <div className="card-h"><b style={{ fontSize: 12.5 }}>Коды маркировки журнала ({data.items.length})</b></div>
+        <div className="card-b">{itemsTable(data.items)}</div>
+      </div>}
+    </>}
+    {data?.type === 'supply' && <>
+      <div className="card" style={{ marginBottom: 18 }}>
+        <div className="card-h"><b style={{ fontSize: 12.5 }}>Поставка WB</b>
+          <span className="hint mono">{data.key}</span></div>
+        <div className="card-b">
+      {data.supply ? <SupplyBlock s={data.supply} />
+        : <div className="empty" style={{ marginTop: 0 }}><b>В кэше поставок нет</b>{data.note || 'Кэш поставок прогревается раз в час.'}</div>}
+        </div>
+      </div>
+      {data.orders.length > 0 && <div className="card">
+        <div className="card-h"><b style={{ fontSize: 12.5 }}>Заказы поставки ({data.orders.length})</b></div>
+        <div className="card-b"><OrdersMiniTable orders={data.orders} /></div>
+      </div>}
+    </>}
+    {!data && !busy && <div className="card"><div className="empty">
+      <b>Введите любой идентификатор WB</b>
+      rid заказа (eAc.…) или продажи (eAW.…) — с хвостом или без, числовой ID сборочного задания,
+      КМ/КИЗ, GTIN, nmId, номер поставки (WB-GI-…). По заказу покажем закреплённый КиЗ живьём — даже непроданный.
+    </div></div>}
+  </>
+}
+
 /* ================= консоль ================= */
 /* два пространства консоли: оборот/маркетплейсы и нацкаталог — разными
    специалистами; мосты (трассировка → каталог) остаются прямыми переходами */
@@ -1943,7 +2150,8 @@ const NAV_SECTIONS = [
     ['withdraw', 'Вывод из оборота', I.swap],
     ['returns', 'Возвраты', I.back],
     ['journal', 'Журнал КМ', I.list],
-    ['trace', 'Трассировка', I.clock]]],
+    ['trace', 'Трассировка', I.clock],
+    ['ids', 'Идентификаторы WB', I.search]]],
   ['Нацкаталог', [
     ['catalog', 'Каталог НК', I.grid],
     ['refs', 'Справочники', I.book]]],
@@ -1954,6 +2162,7 @@ function Console({ me, logout }) {
   const [view, setView] = useState('overview')
   const [jInit, setJInit] = useState('')
   const [tInit, setTInit] = useState('')
+  const [iInit, setIInit] = useState('')
   const [pulse, setPulse] = useState(null)
   const [tick, setTick] = useState(Date.now())
   const [inn, setInn] = useState(localStorage.getItem('inn') || '090201471350')
@@ -1968,7 +2177,11 @@ function Console({ me, logout }) {
   const confirm = (title, text, detail, okLabel, action) => setModal({ title, text, detail, okLabel, action })
   const openDrawer = (title, node) => setDrawer({ title, node })
   const openWide = (title, node) => setWide({ title, node })
-  const go = (v, jf) => { if (jf != null) { setJInit(jf); setTInit(jf) } setView(v); window.scrollTo(0, 0) }
+  // параметр перехода достаётся только целевому разделу: init журнала — это
+  // фильтр состояния, чужой параметр опустошал бы таблицу (журнал+справочник)
+  const go = (v, jf) => {
+    if (jf != null) { setJInit(v === 'journal' ? jf : ''); setTInit(v === 'trace' ? jf : ''); setIInit(v === 'ids' ? jf : '') }
+    setView(v); window.scrollTo(0, 0) }
   useEffect(() => { const i = setInterval(bump, 60000); return () => clearInterval(i) }, [])
   useEffect(() => { api('/v1/pulse').then(setPulse).catch(() => {}) }, [tick])
   // Esc закрывает верхний слой: confirm → широкая модалка → drawer (DESIGN.md 7)
@@ -1990,7 +2203,8 @@ function Console({ me, logout }) {
       .filter(([k]) => !['published', 'error'].includes(k)).reduce((a, [, v]) => a + v, 0) : 0,
     refs: null,
     journal: anomalyTotal(s),
-    trace: null }
+    trace: null,
+    ids: null }
   const navBtn = (v) => { const [key, lbl, icon] = NAV.find((x) => x[0] === v)
     return <button key={key} className="nav-item" aria-current={view === key}
       onClick={() => go(key)}>{icon}<span className="lbl">{lbl}</span>
@@ -2021,6 +2235,7 @@ function Console({ me, logout }) {
         {view === 'refs' && <Refs ctx={ctx} />}
         {view === 'journal' && <Journal key={jInit} ctx={ctx} initial={jInit} />}
         {view === 'trace' && <Trace key={tInit} ctx={ctx} initial={tInit} />}
+        {view === 'ids' && <Identifiers key={iInit} ctx={ctx} initial={iInit} />}
       </main>
     </div>
     <div id="toasts" aria-live="polite">

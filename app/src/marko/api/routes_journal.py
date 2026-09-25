@@ -104,6 +104,32 @@ def wb_lookup(
         raise HTTPException(422, str(e))
 
 
+@router.get("/identify")
+def identify_get(
+    key: str = Query(..., min_length=3, max_length=256),
+    live: int = Query(1, ge=0, le=1),
+    refresh: int = Query(0, ge=0, le=1),
+    tok: PlatformToken = Depends(require_scope("read")),
+    db: Session = Depends(get_db),
+):
+    """Справочник идентификаторов WB: любой ключ (rid заказа/продажи, ID
+    сборочного задания, КМ/КИЗ, GTIN, nmId, поставка) → все локальные срезы
+    + живые закреплённые sgtin (orders/meta, квота 300/мин, кэш 10 мин).
+    Живой слой — только с скоупом docs:submit (паттерн /v1/trace); WB упал —
+    fail-soft, локальные срезы живы."""
+    from marko.journal.identify import IdentifyError, identify
+    want_live = bool(live) and "docs:submit" in (tok.scopes or "").split(",")
+    try:
+        body = identify(db, key.strip(), live=want_live, refresh=bool(refresh))
+    except IdentifyError as e:
+        raise HTTPException(422, str(e))
+    if body.get("live", {}).get("fetched"):     # аудит только реальной сети
+        audit(db, tok.principal_id, "identify.live_meta",
+              {"type": body["type"], "key": body["key"],
+               "ids": len(body.get("order_ids") or [])})
+    return body
+
+
 class TraceWbMetaBody(BaseModel):
     km: str = Field(..., min_length=8, max_length=256)
 
@@ -160,19 +186,14 @@ def trace_get(
                 body["item"] = item_row(item)
     # телеметрия ленты из кэша кабинета (kv, без сети): этап «Заказ WB»
     # виден сразу; кнопка нужна только чтобы обновить/наполнить кэш
-    kv_feed = db.get(PlatformKV, "trace_wb_feed")
-    if kv_feed and time.time() - kv_feed.value.get("fetched_at", 0) < 3 * 3600 + 60:
-        by_doc = kv_feed.value.get("by_doc") or {}
-        from datetime import timezone
-        from marko.connector_wb.registry import order_doc as _od
-        from marko.journal.models import Event as _Ev
-        docs = {_od(s) for (s,) in
-                db.query(_Ev.srid).filter(_Ev.km == body["km"], _Ev.srid != "").all()}
-        feed = [by_doc[d] for d in sorted(docs) if d in by_doc]
-        if feed:
-            body["wb_feed"] = {"fetched_at": datetime.fromtimestamp(
-                kv_feed.value["fetched_at"], tz=timezone.utc).isoformat(),
-                "orders": feed}
+    from marko.connector_wb.registry import order_doc as _od
+    from marko.journal.models import Event as _Ev
+    from marko.journal.trace import feed_from_cache
+    docs = {_od(s) for (s,) in
+            db.query(_Ev.srid).filter(_Ev.km == body["km"], _Ev.srid != "").all()}
+    feed = feed_from_cache(db, docs)
+    if feed:
+        body["wb_feed"] = feed
     return body
 
 
@@ -204,7 +225,7 @@ def trace_wb_feed(
     from datetime import datetime, timedelta, timezone
     from marko.connector_wb.registry import order_doc
     from marko.journal.models import Event
-    from marko.journal.trace import TraceError, normalize_km
+    from marko.journal.trace import FEED_TTL, TraceError, normalize_km
     try:
         km = normalize_km(body.km)
     except TraceError as e:
@@ -221,7 +242,7 @@ def trace_wb_feed(
     # освободится квота, иначе клик в зазоре ловит 429. Гонка двух холодных
     # кликов не блокируем: session-level advisory-lock на пуле соединений
     # ловит зависание; второй клик честно получит 502 «повторите позже»
-    if kv and now - kv.value.get("fetched_at", 0) < 3 * 3600 + 60:
+    if kv and now - kv.value.get("fetched_at", 0) < FEED_TTL:
         by_doc = kv.value.get("by_doc") or {}
     else:
         try:
@@ -278,11 +299,8 @@ def trace_wb_meta(
         data = client.orders_meta(order_ids)
     except (WbHttpError, WbLimitError) as e:
         raise HTTPException(502, f"wb meta failed: {e}")
-    orders = [{"id": o.get("id"),
-               "sgtins": [{"sgtin": m.get("value"), "decision": m.get("decision")}
-                          for m in (o.get("metaDetails") or [])
-                          if m.get("key") == "sgtin"]}
-              for o in (data.get("orders") or [])]
+    from marko.journal.identify import parse_meta
+    orders = parse_meta(data)
     audit(db, tok.principal_id, "trace.wb_meta",
           {"km": km, "orders": min(len(order_ids), 100)})
     return {"km": km, "checked": min(len(order_ids), 100), "orders": orders,
