@@ -24,11 +24,18 @@ def label_preview(
 ):
     """Карточка этикетки для UI: имя, человекочитаемые строки, модули
     GS1-DataMatrix, guard. Блокировка — поле blocked (200): превью обязано
-    показать причину, а не упасть."""
+    показать причину, а не упасть. Имя при пустых офлайн-срезах тянется
+    живьём из карточки ЧЗ — сеть только с скоупом docs:submit (паттерн
+    /v1/identify), ответ кэшируется в kv на неделю."""
+    allow_live = "docs:submit" in (tok.scopes or "").split(",")
     try:
-        return prepare(db, sgtin)
+        p = prepare(db, sgtin, live=allow_live)
     except LabelError as e:
         raise HTTPException(422, str(e))
+    if p["name_live"]:     # аудит только факта сети (паттерн identify.live_meta)
+        audit(db, tok.principal_id, "label.cz_name",
+              {"km": p["km"], "found": bool(p["name"])})
+    return p
 
 
 @router.get("/print")
@@ -39,8 +46,9 @@ def label_print(
 ):
     """PDF-этикетка 58×40 мм (термо-принтер, без сглаживания): тот же грид,
     что в превью. Guard-блокировка → 422 с причиной."""
+    allow_live = "docs:submit" in (tok.scopes or "").split(",")
     try:
-        p = prepare(db, sgtin)
+        p = prepare(db, sgtin, live=allow_live)
     except LabelError as e:
         raise HTTPException(422, str(e))
     if p["blocked"]:

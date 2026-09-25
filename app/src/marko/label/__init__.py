@@ -5,28 +5,35 @@
 к отсутствующему — маркировку нужно переделать, WB-док). Один КиЗ = один
 экземпляр товара; дублирование на другой товар — обход маркировки.
 
-Стейтлес: имя — из каталога НК / журнала, решение WB — из кэша закреплений
-(kv wb_meta_cache, 10 мин); сеть не трогаем. Полный sgtin с криптохвостом
-(GS + AI 91/92) существует только в orders/meta — короткий КМ журнала для
-печати не годится (касса проверяет крипточасть).
+Стейтлес: имя — из каталога НК / журнала / живой карточки ЧЗ (cises_info,
+кэш kv), решение WB — из кэша закреплений (kv wb_meta_cache, 10 мин).
+Полный sgtin с криптохвостом (GS + AI 91/92) существует только в
+orders/meta — короткий КМ журнала для печати не годится (касса проверяет
+крипточасть). Наименование на этикетке обязательно: склад опознаёт товар
+по нему, а не по коду — GTIN-подстановки нет.
 
 Геометрия и шрифт — по шаблону WB: лист 58×40 мм, матрица 23×23 мм (допуск
 лёгпрома 15,2–24,4 мм, строго квадрат), имя 9pt слева, человекочитаемые
 строки 7pt под матрицей, Roboto Regular (Apache 2.0, вендорен рядом).
 """
 import io
+import time
 from pathlib import Path
 
 from sqlalchemy.orm import Session
 
 from marko.journal.models import Item
 from marko.journal.trace import GS, TraceError, _SPACES_RE, _card, normalize_km
+from marko.platform.models import PlatformKV
 
 FONT = Path(__file__).with_name("Roboto-Regular.ttf")
 FONT_NAME = "RobotoKiz"            # регистрация идемпотентна, имя внутреннее
 LABEL_W_MM, LABEL_H_MM = 58.0, 40.0
 DM_MM = 23.0                       # сторона DataMatrix на этикетке
 MAX_NAME_LINES = 4                 # левый блок: 29 мм × 9pt, дальше «…»
+KV_NAMES = "label_names"           # кэш наименований из карточки ЧЗ
+NAME_TTL = 7 * 86400               # имя карточки стабильно — неделя
+NAME_ERR_TTL = 600                 # пустой ответ — короткий ретрай
 
 
 def _ensure_font() -> None:
@@ -125,8 +132,10 @@ def matrix(notation: str) -> tuple[int, list[str]]:
 
 
 def name_of(db: Session, gtin: str, km: str) -> tuple[str, str]:
-    """(имя для этикетки, источник): карточка НК «наименование_артикул»
-    (формат WB-шаблона) → cis_product_name журнала (карточка ЧЗ) → GTIN."""
+    """(имя для этикетки, источник) — офлайн-срезы: карточка НК
+    «наименование_артикул» (формат WB-шаблона) → cis_product_name журнала.
+    Пусто → живая карточка ЧЗ (см. prepare): GTIN-подстановки нет — склад
+    опознаёт товар по имени, пустое имя честнее бесполезного числа."""
     card = _card(db, gtin)
     if card and card.get("name"):
         art = card.get("article") or ""
@@ -134,13 +143,58 @@ def name_of(db: Session, gtin: str, km: str) -> tuple[str, str]:
     it = db.get(Item, km)
     if it and it.cis_product_name:
         return it.cis_product_name, "journal"
-    return gtin, "gtin"
+    return "", "none"
+
+
+def cz_name(db: Session, km: str, live: bool) -> tuple[str, bool, bool]:
+    """(имя, нашли-ли, ходили-ли-в-сеть) из карточки ЧЗ по КМ: kv-кэш →
+    живой cises_info. ЧЗ знает productName каждого существующего КиЗ — это
+    единственный источник имени для кодов вне каталога НК и журнала. Пустой
+    ответ кэшируется на 10 минут (ретрай), непустой — на неделю. fail-soft:
+    ЧЗ недоступен → ("", False, True), печать не блокируем."""
+    kv = db.get(PlatformKV, KV_NAMES)
+    ent = ((kv.value.get("by_km") or {}) if kv else {}).get(km)
+    now = time.time()
+    if ent and now - ent.get("ts", 0) < (NAME_TTL if ent.get("name") else NAME_ERR_TTL):
+        return ent.get("name") or "", bool(ent.get("name")), False
+    if not live:
+        return "", False, False
+    from marko.connector_mt import manager
+    try:
+        # default_client явно: конфтесты подменяют его на 503, внутренний
+        # _client() строил бы реальный клиент и тесты уходили в сеть
+        infos = manager.cises_info(db, [km], client=manager.default_client())
+    except Exception:
+        return "", False, True
+    name = ""
+    for e in infos:                       # эхо-матчинг по cisInfo.cis (паттерн cis.py)
+        info = e.get("cisInfo") or {}
+        if (info.get("cis") or e.get("cis")) == km or len(infos) == 1:
+            name = str(info.get("productName") or "")[:256]
+            break
+    _names_cache_put(db, km, name, now)
+    return name, bool(name), True
+
+
+def _names_cache_put(db: Session, km: str, name: str, ts: float) -> None:
+    from sqlalchemy.dialects.postgresql import insert as pg_insert
+    kv = db.get(PlatformKV, KV_NAMES)
+    by_km = dict((kv.value.get("by_km") or {}) if kv else {})
+    by_km[km] = {"name": name, "ts": ts}
+    items = sorted(by_km.items(), key=lambda x: x[1].get("ts", 0),
+                   reverse=True)[:1000]          # потолок роста кэша
+    db.execute(pg_insert(PlatformKV).values(key=KV_NAMES, value={"by_km": dict(items)})
+               .on_conflict_do_update(index_elements=[PlatformKV.key],
+                                      set_={"value": {"by_km": dict(items)}}))
+    db.commit()
 
 
 def wrap_name(text: str) -> list[str]:
     """Перенос имени по ширине левого блока (29 мм при 9pt), не по символам:
     кириллица разной ширины, переполнение на термо-этикетке фатально.
-    Потолок — 4 строки, дальше «…»."""
+    Потолок — 4 строки, дальше «…». Пустое имя → [] (блок имени пуст)."""
+    if not text:
+        return []
     _ensure_font()
     from reportlab.lib.units import mm
     from reportlab.pdfbase.pdfmetrics import stringWidth
@@ -177,7 +231,7 @@ def wrap_name(text: str) -> list[str]:
         while last and not fits(last + "…"):
             last = last[:-1].rstrip()
         lines[-1] = last + "…"
-    return lines or [text[:1]]
+    return lines
 
 
 def decision_of(db: Session, sgtin: str) -> tuple[str | None, float | None]:
@@ -188,11 +242,17 @@ def decision_of(db: Session, sgtin: str) -> tuple[str | None, float | None]:
     return meta_decision(db, sgtin)
 
 
-def prepare(db: Session, raw: str) -> dict:
-    """Оркестратор: парсинг → имя → guard → матрица. Превью отдаётся и при
-    блокировке (blocked + причина); PDF-роут блок превращает в 422."""
+def prepare(db: Session, raw: str, *, live: bool = True) -> dict:
+    """Оркестратор: парсинг → имя (офлайн → живой ЧЗ при live) → guard →
+    матрица. Превью отдаётся и при блокировке (blocked + причина);
+    PDF-роут блок превращает в 422. live=False — только офлайн-имя
+    (RO-токен; сеть ЧЗ — привилегия docs:submit, паттерн identify)."""
     p = parse_sgtin(raw)
     name, source = name_of(db, p["gtin"], p["km"])
+    name_fetched = False
+    if not name:
+        name, found, name_fetched = cz_name(db, p["km"], live)
+        source = "cz" if found else "none"
     decision, dts = decision_of(db, p["sgtin"])
     blocked, reason = False, ""
     if decision in BLOCKED_DECISIONS:
@@ -205,6 +265,7 @@ def prepare(db: Session, raw: str) -> dict:
     size, rows = matrix(gs1_notation(p["sgtin"]))
     return {"sgtin": p["sgtin"], "km": p["km"], "gtin": p["gtin"],
             "serial": p["serial"], "name": name, "name_source": source,
+            "name_live": name_fetched,
             "lines": wrap_name(name),
             "human": [f"01{p['gtin']}", f"21{p['serial']}"],
             "modules_size": size, "modules": rows,

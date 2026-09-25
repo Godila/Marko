@@ -119,7 +119,7 @@ def test_wrap_name_max_four_lines():
     assert 1 <= len(lines) <= 4 and lines[-1].endswith("…")
 
 
-def test_name_cascade_card_journal_gtin(db):
+def test_name_cascade_card_journal(db):
     from marko.label import name_of
     from marko.journal.models import Item
     from marko.nkmt.models import Batch, Card
@@ -135,7 +135,47 @@ def test_name_cascade_card_journal_gtin(db):
     db.commit()
     assert name_of(db, GTIN, KM2) == ("Свитшот с карманом Vilui (ЧЗ)", "journal")
     db.delete(db.query(Item).first()); db.commit()
-    assert name_of(db, GTIN, KM2) == (GTIN, "gtin")
+    # GTIN-подстановки нет (юзер: «gtin тут даже не нужен») — пустое имя
+    # закрывается живой карточкой ЧЗ в prepare, не мусорным числом
+    assert name_of(db, GTIN, KM2) == ("", "none")
+
+
+def test_name_live_cz_cached(db, client, monkeypatch):
+    """Имя из живой карточки ЧЗ для кода вне каталога/журнала (прод-инцидент
+    25.09: вместо «Свитшот с карманом…» на этикетке был GTIN). kv-кэш —
+    неделя: второй вызов без сети, RO читает кэш."""
+    import marko.connector_mt.manager as mgr
+    calls = []
+
+    def fake_cises(db_, cises, client=None):
+        calls.append(list(cises))
+        return [{"cisInfo": {"cis": KM2, "status": "in_circulation",
+                             "productName": "Свитшот с карманом Vilui_7008_белый_теплый_44"}}]
+    monkeypatch.setattr(mgr, "cises_info", fake_cises)
+    # конвенция cis-тестов: default_client подменяется точечно (conftest
+    # autouse превращает его в boom — cz_name зовёт его для client=)
+    monkeypatch.setattr(mgr, "default_client", lambda: None)
+    b = client.get("/v1/label/preview", params={"sgtin": FULL}, headers=AUTH).json()
+    assert b["name_source"] == "cz" and b["name"] == "Свитшот с карманом Vilui_7008_белый_теплый_44"
+    assert len(b["lines"]) >= 3 and GTIN not in b["lines"]
+    b2 = client.get("/v1/label/preview", params={"sgtin": FULL}, headers=AUTH).json()
+    assert len(calls) == 1 and not b2["name_live"] and b2["name"] == b["name"]
+    bro = client.get("/v1/label/preview", params={"sgtin": FULL}, headers=AUTH_RO).json()
+    assert bro["name"] == b["name"]                      # кэш доступен RO
+    acts = db.query(PlatformAudit).filter_by(action="label.cz_name").all()
+    assert len(acts) == 1 and acts[0].detail["km"] == KM2
+
+
+def test_name_ro_no_network(db, client, monkeypatch):
+    """RO-токен без прогретого кэша: живой ЧЗ не зовётся, имя пустое,
+    печать не блокируется (fail-soft)."""
+    import marko.connector_mt.manager as mgr
+
+    def boom(*a, **k):
+        raise AssertionError("RO не должен звать ЧЗ")
+    monkeypatch.setattr(mgr, "cises_info", boom)
+    b = client.get("/v1/label/preview", params={"sgtin": FULL}, headers=AUTH_RO).json()
+    assert b["name"] == "" and b["name_source"] == "none" and b["lines"] == []
 
 
 # ---- HTTP: превью ----
@@ -148,7 +188,9 @@ def test_preview_ok_fields(db, client):
     assert b["modules_size"] == len(b["modules"]) > 0
     assert b["human"] == [f"01{GTIN}", "215UKsE;hVmAtad"]
     assert b["decision"] is None            # кэш пуст — решения WB нет, печать ок
-    assert len(b["lines"]) >= 1
+    # каталог/журнал пусты, живой ЧЗ в тестах отвечает 503 (conftest) — имя
+    # пустое с источником none, печати это не мешает
+    assert b["name_source"] == "none" and b["lines"] == []
 
 
 def test_preview_blocked_decision_200_with_reason(db, client):

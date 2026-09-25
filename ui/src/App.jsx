@@ -2216,7 +2216,7 @@ function Labels({ ctx, initial }) {
     } catch (e) { notify('Печать не удалась', e.message, 'bad') }
     finally { setPBusy('') }
   }
-  const srcLabel = { card: 'карточка НК', journal: 'журнал ЧЗ', gtin: 'GTIN' }
+  const srcLabel = { card: 'карточка НК', journal: 'журнал ЧЗ', cz: 'карточка ЧЗ · live', none: 'наименование неизвестно' }
   return <>
     <Head title="Нанесение КиЗ" sub="Печать этикетки 58×40 мм с DataMatrix полного КиЗ — перепечатка бирки невыкупа в «повторной поставке». Один код — один экземпляр товара."
       tools={<Sync tick={ctx.tick} />} />
@@ -2253,7 +2253,10 @@ function Labels({ ctx, initial }) {
               {p.decision && <span style={{ fontSize: 12.5, color: p.blocked ? 'var(--stamp)' : 'var(--muted)' }}>
                 {SGTIN_DECISION[p.decision] || <span className="mono" style={{ fontSize: 12 }}>{p.decision}</span>}</span>}
             </div>
-            <p style={{ fontSize: 12.5, color: 'var(--muted)', margin: '0 0 10px' }}>{p.name}</p>
+            {p.name
+              ? <p style={{ fontSize: 12.5, color: 'var(--muted)', margin: '0 0 10px' }}>{p.name}</p>
+              : <p style={{ fontSize: 12.5, color: 'var(--stamp)', margin: '0 0 10px' }}>
+                  Наименование неизвестно: кода нет в каталоге НК и журнале, карточка ЧЗ не ответила — повторите позже (печать не блокируется, но на складе код не прочитать)</p>}
             {p.blocked && <div className="empty" style={{ marginTop: 0, marginBottom: 10 }}>
               <b>Печать заблокирована</b><span style={{ color: 'var(--stamp)' }}> {p.block_reason}</span></div>}
             <div className="row" style={{ gap: 8, flexWrap: 'wrap' }}>
