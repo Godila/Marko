@@ -72,6 +72,10 @@ def normalize_sgtin(raw: str) -> str:
         normalize_km(s)
     except TraceError as e:
         raise LabelError(str(e))
+    if "[" in s or "]" in s:
+        raise LabelError("в коде квадратные скобки — они служат разделителями "
+                         "внутри генератора; такой КиЗ не поддерживается, "
+                         "распечатайте этикетку из СУЗ")
     tail = s.split(GS)[1:]
     if not tail or not all(g[:2] in ("91", "92") for g in tail):
         raise LabelError(
@@ -87,22 +91,28 @@ def parse_sgtin(raw: str) -> dict:
     return {"sgtin": sgtin, "km": km, "gtin": km[2:16], "serial": km[18:]}
 
 
-def paren(sgtin: str) -> str:
-    """GS-канон → GS1 human-readable для zxing-cpp: '(01)…(21)…(91)…(92)…'.
+def gs1_notation(sgtin: str) -> str:
+    """GS-канон → квадратная GS1-нотация zint: '[01]…[21]…[91]…[92]…'.
+    Квадратные скобки — разделители (zxing включает GS1PARENS_MODE только
+    когда строка НЕ начинается с '['), поэтому круглые скобки в серийнике
+    остаются данными — прод-серийники вида '5(>(mSo?WUebg' валидны.
     Валидацию групп сделал normalize_sgtin — здесь чистая сборка."""
     head = sgtin.split(GS)[0]
-    parts = [f"(01){head[2:16]}", f"(21){head[18:]}"]
-    parts += [f"({g[:2]}){g[2:]}" for g in sgtin.split(GS)[1:]]
+    parts = [f"[01]{head[2:16]}", f"[21]{head[18:]}"]
+    parts += [f"[{g[:2]}]{g[2:]}" for g in sgtin.split(GS)[1:]]
     return "".join(parts)
 
 
-def matrix(paren_str: str) -> tuple[int, list[str]]:
+def matrix(notation: str) -> tuple[int, list[str]]:
     """GS1-DataMatrix (FNC1 в первой позиции, строго квадрат) → (size, rows):
     '1' — тёмный модуль. zxing-cpp берёт размер сам (36 только для этого
     объёма криптохвоста) — вызывающие читают size, не хардкодят."""
     import zxingcpp
-    bc = zxingcpp.create_barcode(paren_str, zxingcpp.DataMatrix,
-                                 gs1=True, force_square=True)
+    try:
+        bc = zxingcpp.create_barcode(notation, zxingcpp.DataMatrix,
+                                     gs1=True, force_square=True)
+    except ValueError as e:     # zint-валидатор кидает, а не возвращает код
+        raise LabelError(f"не удалось собрать GS1-DataMatrix: {e}")
     if not bc.valid or bc.symbology_identifier != "]d2":
         raise LabelError(f"не удалось собрать GS1-DataMatrix: "
                          f"{bc.error or bc.symbology_identifier}")
@@ -192,7 +202,7 @@ def prepare(db: Session, raw: str) -> dict:
         cis = (it.cis_status if it else "") or ""
         if cis in BLOCKED_CIS:
             blocked, reason = True, BLOCKED_CIS[cis]
-    size, rows = matrix(paren(p["sgtin"]))
+    size, rows = matrix(gs1_notation(p["sgtin"]))
     return {"sgtin": p["sgtin"], "km": p["km"], "gtin": p["gtin"],
             "serial": p["serial"], "name": name, "name_source": source,
             "lines": wrap_name(name),

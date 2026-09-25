@@ -42,10 +42,43 @@ def _kv_meta(db, sgtin, decision, order_id=77, ts=None):
 # ---- чистые функции модуля ----
 
 def test_parse_full_sgtin_groups():
-    from marko.label import paren, parse_sgtin
+    from marko.label import gs1_notation, parse_sgtin
     p = parse_sgtin(FULL)
     assert p["km"] == KM2 and p["gtin"] == GTIN and p["serial"] == "5UKsE;hVmAtad"
-    assert paren(FULL) == "(01)04630520676025(21)5UKsE;hVmAtad(91)EE16(92)dGVzdA=="
+    assert gs1_notation(FULL) == "[01]04630520676025[21]5UKsE;hVmAtad[91]EE16[92]dGVzdA=="
+
+
+def test_matrix_accepts_parens_in_serial():
+    """Прод-серийники содержат круглые скобки ('5(>(mSo?WUebg', инцидент
+    25.09: круглая нотация ломала zint 'brackets don't match'). Квадратная
+    нотация держит их как данные; decode — байт-в-байт, ]d2."""
+    import io
+
+    import zxingcpp
+    from PIL import Image, ImageOps
+    from marko.label import matrix, parse_sgtin
+    full = "01" + GTIN + "21" + "5(>(mSo?WUebg" + GS + "91EE12" + GS + \
+           "92Fe7YBxYK0Z2rAU4/9aTAj/aIKu7oybdQ9jUq/F0vhJU="
+    p = parse_sgtin(full)
+    from marko.label import gs1_notation
+    size, rows = matrix(gs1_notation(p["sgtin"]))
+    pil = Image.new("L", (size, size))
+    for y, r in enumerate(rows):
+        for x, ch in enumerate(r):
+            pil.putpixel((x, y), 0 if ch == "1" else 255)
+    big = ImageOps.expand(pil.resize((size * 8, size * 8), Image.NEAREST), border=24, fill=255)
+    buf = io.BytesIO(); big.save(buf, format="PNG")
+    res = zxingcpp.read_barcodes(Image.open(buf))
+    assert res and res[0].symbology_identifier == "]d2"
+    assert res[0].bytes.decode() == full
+
+
+def test_square_bracket_in_sgtin_refused(db, client):
+    """Квадратные скобки — разделители нотации: код с ними не поддерживается
+    (честный отказ лучше битой этикетки)."""
+    from marko.label import LabelError, normalize_sgtin
+    with pytest.raises(LabelError):
+        normalize_sgtin(KM2 + GS + "91EE[16" + GS + "92dGVzdA==")
 
 
 def test_short_km_rejected_needs_crypto():
@@ -73,11 +106,11 @@ def test_bang_inside_serial_of_gs_form_preserved():
 
 
 def test_matrix_square_and_deterministic():
-    from marko.label import matrix, paren
-    size, rows = matrix(paren(FULL))
+    from marko.label import gs1_notation, matrix
+    size, rows = matrix(gs1_notation(FULL))
     assert size == len(rows) and all(len(r) == size for r in rows)
     assert set("".join(rows)) <= {"0", "1"} and "1" in "".join(rows)
-    assert matrix(paren(FULL)) == (size, rows)          # детерминизм
+    assert matrix(gs1_notation(FULL)) == (size, rows)          # детерминизм
 
 
 def test_wrap_name_max_four_lines():
