@@ -1,0 +1,192 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>МАРКО · Как справочник находит КиЗ заказа</title>
+<link href="https://fonts.googleapis.com/css2?family=Unbounded:wght@500&family=Golos+Text:wght@400;500;600&family=JetBrains+Mono:wght@400;500&family=Instrument+Serif:ital@1&display=swap" rel="stylesheet">
+<style>
+  :root{
+    --paper:#F1F4F3; --surface:#FFFFFF; --ink:#17242B; --muted:#5E6B72; --faint:#93A0A6;
+    --line:#DDE3E2; --stamp:#C81E36; --info:#2759B7;
+  }
+  *{box-sizing:border-box}
+  body{margin:0;background:var(--paper);color:var(--ink);font:400 14px/1.5 'Golos Text',sans-serif}
+  .wrap{max-width:1160px;margin:0 auto;padding:34px 34px 26px}
+  .eyebrow{font:500 10px 'JetBrains Mono',monospace;letter-spacing:.18em;color:var(--muted);text-transform:uppercase}
+  h1{font:500 25px/1.2 'Unbounded',sans-serif;margin:10px 0 8px;letter-spacing:.01em}
+  .sub{color:var(--muted);max-width:820px;margin:0 0 6px}
+  .mono{font-family:'JetBrains Mono',monospace}
+  figure{margin:18px 0 0}
+  svg{display:block;width:100%;height:auto}
+  footer{border-top:1px solid var(--line);margin-top:20px;padding-top:12px;
+    font:400 10.5px 'JetBrains Mono',monospace;color:var(--faint);display:flex;gap:24px;flex-wrap:wrap}
+  footer .note{color:var(--muted)}
+</style>
+</head>
+<body>
+<div class="wrap">
+  <p class="eyebrow">МАРКО · Wildberries API · sequence</p>
+  <h1>Как справочник находит КиЗ заказа</h1>
+  <p class="sub">Раздел «Идентификаторы WB»: непроданный заказ (например <span class="mono">eAc.rddb…0.0</span>,
+    «повторная поставка») → закреплённый код маркировки через живой
+    <span class="mono">POST /api/marketplace/v3/orders/meta</span>. Числовой ID сборочного задания — из
+    персистентного реестра <span class="mono">wb.orders</span>; ответ кэшируется на 10 минут.</p>
+
+  <figure>
+  <svg viewBox="0 0 1080 648" role="img" aria-labelledby="seq-identify-kiz-title seq-identify-kiz-desc" xmlns="http://www.w3.org/2000/svg">
+    <title id="seq-identify-kiz-title">Сиквенс: поиск КиЗ по заказу WB в МАРКО</title>
+    <desc id="seq-identify-kiz-desc">Диаграмма последовательности: оператор ищет заказ в справочнике идентификаторов, API классифицирует ключ, берёт числовой ID из реестра Postgres, при пустом кэше живьём запрашивает закрепления sgtin у Wildberries, нормализует код и возвращает карточку с КиЗ и статусом проверки.</desc>
+    <defs>
+      <marker id="arrow" markerWidth="8" markerHeight="6" refX="7" refY="3" orient="auto">
+        <polygon points="0 0, 8 3, 0 6" fill="#5E6B72"/>
+      </marker>
+      <marker id="arrow-accent" markerWidth="8" markerHeight="6" refX="7" refY="3" orient="auto">
+        <polygon points="0 0, 8 3, 0 6" fill="#C81E36"/>
+      </marker>
+      <marker id="arrow-link" markerWidth="8" markerHeight="6" refX="7" refY="3" orient="auto">
+        <polygon points="0 0, 8 3, 0 6" fill="#2759B7"/>
+      </marker>
+    </defs>
+
+    <rect width="100%" height="100%" fill="#F1F4F3"/>
+
+    <!-- лайфлайны -->
+    <line x1="152" y1="88" x2="152" y2="576" stroke="rgba(23,36,43,0.20)" stroke-width="1" stroke-dasharray="3,3"/>
+    <line x1="464" y1="88" x2="464" y2="576" stroke="rgba(23,36,43,0.20)" stroke-width="1" stroke-dasharray="3,3"/>
+    <line x1="736" y1="88" x2="736" y2="576" stroke="rgba(23,36,43,0.20)" stroke-width="1" stroke-dasharray="3,3"/>
+    <line x1="952" y1="88" x2="952" y2="576" stroke="rgba(23,36,43,0.20)" stroke-width="1" stroke-dasharray="3,3"/>
+
+    <!-- активационные полосы -->
+    <rect x="148" y="116" width="8" height="412" fill="rgba(23,36,43,0.06)" stroke="#5E6B72" stroke-width="0.8"/>
+    <rect x="460" y="116" width="8" height="416" fill="rgba(23,36,43,0.06)" stroke="#5E6B72" stroke-width="0.8"/>
+    <rect x="732" y="188" width="8" height="252" fill="rgba(23,36,43,0.06)" stroke="#5E6B72" stroke-width="0.8"/>
+    <rect x="948" y="368" width="8" height="44" fill="rgba(23,36,43,0.06)" stroke="#5E6B72" stroke-width="0.8"/>
+
+    <!-- сообщения (стрелки до акторов) -->
+    <!-- m1: GET /identify -->
+    <line x1="160" y1="124" x2="456" y2="124" stroke="#2759B7" stroke-width="1.2" marker-end="url(#arrow-link)"/>
+    <rect x="256" y="104" width="104" height="12" rx="2" fill="#F1F4F3"/>
+    <text x="308" y="113" fill="#2759B7" font-size="8" font-family="'JetBrains Mono',monospace" text-anchor="middle" letter-spacing="0.06em">GET /IDENTIFY</text>
+
+    <!-- m2: self CLASSIFY -->
+    <path d="M 472 148 L 500 148 L 500 164 L 478 164" fill="none" stroke="#5E6B72" stroke-width="1.2" marker-end="url(#arrow)"/>
+    <text x="508" y="159" fill="#5E6B72" font-size="8" font-family="'JetBrains Mono',monospace" letter-spacing="0.06em">CLASSIFY → DOC</text>
+
+    <!-- m3: lookup к БД -->
+    <line x1="472" y1="196" x2="728" y2="196" stroke="#5E6B72" stroke-width="1.2" marker-end="url(#arrow)"/>
+    <rect x="552" y="176" width="96" height="12" rx="2" fill="#F1F4F3"/>
+    <text x="600" y="185" fill="#5E6B72" font-size="8" font-family="'JetBrains Mono',monospace" text-anchor="middle" letter-spacing="0.06em">LOOKUP DOC</text>
+
+    <!-- m4: возврат из БД -->
+    <line x1="728" y1="228" x2="472" y2="228" stroke="#5E6B72" stroke-width="1.2" stroke-dasharray="5,4" marker-end="url(#arrow)"/>
+    <rect x="536" y="208" width="128" height="12" rx="2" fill="#F1F4F3"/>
+    <text x="600" y="217" fill="#5E6B72" font-size="8" font-family="'JetBrains Mono',monospace" text-anchor="middle" letter-spacing="0.06em">ORDER_ID · LAG</text>
+
+    <!-- alt-фрагмент: ветвление по кэшу -->
+    <rect x="440" y="252" width="536" height="208" rx="4" fill="rgba(23,36,43,0.02)" stroke="rgba(23,36,43,0.22)" stroke-width="1"/>
+    <rect x="440" y="252" width="40" height="16" rx="2" fill="#F1F4F3" stroke="rgba(23,36,43,0.22)" stroke-width="1"/>
+    <text x="460" y="264" fill="#5E6B72" font-size="8" font-family="'JetBrains Mono',monospace" text-anchor="middle" letter-spacing="0.12em">ALT</text>
+    <text x="492" y="286" fill="#5E6B72" font-size="8" font-family="'JetBrains Mono',monospace" letter-spacing="0.04em">[кэш wb_meta_cache ≤ 10 мин]</text>
+
+    <!-- m5: кэш-попадание -->
+    <line x1="728" y1="304" x2="472" y2="304" stroke="#5E6B72" stroke-width="1.2" stroke-dasharray="5,4" marker-end="url(#arrow)"/>
+    <rect x="548" y="284" width="104" height="12" rx="2" fill="#F1F4F3"/>
+    <text x="600" y="293" fill="#5E6B72" font-size="8" font-family="'JetBrains Mono',monospace" text-anchor="middle" letter-spacing="0.06em">CACHE HIT</text>
+
+    <line x1="448" y1="328" x2="968" y2="328" stroke="rgba(23,36,43,0.20)" stroke-width="1" stroke-dasharray="4,3"/>
+    <text x="492" y="354" fill="#5E6B72" font-size="8" font-family="'JetBrains Mono',monospace" letter-spacing="0.04em">[иначе · refresh=1]</text>
+
+    <!-- m6: POST orders/meta -->
+    <line x1="472" y1="376" x2="944" y2="376" stroke="#2759B7" stroke-width="1.2" marker-end="url(#arrow-link)"/>
+    <rect x="648" y="356" width="120" height="12" rx="2" fill="#F1F4F3"/>
+    <text x="708" y="365" fill="#2759B7" font-size="8" font-family="'JetBrains Mono',monospace" text-anchor="middle" letter-spacing="0.06em">POST ORDERS/META</text>
+
+    <!-- m7: возврат sgtin -->
+    <line x1="944" y1="404" x2="472" y2="404" stroke="#5E6B72" stroke-width="1.2" stroke-dasharray="5,4" marker-end="url(#arrow)"/>
+    <rect x="644" y="384" width="128" height="12" rx="2" fill="#F1F4F3"/>
+    <text x="708" y="393" fill="#5E6B72" font-size="8" font-family="'JetBrains Mono',monospace" text-anchor="middle" letter-spacing="0.06em">SGTIN · DECISION</text>
+
+    <!-- m8: запись кэша -->
+    <line x1="472" y1="432" x2="728" y2="432" stroke="#5E6B72" stroke-width="1.2" marker-end="url(#arrow)"/>
+    <rect x="552" y="412" width="96" height="12" rx="2" fill="#F1F4F3"/>
+    <text x="600" y="421" fill="#5E6B72" font-size="8" font-family="'JetBrains Mono',monospace" text-anchor="middle" letter-spacing="0.06em">CACHE PUT</text>
+
+    <!-- m9: self normalize -->
+    <path d="M 472 484 L 500 484 L 500 500 L 478 500" fill="none" stroke="#5E6B72" stroke-width="1.2" marker-end="url(#arrow)"/>
+    <text x="508" y="495" fill="#5E6B72" font-size="8" font-family="'JetBrains Mono',monospace" letter-spacing="0.06em">NORMALIZE → КМ</text>
+
+    <!-- m10: итоговый ответ -->
+    <line x1="456" y1="528" x2="160" y2="528" stroke="#C81E36" stroke-width="1.6" marker-end="url(#arrow-accent)"/>
+    <rect x="256" y="508" width="104" height="12" rx="2" fill="#F1F4F3"/>
+    <text x="308" y="517" fill="#C81E36" font-size="8" font-family="'JetBrains Mono',monospace" text-anchor="middle" letter-spacing="0.06em">200 · КИЗ</text>
+
+    <!-- редакционное примечание (доктрина непроданных) -->
+    <text x="752" y="118" fill="#5E6B72" font-size="13" font-family="'Instrument Serif',serif" font-style="italic">непроданный заказ: строк эксайза нет —</text>
+    <text x="752" y="134" fill="#5E6B72" font-size="13" font-family="'Instrument Serif',serif" font-style="italic">КиЗ существует только в закреплении WB</text>
+    <text x="752" y="150" fill="#93A0A6" font-size="13" font-family="'Instrument Serif',serif" font-style="italic">(ставится при сборке поставки)</text>
+
+    <!-- акторы (после стрелок) -->
+    <!-- Консоль -->
+    <rect x="56" y="40" width="192" height="48" rx="6" fill="#F1F4F3"/>
+    <rect x="56" y="40" width="192" height="48" rx="6" fill="rgba(94,107,114,0.10)" stroke="#93A0A6" stroke-width="1"/>
+    <rect x="64" y="46" width="28" height="12" rx="2" fill="transparent" stroke="rgba(147,160,166,0.60)" stroke-width="0.8"/>
+    <text x="78" y="55" fill="rgba(94,107,114,0.8)" font-size="7" font-family="'JetBrains Mono',monospace" text-anchor="middle" letter-spacing="0.08em">UI</text>
+    <text x="152" y="72" fill="#17242B" font-size="12" font-weight="600" font-family="'Golos Text',sans-serif" text-anchor="middle">Консоль МАРКО</text>
+    <text x="152" y="84" fill="#5E6B72" font-size="9" font-family="'JetBrains Mono',monospace" text-anchor="middle">Идентификаторы WB</text>
+
+    <!-- API -->
+    <rect x="368" y="40" width="192" height="48" rx="6" fill="#F1F4F3"/>
+    <rect x="368" y="40" width="192" height="48" rx="6" fill="#FFFFFF" stroke="#17242B" stroke-width="1"/>
+    <rect x="376" y="46" width="28" height="12" rx="2" fill="transparent" stroke="rgba(23,36,43,0.40)" stroke-width="0.8"/>
+    <text x="390" y="55" fill="rgba(23,36,43,0.8)" font-size="7" font-family="'JetBrains Mono',monospace" text-anchor="middle" letter-spacing="0.08em">API</text>
+    <text x="464" y="72" fill="#17242B" font-size="12" font-weight="600" font-family="'Golos Text',sans-serif" text-anchor="middle">/v1/identify</text>
+    <text x="464" y="84" fill="#5E6B72" font-size="9" font-family="'JetBrains Mono',monospace" text-anchor="middle">routes_journal · identify.py</text>
+
+    <!-- Postgres -->
+    <rect x="640" y="40" width="192" height="48" rx="6" fill="#F1F4F3"/>
+    <rect x="640" y="40" width="192" height="48" rx="6" fill="rgba(23,36,43,0.05)" stroke="#5E6B72" stroke-width="1"/>
+    <rect x="648" y="46" width="28" height="12" rx="2" fill="transparent" stroke="rgba(94,107,114,0.50)" stroke-width="0.8"/>
+    <text x="662" y="55" fill="rgba(94,107,114,0.8)" font-size="7" font-family="'JetBrains Mono',monospace" text-anchor="middle" letter-spacing="0.08em">DB</text>
+    <text x="736" y="72" fill="#17242B" font-size="12" font-weight="600" font-family="'Golos Text',sans-serif" text-anchor="middle">Postgres</text>
+    <text x="736" y="84" fill="#5E6B72" font-size="9" font-family="'JetBrains Mono',monospace" text-anchor="middle">wb.orders · events · kv</text>
+
+    <!-- WB -->
+    <rect x="856" y="40" width="192" height="48" rx="6" fill="#F1F4F3"/>
+    <rect x="856" y="40" width="192" height="48" rx="6" fill="rgba(23,36,43,0.03)" stroke="rgba(23,36,43,0.30)" stroke-width="1"/>
+    <rect x="864" y="46" width="28" height="12" rx="2" fill="transparent" stroke="rgba(23,36,43,0.30)" stroke-width="0.8"/>
+    <text x="878" y="55" fill="rgba(23,36,43,0.8)" font-size="7" font-family="'JetBrains Mono',monospace" text-anchor="middle" letter-spacing="0.08em">WB</text>
+    <text x="952" y="72" fill="#17242B" font-size="12" font-weight="600" font-family="'Golos Text',sans-serif" text-anchor="middle">Wildberries</text>
+    <text x="952" y="84" fill="#5E6B72" font-size="9" font-family="'JetBrains Mono',monospace" text-anchor="middle">orders/meta · 300/мин</text>
+
+    <!-- легенда: горизонтальная полоса внизу -->
+    <line x1="56" y1="584" x2="1024" y2="584" stroke="rgba(23,36,43,0.10)" stroke-width="0.8"/>
+    <text x="56" y="604" fill="#5E6B72" font-size="8" font-family="'JetBrains Mono',monospace" letter-spacing="0.14em">LEGEND</text>
+
+    <line x1="140" y1="600" x2="168" y2="600" stroke="#2759B7" stroke-width="1.2" marker-end="url(#arrow-link)"/>
+    <text x="176" y="604" fill="#5E6B72" font-size="8" font-family="'JetBrains Mono',monospace">HTTP к WB</text>
+
+    <line x1="288" y1="600" x2="316" y2="600" stroke="#5E6B72" stroke-width="1.2" marker-end="url(#arrow)"/>
+    <text x="324" y="604" fill="#5E6B72" font-size="8" font-family="'JetBrains Mono',monospace">запрос к БД</text>
+
+    <line x1="436" y1="600" x2="464" y2="600" stroke="#5E6B72" stroke-width="1.2" stroke-dasharray="5,4" marker-end="url(#arrow)"/>
+    <text x="472" y="604" fill="#5E6B72" font-size="8" font-family="'JetBrains Mono',monospace">ответ</text>
+
+    <line x1="544" y1="600" x2="572" y2="600" stroke="#C81E36" stroke-width="1.6" marker-end="url(#arrow-accent)"/>
+    <text x="580" y="604" fill="#5E6B72" font-size="8" font-family="'JetBrains Mono',monospace">итог: КиЗ заказа</text>
+
+    <path d="M 716 594 L 744 594 L 744 606 L 720 606" fill="none" stroke="#5E6B72" stroke-width="1.2" marker-end="url(#arrow)"/>
+    <text x="752" y="604" fill="#5E6B72" font-size="8" font-family="'JetBrains Mono',monospace">шаг внутри API</text>
+
+    <rect x="880" y="592" width="24" height="16" rx="3" fill="rgba(23,36,43,0.02)" stroke="rgba(23,36,43,0.22)" stroke-width="1"/>
+    <text x="912" y="604" fill="#5E6B72" font-size="8" font-family="'JetBrains Mono',monospace">ALT · ветвление кэша</text>
+  </svg>
+  </figure>
+
+  <footer>
+    <span>МАРКО · docs/sequence-identify-wb.html · 25.09.2026</span>
+    <span class="note">WB недоступен → state=error при HTTP 200, локальные срезы живут; пустой ответ WB кэшируется негативно</span>
+  </footer>
+</div>
+</body>
+</html>
