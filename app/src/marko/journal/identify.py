@@ -316,6 +316,25 @@ def _enrich_sgtins(db: Session, pairs: list[tuple[int, dict]]) -> list[dict]:
     return out
 
 
+def meta_decision(db: Session, sgtin: str) -> tuple[str | None, float | None]:
+    """(решение WB по точному sgtin, fetched_at) из кэша закреплений — без
+    сети, свежесть по META_TTL. Единственный читатель схемы кэша кроме
+    live_sgtins — guard печати этикеток (marko.label): дрейф схемы виден
+    здесь, а не молча выключает блокировку печати."""
+    kv = db.get(PlatformKV, KV_META)
+    if kv is None:
+        return None, None
+    now = time.time()
+    for ent in (kv.value.get("by_id") or {}).values():
+        ts = ent.get("fetched_at") or 0
+        if now - ts > META_TTL:
+            continue
+        for s in ent.get("sgtins") or []:
+            if s.get("sgtin") == sgtin:
+                return s.get("decision"), ts
+    return None, None
+
+
 def _meta_cache_put(db: Session, by_id: dict) -> None:
     items = sorted(by_id.items(),               # потолок роста: свежие 500
                    key=lambda kv: kv[1].get("fetched_at", 0), reverse=True)[:500]

@@ -89,6 +89,9 @@ const SGTIN_DECISION = {
   sgtinRetired: 'уже продан (выбыл)', sgtinDisaggregated: 'агрегация снята',
   sgtinAppliedNotPaid: 'заказ на код не оплачен',
 }
+// решения WB, при которых печать этикетки мертва (зеркало marko.label:
+// кнопки-мосты «Этикетка» в справочнике/трассировке гаснут сразу)
+const SGTIN_BLOCKED = new Set(['sgtinRetired', 'sgtinWrittenOff', 'sgtinNotFound'])
 // статус заказа WB по ленте заказов (order-feed; официальная документация WB)
 const WF_STATUS = { created: ['оформлен', 'blue'], buyout: ['куплен', 'green'],
   cancel: ['отменён', 'grey'], return: ['возвращён', 'amber'],
@@ -253,6 +256,7 @@ const I = {
   search: <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round"><circle cx="11" cy="11" r="7" /><path d="m20 20-3.5-3.5" /></svg>,
   copy: <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><rect x="9" y="9" width="12" height="12" rx="2" /><path d="M5 15V5a2 2 0 0 1 2-2h10" /></svg>,
   clock: <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round"><circle cx="12" cy="12" r="9" /><path d="M12 7v5l3 3" /></svg>,
+  tag: <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M12 2H6a2 2 0 0 0-2 2v6l10 10 8-8L12 2z" /><circle cx="8" cy="8" r="1" /></svg>,
 }
 
 /* ================= примитивы ================= */
@@ -1859,6 +1863,8 @@ function Trace({ ctx, initial }) {
                       <span className="km" style={{ fontSize: 11 }}>{s.sgtin || '—'}</span>
                       <span>{SGTIN_DECISION[s.decision] || <span className="mono" style={{ fontSize: 12 }}>{s.decision || '—'}</span>}</span>
                       {s.sgtin && s.sgtin.startsWith(data.km) && <span className="bdg blue">этот код</span>}
+                      {s.sgtin && !SGTIN_BLOCKED.has(s.decision)
+                        && <button className="btn sm" onClick={() => go('label', s.sgtin)}>Этикетка</button>}
                     </div>)}
                   </div>)}
               </div></>}
@@ -2035,6 +2041,8 @@ function Identifiers({ ctx, initial }) {
                   {s.item ? <Badge dict={ITEM_STATES} v={s.item.state} />
                     : <span className="faint" style={{ fontSize: 12 }} title="Кода нет в журнале — нормально для непроданных заказов: строки продаж придут после выкупа">нет в журнале</span>}
                   {s.item && <button className="btn sm" onClick={() => kmDrawer(s.item)}>Карточка КМ</button>}
+                  {s.sgtin && !SGTIN_BLOCKED.has(s.decision)
+                    && <button className="btn sm" onClick={() => go('label', s.sgtin)}>Этикетка</button>}
                 </div>
                 <div style={{ display: 'flex', gap: 10, alignItems: 'baseline', flexWrap: 'wrap', marginTop: 2 }}>
                   <span style={{ fontSize: 12.5, color: 'var(--muted)' }}>
@@ -2141,6 +2149,132 @@ function Identifiers({ ctx, initial }) {
   </>
 }
 
+/* ================= нанесение КиЗ (этикетки) ================= */
+/* печать этикетки 58×40 мм с DataMatrix полного КиЗ (перепечатка бирки
+   невыкупа). Точечный запрос, не на 60с-тике; полный код существует только
+   в закреплениях WB — мосты из справочника/трассировки несут его сюда */
+const isFullKiz = (v) => /^01\d{14}21/.test(v) && v.length > 31
+
+// DataMatrix из того же грида, что уходит в PDF (модули '1' = тёмные)
+const DmPath = ({ rows }) => { const n = rows.length
+  let d = ''
+  rows.forEach((r, y) => [...r].forEach((b, x) => { if (b === '1') d += `M${x} ${y}h1v1h-1z` }))
+  return <svg viewBox={`0 0 ${n} ${n}`} width="23mm" height="23mm" shapeRendering="crispEdges"
+    role="img" aria-label="DataMatrix КиЗ" style={{ display: 'block' }}>
+    <rect width={n} height={n} fill="#fff" /><path fill="#000" d={d} /></svg> }
+
+function Labels({ ctx, initial }) {
+  const { notify, go } = ctx
+  const [q, setQ] = useState(initial || '')
+  const [cards, setCards] = useState([])       // превью этикеток (по одному на КиЗ)
+  const [busy, setBusy] = useState(false)
+  const [pBusy, setPBusy] = useState('')
+  const seqRef = useRef(0)
+  const loadPreview = async (sgtin, seq) => {
+    try {
+      const p = await api(`/v1/label/preview?sgtin=${encodeURIComponent(sgtin)}`)
+      if (seq === seqRef.current) setCards((c) => [...c.filter((x) => x.km !== p.km), p])
+    } catch (e) {
+      if (seq === seqRef.current) notify('Этикетка не собралась', e.message, 'bad')
+    }
+  }
+  const run = async (val) => {
+    const key = (val ?? q).trim()
+    if (!key) return
+    const seq = ++seqRef.current          // медленный запрос не должен
+    setBusy(true); setCards([])           // перезаписать свежий
+    try {
+      if (isFullKiz(key)) { await loadPreview(key, seq); return }
+      const r = await api(`/v1/identify?key=${encodeURIComponent(key)}&live=1`)
+      if (seq !== seqRef.current) return
+      if (r.type === 'km') {
+        notify('Распознан короткий КМ', 'Печать возможна только с полного КиЗ (01… 21… 91… 92…). Введите заказ — закреплённый КиЗ подхватится живьём', 'warn')
+        return
+      }
+      if (r.type !== 'order') {
+        notify('Печать — по заказу или полному КиЗ', 'Этот ключ справочный: введите rid/ID заказа (закреплённые КиЗ подхватятся живьём) или вставьте полный КиЗ', 'warn')
+        return
+      }
+      const sgtins = (r.live?.orders || []).flatMap((o) => o.sgtins.map((s) => s.sgtin)).filter(Boolean)
+      if (!sgtins.length)
+        notify('Закреплённых КиЗ нет', r.live?.note || r.live?.error || 'WB не вернул закреплений по этому заказу', 'warn')
+      if (sgtins.length > 10)
+        notify(`Показаны первые 10 из ${sgtins.length}`, 'Уточните числовой ID сборочного задания, чтобы собрать остальные этикетки', 'warn')
+      await Promise.all(sgtins.slice(0, 10).map((s) => loadPreview(s, seq)))
+    } catch (e) {
+      if (seq === seqRef.current) notify('Поиск не удался', e.message, 'bad')
+    } finally {
+      if (seq === seqRef.current) setBusy(false)
+    }
+  }
+  useEffect(() => { if (initial) run(initial) }, [])
+  const print = async (p) => {
+    setPBusy(p.km)
+    try {
+      await dl(`/v1/label/print?sgtin=${encodeURIComponent(p.sgtin)}`, `kiz-${p.km}.pdf`)
+      notify('PDF этикетки скачан', 'термо-принтер 58×40 мм · сглаживание в драйвере — off · перед отгрузкой проверьте код сканером')
+    } catch (e) { notify('Печать не удалась', e.message, 'bad') }
+    finally { setPBusy('') }
+  }
+  const srcLabel = { card: 'карточка НК', journal: 'журнал ЧЗ', gtin: 'GTIN' }
+  return <>
+    <Head title="Нанесение КиЗ" sub="Печать этикетки 58×40 мм с DataMatrix полного КиЗ — перепечатка бирки невыкупа в «повторной поставке». Один код — один экземпляр товара."
+      tools={<Sync tick={ctx.tick} />} />
+    <div className="frow" style={{ marginBottom: 14 }}>
+      <div className="search" style={{ flex: '1 1 380px', maxWidth: 560 }}>{I.search}
+        <input value={q} placeholder="rid заказа / ID задания — или полный КиЗ (01… 21… 91… 92…)"
+          onChange={(e) => setQ(e.target.value)}
+          onKeyDown={(e) => { if (e.key === 'Enter') run() }} /></div>
+      <button className="btn pri" disabled={busy || !q.trim()} onClick={() => run()}>Собрать этикетку</button>
+      <span className="faint" style={{ fontSize: 12 }}>{busy ? 'собираем…' : 'Enter — тоже'}</span>
+    </div>
+    {cards.map((p) => <div key={p.km} className="card" style={{ marginBottom: 18 }}>
+      <div className="card-h"><b style={{ fontSize: 12.5 }}>Этикетка 58×40 мм</b>
+        <span className="hint">имя: {srcLabel[p.name_source] || p.name_source}
+          {p.decision ? ` · ${SGTIN_DECISION[p.decision] || p.decision}${p.decision_ts ? ` · ${fmtAgo(p.decision_ts)}` : ''}`
+            : ' · решение WB неизвестно — печать не блокирована'}</span></div>
+      <div className="card-b">
+        <div style={{ display: 'flex', gap: 20, flexWrap: 'wrap', alignItems: 'flex-start' }}>
+          <div style={{ width: '58mm', height: '40mm', background: '#fff', border: '1px solid var(--line)',
+            borderRadius: 4, display: 'flex', padding: '2mm', gap: '1mm', flex: '0 0 auto', overflow: 'hidden' }}>
+            <div style={{ width: '29mm', fontSize: '9pt', lineHeight: '3.7mm', overflow: 'hidden', wordBreak: 'break-word' }}>
+              {p.lines.map((l, i) => <div key={i}>{l}</div>)}
+            </div>
+            <div style={{ width: '23mm', flex: '0 0 auto' }}>
+              <DmPath rows={p.modules} />
+              <div className="mono" style={{ fontSize: '7pt', lineHeight: '2.6mm', marginTop: '0.6mm' }}>
+                <div>{p.human[0]}</div><div>{p.human[1]}</div>
+              </div>
+            </div>
+          </div>
+          <div style={{ flex: '1 1 240px', minWidth: 240 }}>
+            <div style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap', marginBottom: 6 }}>
+              <KmCell km={p.km} />
+              {p.decision && <span style={{ fontSize: 12.5, color: p.blocked ? 'var(--stamp)' : 'var(--muted)' }}>
+                {SGTIN_DECISION[p.decision] || <span className="mono" style={{ fontSize: 12 }}>{p.decision}</span>}</span>}
+            </div>
+            <p style={{ fontSize: 12.5, color: 'var(--muted)', margin: '0 0 10px' }}>{p.name}</p>
+            {p.blocked && <div className="empty" style={{ marginTop: 0, marginBottom: 10 }}>
+              <b>Печать заблокирована</b><span style={{ color: 'var(--stamp)' }}> {p.block_reason}</span></div>}
+            <div className="row" style={{ gap: 8, flexWrap: 'wrap' }}>
+              <button className="btn sm pri" disabled={p.blocked || pBusy === p.km} onClick={() => print(p)}>
+                {pBusy === p.km ? 'собираем PDF…' : 'Скачать PDF 58×40'}</button>
+              <button className="btn sm" onClick={() => go('trace', p.km)}>Трассировка кода</button>
+              <span className="faint" style={{ fontSize: 12 }}>один КиЗ = один экземпляр · проверьте сканером перед отгрузкой</span>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>)}
+    {!cards.length && !busy && <div className="card"><div className="empty">
+      <b>Введите заказ или вставьте полный КиЗ</b>
+      rid (eAc.…) или числовой ID сборочного задания — закреплённые КиЗ подхватятся живьём из WB:
+      для непроданных заказов это единственный источник полного кода. Быстрее — кнопка «Этикетка»
+      в закреплениях раздела «Идентификаторы WB» или «Трассировка».
+    </div></div>}
+  </>
+}
+
 /* ================= консоль ================= */
 /* два пространства консоли: оборот/маркетплейсы и нацкаталог — разными
    специалистами; мосты (трассировка → каталог) остаются прямыми переходами */
@@ -2151,7 +2285,8 @@ const NAV_SECTIONS = [
     ['returns', 'Возвраты', I.back],
     ['journal', 'Журнал КМ', I.list],
     ['trace', 'Трассировка', I.clock],
-    ['ids', 'Идентификаторы WB', I.search]]],
+    ['ids', 'Идентификаторы WB', I.search],
+    ['label', 'Нанесение КиЗ', I.tag]]],
   ['Нацкаталог', [
     ['catalog', 'Каталог НК', I.grid],
     ['refs', 'Справочники', I.book]]],
@@ -2163,6 +2298,7 @@ function Console({ me, logout }) {
   const [jInit, setJInit] = useState('')
   const [tInit, setTInit] = useState('')
   const [iInit, setIInit] = useState('')
+  const [lInit, setLInit] = useState('')
   const [pulse, setPulse] = useState(null)
   const [tick, setTick] = useState(Date.now())
   const [inn, setInn] = useState(localStorage.getItem('inn') || '090201471350')
@@ -2180,7 +2316,8 @@ function Console({ me, logout }) {
   // параметр перехода достаётся только целевому разделу: init журнала — это
   // фильтр состояния, чужой параметр опустошал бы таблицу (журнал+справочник)
   const go = (v, jf) => {
-    if (jf != null) { setJInit(v === 'journal' ? jf : ''); setTInit(v === 'trace' ? jf : ''); setIInit(v === 'ids' ? jf : '') }
+    if (jf != null) { setJInit(v === 'journal' ? jf : ''); setTInit(v === 'trace' ? jf : '')
+      setIInit(v === 'ids' ? jf : ''); setLInit(v === 'label' ? jf : '') }
     setView(v); window.scrollTo(0, 0) }
   useEffect(() => { const i = setInterval(bump, 60000); return () => clearInterval(i) }, [])
   useEffect(() => { api('/v1/pulse').then(setPulse).catch(() => {}) }, [tick])
@@ -2204,7 +2341,8 @@ function Console({ me, logout }) {
     refs: null,
     journal: anomalyTotal(s),
     trace: null,
-    ids: null }
+    ids: null,
+    label: null }
   const navBtn = (v) => { const [key, lbl, icon] = NAV.find((x) => x[0] === v)
     return <button key={key} className="nav-item" aria-current={view === key}
       onClick={() => go(key)}>{icon}<span className="lbl">{lbl}</span>
@@ -2236,6 +2374,7 @@ function Console({ me, logout }) {
         {view === 'journal' && <Journal key={jInit} ctx={ctx} initial={jInit} />}
         {view === 'trace' && <Trace key={tInit} ctx={ctx} initial={tInit} />}
         {view === 'ids' && <Identifiers key={iInit} ctx={ctx} initial={iInit} />}
+        {view === 'label' && <Labels key={lInit} ctx={ctx} initial={lInit} />}
       </main>
     </div>
     <div id="toasts" aria-live="polite">

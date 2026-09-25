@@ -34,11 +34,13 @@ def create_app() -> FastAPI:
     from marko.api.routes_me import router as me_router
     from marko.api.routes_sign import router as sign_router
     from marko.api.routes_journal import router as journal_router
+    from marko.api.routes_label import router as label_router
     from marko.api.routes_nkmt import router as nkmt_router
     from marko.api.routes_auth import router as auth_router
     app.include_router(me_router)
     app.include_router(sign_router)
     app.include_router(journal_router)
+    app.include_router(label_router)
     app.include_router(nkmt_router)
     app.include_router(auth_router)
 
