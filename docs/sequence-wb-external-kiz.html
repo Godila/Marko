@@ -1,0 +1,157 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>МАРКО · КиЗ по ID заказа — только API Wildberries</title>
+<link href="https://fonts.googleapis.com/css2?family=Unbounded:wght@500&family=Golos+Text:wght@400;500;600&family=JetBrains+Mono:wght@400;500&family=Instrument+Serif:ital@1&display=swap" rel="stylesheet">
+<style>
+  :root{
+    --paper:#F1F4F3; --surface:#FFFFFF; --ink:#17242B; --muted:#5E6B72; --faint:#93A0A6;
+    --line:#DDE3E2; --stamp:#C81E36; --info:#2759B7;
+  }
+  *{box-sizing:border-box}
+  body{margin:0;background:var(--paper);color:var(--ink);font:400 14px/1.5 'Golos Text',sans-serif}
+  .wrap{max-width:1160px;margin:0 auto;padding:34px 34px 26px}
+  .eyebrow{font:500 10px 'JetBrains Mono',monospace;letter-spacing:.18em;color:var(--muted);text-transform:uppercase}
+  h1{font:500 25px/1.2 'Unbounded',sans-serif;margin:10px 0 8px;letter-spacing:.01em}
+  .sub{color:var(--muted);max-width:860px;margin:0 0 6px}
+  .mono{font-family:'JetBrains Mono',monospace}
+  figure{margin:18px 0 0}
+  svg{display:block;width:100%;height:auto}
+  footer{border-top:1px solid var(--line);margin-top:20px;padding-top:12px;
+    font:400 10.5px 'JetBrains Mono',monospace;color:var(--faint);display:flex;gap:24px;flex-wrap:wrap}
+  footer .note{color:var(--muted)}
+</style>
+</head>
+<body>
+<div class="wrap">
+  <p class="eyebrow">Wildberries API · sequence · без МАРКО</p>
+  <h1>КиЗ по ID заказа: только API Wildberries</h1>
+  <p class="sub">Путь внешнего сервиса: от rid (<span class="mono">eAc.rddb…0.0</span>) к коду маркировки
+    двумя маршрутами — живые закрепления <span class="mono">orders/meta</span> (работает и для непроданных
+    заказов) или эксайз-отчёт (только продажи). Никакой своей базы не требуется — все данные отдаёт WB.</p>
+
+  <figure>
+  <svg viewBox="0 0 1080 552" role="img" aria-labelledby="seq-wb-ext-title seq-wb-ext-desc" xmlns="http://www.w3.org/2000/svg">
+    <title id="seq-wb-ext-title">Как внешнему сервису получить КиЗ заказа через API Wildberries</title>
+    <desc id="seq-wb-ext-desc">Диаграмма последовательности: внешний сервис пагинацией снапшота заказов превращает rid в числовой ID сборочного задания, затем либо живым orders/meta получает закреплённый sgtin с решением валидации (путь работает для непроданных заказов), либо для проданных запрашивает эксайз-отчёт и получает код маркировки из чека.</desc>
+    <defs>
+      <marker id="arrow" markerWidth="8" markerHeight="6" refX="7" refY="3" orient="auto">
+        <polygon points="0 0, 8 3, 0 6" fill="#5E6B72"/>
+      </marker>
+      <marker id="arrow-accent" markerWidth="8" markerHeight="6" refX="7" refY="3" orient="auto">
+        <polygon points="0 0, 8 3, 0 6" fill="#C81E36"/>
+      </marker>
+      <marker id="arrow-link" markerWidth="8" markerHeight="6" refX="7" refY="3" orient="auto">
+        <polygon points="0 0, 8 3, 0 6" fill="#2759B7"/>
+      </marker>
+    </defs>
+
+    <rect width="100%" height="100%" fill="#F1F4F3"/>
+
+    <!-- лайфлайны -->
+    <line x1="152" y1="88" x2="152" y2="500" stroke="rgba(23,36,43,0.20)" stroke-width="1" stroke-dasharray="3,3"/>
+    <line x1="580" y1="88" x2="580" y2="500" stroke="rgba(23,36,43,0.20)" stroke-width="1" stroke-dasharray="3,3"/>
+    <line x1="936" y1="88" x2="936" y2="500" stroke="rgba(23,36,43,0.20)" stroke-width="1" stroke-dasharray="3,3"/>
+
+    <!-- активационные полосы -->
+    <rect x="148" y="116" width="8" height="336" fill="rgba(23,36,43,0.06)" stroke="#5E6B72" stroke-width="0.8"/>
+    <rect x="576" y="116" width="8" height="168" fill="rgba(23,36,43,0.06)" stroke="#5E6B72" stroke-width="0.8"/>
+    <rect x="932" y="348" width="8" height="44" fill="rgba(23,36,43,0.06)" stroke="#5E6B72" stroke-width="0.8"/>
+
+    <!-- m1: снапшот заказов -->
+    <line x1="160" y1="124" x2="572" y2="124" stroke="#2759B7" stroke-width="1.2" marker-end="url(#arrow-link)"/>
+    <rect x="310" y="104" width="112" height="12" rx="2" fill="#F1F4F3"/>
+    <text x="366" y="113" fill="#2759B7" font-size="8" font-family="'JetBrains Mono',monospace" text-anchor="middle" letter-spacing="0.06em">GET /V3/ORDERS</text>
+
+    <!-- m2: rid → id -->
+    <line x1="572" y1="156" x2="160" y2="156" stroke="#5E6B72" stroke-width="1.2" stroke-dasharray="5,4" marker-end="url(#arrow)"/>
+    <rect x="334" y="136" width="64" height="12" rx="2" fill="#F1F4F3"/>
+    <text x="366" y="145" fill="#5E6B72" font-size="8" font-family="'JetBrains Mono',monospace" text-anchor="middle" letter-spacing="0.06em">RID → ID</text>
+
+    <!-- alt: два маршрута к КиЗ -->
+    <rect x="128" y="180" width="832" height="232" rx="4" fill="rgba(23,36,43,0.02)" stroke="rgba(23,36,43,0.22)" stroke-width="1"/>
+    <rect x="128" y="180" width="40" height="16" rx="2" fill="#F1F4F3" stroke="rgba(23,36,43,0.22)" stroke-width="1"/>
+    <text x="148" y="192" fill="#5E6B72" font-size="8" font-family="'JetBrains Mono',monospace" text-anchor="middle" letter-spacing="0.12em">ALT</text>
+    <text x="180" y="214" fill="#5E6B72" font-size="8" font-family="'JetBrains Mono',monospace" letter-spacing="0.04em">[любой заказ · включая непроданный]</text>
+
+    <!-- m3: POST orders/meta -->
+    <line x1="160" y1="240" x2="572" y2="240" stroke="#2759B7" stroke-width="1.2" marker-end="url(#arrow-link)"/>
+    <rect x="326" y="220" width="80" height="12" rx="2" fill="#F1F4F3"/>
+    <text x="366" y="229" fill="#2759B7" font-size="8" font-family="'JetBrains Mono',monospace" text-anchor="middle" letter-spacing="0.06em">POST META</text>
+
+    <!-- m4: сgtin — главный ответ -->
+    <line x1="572" y1="272" x2="160" y2="272" stroke="#C81E36" stroke-width="1.6" marker-end="url(#arrow-accent)"/>
+    <rect x="302" y="252" width="128" height="12" rx="2" fill="#F1F4F3"/>
+    <text x="366" y="261" fill="#C81E36" font-size="8" font-family="'JetBrains Mono',monospace" text-anchor="middle" letter-spacing="0.06em">КИЗ + DECISION</text>
+
+    <line x1="136" y1="300" x2="952" y2="300" stroke="rgba(23,36,43,0.20)" stroke-width="1" stroke-dasharray="4,3"/>
+    <text x="180" y="326" fill="#5E6B72" font-size="8" font-family="'JetBrains Mono',monospace" letter-spacing="0.04em">[продан · КМ из чека ККТ]</text>
+
+    <!-- m5: эксайз-отчёт -->
+    <line x1="160" y1="352" x2="928" y2="352" stroke="#2759B7" stroke-width="1.2" marker-end="url(#arrow-link)"/>
+    <rect x="480" y="332" width="128" height="12" rx="2" fill="#F1F4F3"/>
+    <text x="544" y="341" fill="#2759B7" font-size="8" font-family="'JetBrains Mono',monospace" text-anchor="middle" letter-spacing="0.06em">EXCISE-REPORT</text>
+
+    <!-- m6: КМ из чека -->
+    <line x1="928" y1="384" x2="160" y2="384" stroke="#5E6B72" stroke-width="1.2" stroke-dasharray="5,4" marker-end="url(#arrow)"/>
+    <rect x="512" y="364" width="64" height="12" rx="2" fill="#F1F4F3"/>
+    <text x="544" y="373" fill="#5E6B72" font-size="8" font-family="'JetBrains Mono',monospace" text-anchor="middle" letter-spacing="0.06em">КМ · ЧЕК</text>
+
+    <!-- примечание у пагинации -->
+    <text x="596" y="118" fill="#5E6B72" font-size="13" font-family="'Instrument Serif',serif" font-style="italic">эндпойнта «заказ по rid» нет — сканируем снапшот</text>
+    <text x="596" y="134" fill="#5E6B72" font-size="13" font-family="'Instrument Serif',serif" font-style="italic">страницами до next=0; числовой ID уже</text>
+    <text x="596" y="150" fill="#93A0A6" font-size="13" font-family="'Instrument Serif',serif" font-style="italic">известен (кабинет) → этот шаг не нужен</text>
+
+    <!-- примечание-доктрина -->
+    <text x="168" y="448" fill="#5E6B72" font-size="13" font-family="'Instrument Serif',serif" font-style="italic">sgtin закрепляется за заданием при сборке поставки (PUT /api/v3/orders/{id}/meta/sgtin)</text>
+    <text x="168" y="464" fill="#93A0A6" font-size="13" font-family="'Instrument Serif',serif" font-style="italic">— поэтому orders/meta отдаёт КиЗ ещё до продажи; эксайз рождается только чеком ККТ</text>
+
+    <!-- акторы -->
+    <rect x="56" y="40" width="192" height="48" rx="6" fill="#F1F4F3"/>
+    <rect x="56" y="40" width="192" height="48" rx="6" fill="rgba(94,107,114,0.10)" stroke="#93A0A6" stroke-width="1"/>
+    <rect x="64" y="46" width="28" height="12" rx="2" fill="transparent" stroke="rgba(147,160,166,0.60)" stroke-width="0.8"/>
+    <text x="78" y="55" fill="rgba(94,107,114,0.8)" font-size="7" font-family="'JetBrains Mono',monospace" text-anchor="middle" letter-spacing="0.08em">SVC</text>
+    <text x="152" y="72" fill="#17242B" font-size="12" font-weight="600" font-family="'Golos Text',sans-serif" text-anchor="middle">Внешний сервис</text>
+    <text x="152" y="84" fill="#5E6B72" font-size="9" font-family="'JetBrains Mono',monospace" text-anchor="middle">токен продавца WB</text>
+
+    <rect x="464" y="40" width="232" height="48" rx="6" fill="#F1F4F3"/>
+    <rect x="464" y="40" width="232" height="48" rx="6" fill="#FFFFFF" stroke="#17242B" stroke-width="1"/>
+    <rect x="472" y="46" width="28" height="12" rx="2" fill="transparent" stroke="rgba(23,36,43,0.40)" stroke-width="0.8"/>
+    <text x="486" y="55" fill="rgba(23,36,43,0.8)" font-size="7" font-family="'JetBrains Mono',monospace" text-anchor="middle" letter-spacing="0.08em">WB</text>
+    <text x="580" y="72" fill="#17242B" font-size="12" font-weight="600" font-family="'Golos Text',sans-serif" text-anchor="middle">Заказы + meta</text>
+    <text x="580" y="84" fill="#5E6B72" font-size="9" font-family="'JetBrains Mono',monospace" text-anchor="middle">marketplace-api.wildberries.ru</text>
+
+    <rect x="824" y="40" width="224" height="48" rx="6" fill="#F1F4F3"/>
+    <rect x="824" y="40" width="224" height="48" rx="6" fill="rgba(23,36,43,0.05)" stroke="#5E6B72" stroke-width="1"/>
+    <rect x="832" y="46" width="28" height="12" rx="2" fill="transparent" stroke="rgba(94,107,114,0.50)" stroke-width="0.8"/>
+    <text x="846" y="55" fill="rgba(94,107,114,0.8)" font-size="7" font-family="'JetBrains Mono',monospace" text-anchor="middle" letter-spacing="0.08em">WB</text>
+    <text x="936" y="72" fill="#17242B" font-size="12" font-weight="600" font-family="'Golos Text',sans-serif" text-anchor="middle">Эксайз-отчёт</text>
+    <text x="936" y="84" fill="#5E6B72" font-size="9" font-family="'JetBrains Mono',monospace" text-anchor="middle">seller-analytics-api…</text>
+
+    <!-- легенда -->
+    <line x1="56" y1="488" x2="1024" y2="488" stroke="rgba(23,36,43,0.10)" stroke-width="0.8"/>
+    <text x="56" y="508" fill="#5E6B72" font-size="8" font-family="'JetBrains Mono',monospace" letter-spacing="0.14em">LEGEND</text>
+
+    <line x1="140" y1="504" x2="168" y2="504" stroke="#2759B7" stroke-width="1.2" marker-end="url(#arrow-link)"/>
+    <text x="176" y="508" fill="#5E6B72" font-size="8" font-family="'JetBrains Mono',monospace">HTTP-вызов WB</text>
+
+    <line x1="300" y1="504" x2="328" y2="504" stroke="#5E6B72" stroke-width="1.2" stroke-dasharray="5,4" marker-end="url(#arrow)"/>
+    <text x="336" y="508" fill="#5E6B72" font-size="8" font-family="'JetBrains Mono',monospace">ответ</text>
+
+    <line x1="404" y1="504" x2="432" y2="504" stroke="#C81E36" stroke-width="1.6" marker-end="url(#arrow-accent)"/>
+    <text x="440" y="508" fill="#5E6B72" font-size="8" font-family="'JetBrains Mono',monospace">итог: КиЗ + решение WB</text>
+
+    <rect x="640" y="496" width="24" height="16" rx="3" fill="rgba(23,36,43,0.02)" stroke="rgba(23,36,43,0.22)" stroke-width="1"/>
+    <text x="672" y="508" fill="#5E6B72" font-size="8" font-family="'JetBrains Mono',monospace">ALT · два маршрута к КиЗ</text>
+  </svg>
+  </figure>
+
+  <footer>
+    <span>МАРКО · docs/sequence-wb-external-kiz.html · 25.09.2026</span>
+    <span class="note">Authorization: токен WB как есть (без Bearer) · orders/meta 300/мин, 4XX ×10, ≤100 ID · эксайз 2/24ч · архив заказов &gt;3 мес: /api/marketplace/v3/fbs/orders/archive</span>
+  </footer>
+</div>
+</body>
+</html>
