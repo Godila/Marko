@@ -886,27 +886,68 @@ function Catalog({ ctx }) {
 function DeclarationCard({ d, ctx, onDel }) {
   const [st, setSt] = useState(d)
   const [busy, setBusy] = useState(false)
+  const [edit, setEdit] = useState(false)
+  const [ef, setEf] = useState({ number: '', date: '', type: 'declaration', title: '' })
   const check = async () => { if (busy) return
     setBusy(true)
     try { const r = await api(`/v1/nkmt/declarations/${st.id}/check`, { method: 'POST' })
       setSt(r.declaration)
       const [lbl] = declState(r.declaration)
       ctx.notify(r.found ? `Декларация: ${lbl}` : 'ЧЗ не нашёл декларацию',
-        r.found ? `ТН ВЭД: ${r.declaration.tnved_list.join(', ') || '—'}`
+        r.found ? `ТНВЭД: ${r.declaration.tnved_list.join(', ') || '—'}`
           : 'Проверьте номер и дату — пара должна совпадать с реестром ЧЗ.',
         r.found ? '' : 'warn')
       ctx.bump()
     } catch (e) { ctx.notify('Проверка не удалась', e.message, 'bad') } finally { setBusy(false) } }
+  const startEdit = () => { setEf({ number: st.doc_number, date: st.doc_date, type: st.doc_type, title: st.title || '' })
+    setEdit(true) }
+  const saveEdit = async () => { if (busy) return
+    if (!ef.number.trim() || !ef.date) return ctx.notify('Заполните номер и дату', '', 'warn')
+    const pairChanged = ef.number.trim() !== st.doc_number || ef.date !== st.doc_date
+    setBusy(true)
+    try { const r = await api(`/v1/nkmt/declarations/${st.id}`, { method: 'PUT',
+        body: JSON.stringify({ doc_number: ef.number, doc_date: ef.date, doc_type: ef.type, title: ef.title }) })
+      setSt(r.declaration); setEdit(false)
+      ctx.notify('Декларация обновлена',
+        !pairChanged ? 'Изменения сохранены.'
+          : r.found ? 'Данные ЧЗ по новой паре подтянуты автоматически.'
+            : 'Пара изменилась — нажмите «Проверить в ЧЗ», чтобы подтянуть реестр.',
+        pairChanged && !r.found ? 'warn' : '')
+      ctx.bump()
+    } catch (e) { ctx.notify('Не сохранено', e.message, 'bad') } finally { setBusy(false) } }
   const [lbl, cls] = declState(st)
   return <div>
     <div style={{ marginBottom: 12, display: 'flex', gap: 10, alignItems: 'center', flexWrap: 'wrap' }}>
       <span className="mono" style={{ fontSize: 12.5, wordBreak: 'break-all' }}>{st.doc_number}</span>
       <span className={`bdg ${cls}`}>{lbl}</span>
     </div>
-    <div className="row" style={{ gap: 8, marginBottom: 14, flexWrap: 'wrap' }}>
-      <button className="btn" disabled={busy} onClick={check}>Проверить в ЧЗ</button>
-      <button className="btn" onClick={onDel}>Удалить</button>
-    </div>
+    {edit
+      ? <>
+        <div className="frow">
+          <div className="field" style={{ flex: 2, minWidth: 160 }}><label>Номер</label>
+            <input value={ef.number} onChange={(e) => setEf({ ...ef, number: e.target.value })} /></div>
+          <div className="field"><label>Дата</label>
+            <input type="date" value={ef.date} onChange={(e) => setEf({ ...ef, date: e.target.value })} /></div>
+        </div>
+        <div className="frow">
+          <div className="field"><label>Тип</label>
+            <select value={ef.type} onChange={(e) => setEf({ ...ef, type: e.target.value })}>
+              <option value="declaration">декларация</option>
+              <option value="certificate">сертификат</option></select></div>
+          <div className="field" style={{ flex: 1 }}><label>Название (для себя)</label>
+            <input value={ef.title} placeholder="опционально" onChange={(e) => setEf({ ...ef, title: e.target.value })} /></div>
+        </div>
+        <div className="hint" style={{ marginBottom: 10 }}>Смена номера или даты сбрасывает данные ЧЗ и подтягивает их заново; дефолты привязаны к паре номер+дата — проверьте вкладку «Поля». Созданные карточки не пересобираются.</div>
+        <div className="row" style={{ gap: 8, marginBottom: 14, flexWrap: 'wrap' }}>
+          <button className="btn pri" disabled={busy} onClick={saveEdit}>Сохранить</button>
+          <button className="btn" disabled={busy} onClick={() => setEdit(false)}>Отмена</button>
+        </div>
+      </>
+      : <div className="row" style={{ gap: 8, marginBottom: 14, flexWrap: 'wrap' }}>
+        <button className="btn" disabled={busy} onClick={check}>Проверить в ЧЗ</button>
+        <button className="btn" onClick={startEdit}>Изменить</button>
+        <button className="btn" onClick={onDel}>Удалить</button>
+      </div>}
     <b style={{ fontSize: 12.5 }}>Реестр ЧЗ</b>
     <div className="twrap" style={{ margin: '6px 0 10px' }}><table className="t small"><tbody>
       <tr><td className="faint" style={{ width: '40%' }}>Тип документа</td>
@@ -950,6 +991,7 @@ function Refs({ ctx }) {
   const [rfields, setRfields] = useState({}); const [rfKey, setRfKey] = useState('size')
   const [rfVal, setRfVal] = useState('')
   const [rzBrand, setRzBrand] = useState(''); const [rzType, setRzType] = useState(''); const [rz, setRz] = useState(null)
+  const [editP, setEditP] = useState(null); const [editR, setEditR] = useState(null)
   useEffect(() => { api('/v1/nkmt/declarations').then(setDecls).catch(() => setDecls([]))
     api('/v1/nkmt/rules').then(setRules).catch(() => setRules([]))
     api('/v1/nkmt/producers').then(setProducers).catch(() => setProducers([]))
@@ -985,27 +1027,44 @@ function Refs({ ctx }) {
         ctx.bump() })
       .catch((e) => notify('Проверка не удалась', e.message, 'bad'))
       .finally(() => setCheckBusy(false)) }
-  const addProducer = () => { if (!pname.trim()) return notify('Укажите наименование', 'Как оно должно попасть в карточку НК (атрибут «Производитель»).', 'warn')
+  const startEditProducer = (p) => { setEditP(p.id); setPname(p.name)
+    setPinn(p.inn || ''); setPkind(p.kind || ''); setPnote(p.note || '') }
+  const cancelEditProducer = () => { setEditP(null)
+    setPname(''); setPinn(''); setPkind(''); setPnote('') }
+  const saveProducer = () => { if (!pname.trim()) return notify('Укажите наименование', 'Как оно должно попасть в карточку НК (атрибут «Производитель»).', 'warn')
     if (pinn && (!/^\d+$/.test(pinn) || ![10, 12].includes(pinn.length)))
       return notify('ИНН: 10 или 12 цифр', '', 'warn')
-    api('/v1/nkmt/producers', { method: 'POST',
-        body: JSON.stringify({ name: pname, inn: pinn, kind: pkind, note: pnote }) })
-      .then(() => { setPname(''); setPinn(''); setPkind(''); setPnote('')
-        notify('Производитель добавлен', 'Появится в подсказках правил и дефолтов.'); ctx.bump() })
-      .catch((e) => notify('Не добавлено', e.message, 'bad')) }
+    const wasEdit = editP
+    api(wasEdit ? `/v1/nkmt/producers/${wasEdit}` : '/v1/nkmt/producers',
+        { method: wasEdit ? 'PUT' : 'POST',
+          body: JSON.stringify({ name: pname, inn: pinn, kind: pkind, note: pnote }) })
+      .then(() => { cancelEditProducer()
+        notify(wasEdit ? 'Производитель обновлён' : 'Производитель добавлен',
+          wasEdit ? 'Правила и дефолты хранят его текстом — проверьте их, если имя менялось.'
+            : 'Появится в подсказках правил и дефолтов.'); ctx.bump() })
+      .catch((e) => notify('Не сохранено', e.message, 'bad')) }
   const delProducer = (p) => confirm('Удалить производителя?', p.name,
     'Подсказки исчезнут; уже подставленные в карточки и правила значения не изменятся.', 'Удалить',
     () => api(`/v1/nkmt/producers/${p.id}`, { method: 'DELETE' })
-      .then(() => { notify('Производитель удалён', ''); ctx.bump() })
+      .then(() => { if (editP === p.id) cancelEditProducer()
+        notify('Производитель удалён', ''); ctx.bump() })
       .catch((e) => notify('Не удалось удалить', e.message, 'bad')))
-  const addRule = () => { if (!rbrand.trim() && !rtypes.length)
+  const startEditRule = (r) => { setEditR(r.id); setRbrand(r.brand || '')
+    setRtypes([...(r.product_types || [])]); setRtypeInput(''); setRdecl(String(r.declaration_id))
+    setRprod(r.producer || ''); setRfields({ ...(r.fields || {}) })
+    setRfKey(Object.keys(r.fields || {})[0] || 'size'); setRfVal('') }
+  const cancelEditRule = () => { setEditR(null); setRbrand(''); setRtypes([]); setRtypeInput('')
+    setRprod(''); setRfields({}); setRfVal(''); setRdecl('') }
+  const saveRule = () => { if (!rbrand.trim() && !rtypes.length)
     return notify('Заполните бренд или вид товара', 'Правило без условия не создаётся — оно подходило бы всем строкам.', 'warn')
     if (!rdecl) return notify('Выберите декларацию', '', 'warn')
-    api('/v1/nkmt/rules', { method: 'POST',
-        body: JSON.stringify({ brand: rbrand, product_types: rtypes, declaration_id: Number(rdecl), producer: rprod, fields: rfields }) })
-      .then(() => { setRbrand(''); setRtypes([]); setRtypeInput(''); setRprod(''); setRfields({}); setRfVal(''); setRdecl('')
-        notify('Правило добавлено', 'Сработает при следующем импорте.'); ctx.bump() })
-      .catch((e) => notify('Не добавлено', e.message, 'bad')) }
+    const wasEdit = editR
+    api(wasEdit ? `/v1/nkmt/rules/${wasEdit}` : '/v1/nkmt/rules',
+        { method: wasEdit ? 'PUT' : 'POST',
+          body: JSON.stringify({ brand: rbrand, product_types: rtypes, declaration_id: Number(rdecl), producer: rprod, fields: rfields }) })
+      .then(() => { cancelEditRule()
+        notify(wasEdit ? 'Правило обновлено' : 'Правило добавлено', 'Сработает при следующем импорте.'); ctx.bump() })
+      .catch((e) => notify('Не сохранено', e.message, 'bad')) }
   const addRtype = () => { const t = rtypeInput.trim()
     if (t && !rtypes.some((x) => x.toLowerCase() === t.toLowerCase())) setRtypes([...rtypes, t])
     setRtypeInput('') }
@@ -1016,7 +1075,8 @@ function Refs({ ctx }) {
     `${r.brand || 'любой бренд'} × ${r.product_types?.length ? r.product_types.join(', ') : 'любой вид'}`,
     'Правило перестанет действовать при следующем импорте.', 'Удалить',
     () => api(`/v1/nkmt/rules/${r.id}`, { method: 'DELETE' })
-      .then(() => { notify('Правило удалено', ''); ctx.bump() })
+      .then(() => { if (editR === r.id) cancelEditRule()
+        notify('Правило удалено', ''); ctx.bump() })
       .catch((e) => notify('Не удалось удалить', e.message, 'bad')))
   const saveDefs = () => api('/v1/nkmt/defaults', { method: 'PUT', body: JSON.stringify(defs || {}) })
     .then(() => notify('Дефолты сохранены', 'Подставятся при следующем импорте.'))
@@ -1184,20 +1244,22 @@ function Refs({ ctx }) {
           <div className="field" style={{ flex: 1 }}><label>Примечание</label>
             <input value={pnote} placeholder="опционально"
               onChange={(e) => setPnote(e.target.value)} /></div>
-          <button className="btn pri" onClick={addProducer}>Добавить</button>
+          <button className="btn pri" onClick={saveProducer}>{editP ? 'Сохранить изменения' : 'Добавить'}</button>
+          {editP && <button className="btn" style={{ alignSelf: 'flex-end' }} onClick={cancelEditProducer}>Отмена</button>}
         </div>
+        {editP && <div className="hint" style={{ marginBottom: 10 }}>Правка производителя: правила и дефолты хранят его текстом — переименование не перепишет их, созданные карточки не меняются.</div>}
         <div className="note">Производитель из этого справочника появится в подсказках полей «Производитель» (дефолты и правила РД) — каноническое написание попадёт во все карточки одинаково.</div>
       </div>
       <div className="twrap"><table className="t small fit">
-        <colgroup><col style={{ width: 480 }} /><col style={{ width: 140 }} /><col style={{ width: 96 }} />
-          <col style={{ width: 210 }} /><col style={{ width: 110 }} /></colgroup>
+        <colgroup><col style={{ width: 414 }} /><col style={{ width: 140 }} /><col style={{ width: 96 }} />
+          <col style={{ width: 210 }} /><col style={{ width: 176 }} /></colgroup>
         <thead><tr><th>Наименование</th><th>ИНН</th><th>Тип</th><th>Примечание</th><th></th></tr></thead>
         <tbody>{(producers || []).map((p) => <tr key={p.id}>
           <td className="ell" title={p.name}>{p.name}</td>
           <td className="mono">{p.inn || '—'}</td>
           <td>{p.kind === 'entrepreneur' ? 'ИП' : p.kind === 'company' ? 'юрлицо' : '—'}</td>
           <td className="ell" title={p.note}>{p.note || '—'}</td>
-          <td className="actions"><button className="btn sm" onClick={() => delProducer(p)}>Удалить</button></td></tr>)}
+          <td className="actions"><button className="btn sm" onClick={() => startEditProducer(p)}>Изменить</button><button className="btn sm" onClick={() => delProducer(p)}>Удалить</button></td></tr>)}
           {producers && !producers.length && <tr><td colSpan={5}><div className="empty"><b>Производителей нет</b>Добавьте наименование и ИНН — они появятся в подсказках правил и дефолтов.</div></td></tr>}
         </tbody></table></div>
     </div>}
@@ -1257,13 +1319,15 @@ function Refs({ ctx }) {
                   onClick={() => { const f = { ...rfields }; delete f[k]; setRfields(f) }}>×</a></span>)}
             </div>}
             <span className="hint">подставится в строку, только если ячейка в файле пустая</span></div>
-          <button className="btn pri" style={{ alignSelf: 'flex-end' }} onClick={addRule}>Добавить правило</button>
+          <button className="btn pri" style={{ alignSelf: 'flex-end' }} onClick={saveRule}>{editR ? 'Сохранить изменения' : 'Добавить правило'}</button>
+          {editR && <button className="btn" style={{ alignSelf: 'flex-end' }} onClick={cancelEditRule}>Отмена</button>}
         </div>
+        {editR && <div className="hint" style={{ marginBottom: 10, marginTop: -2 }}>Правка правила: действует со следующего импорта, созданные карточки не пересобираются. Ссылка на декларацию — по id, при правке самой декларации не рвётся.</div>}
         <div className="note" style={{ marginTop: 10 }}>Как применяется: у строки файла берётся эффективный бренд и вид (из файла или дефолтов); правило подходит, если бренд и вид совпали (без учёта регистра) и вид входит в список. Из подошедших побеждает правило с большим числом условий. Подстановка действует только там, где значение не задано файлом — проверяйте её в «Проверке подстановок» ниже и в предпросмотре импорта.</div>
       </div>
       <div className="twrap"><table className="t small fit">
-        <colgroup><col style={{ width: 120 }} /><col style={{ width: 320 }} /><col style={{ width: 216 }} />
-          <col style={{ width: 168 }} /><col style={{ width: 186 }} /><col style={{ width: 112 }} /></colgroup>
+        <colgroup><col style={{ width: 120 }} /><col style={{ width: 256 }} /><col style={{ width: 216 }} />
+          <col style={{ width: 168 }} /><col style={{ width: 186 }} /><col style={{ width: 176 }} /></colgroup>
         <thead><tr><th>Бренд</th><th>Виды товара</th><th>Декларация</th><th>Производитель</th><th>Поля</th><th></th></tr></thead>
         <tbody>{(rules || []).map((r) => { const fs = Object.entries(r.fields || {})
           .map(([k, v]) => `${RULE_FIELD_LABELS[k] || k}: ${v}`).join(' · ')
@@ -1276,7 +1340,7 @@ function Refs({ ctx }) {
             {r.declaration_number}</td>
           <td className="ell" title={r.producer}>{r.producer || '—'}</td>
           <td className="ell" title={fs}>{fs || '—'}</td>
-          <td className="actions"><button className="btn sm" onClick={() => delRule(r)}>Удалить</button></td></tr> })}
+          <td className="actions"><button className="btn sm" onClick={() => startEditRule(r)}>Изменить</button><button className="btn sm" onClick={() => delRule(r)}>Удалить</button></td></tr> })}
           {rules && !rules.length && <tr><td colSpan={6}><div className="empty"><b>Правил нет</b>Пример: вид «ШАПКА» → декларация №…, производитель и размер ONE SIZE. Правило без бренда и видов не создаётся — оно подходило бы всем строкам.</div></td></tr>}
         </tbody></table></div>
     </div>}
