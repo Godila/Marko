@@ -1628,7 +1628,7 @@ function Journal({ ctx, initial }) {
             {WB_DELIVERY[c] || c} <span className="n">{(rows || []).filter((it) => it.delivery_type === c).length}</span></button>)}
       </>}
     </div>
-    <div className="frow" style={{ marginBottom: 14 }}>
+    <div className="frow" style={{ marginBottom: 14, alignItems: 'center' }}>
       <div className="search" style={{ flex: '1 1 380px', maxWidth: 560 }}>{I.search}
         <input value={q} placeholder="Поиск по КМ, событию или ID заказа WB…"
           onChange={onQ}
@@ -1751,7 +1751,7 @@ function Trace({ ctx, initial }) {
   return <>
     <Head title="Трассировка кода маркировки" sub="Жизненный цикл одного КМ: путь от производства и эмиссии до выкупа и возврата. При поиске код проверяется в Честном знаке живьём; телеметрия WB — кнопками."
       tools={<Sync tick={ctx.tick} />} />
-    <div className="frow" style={{ marginBottom: 14 }}>
+    <div className="frow" style={{ marginBottom: 14, alignItems: 'center' }}>
       <div className="search" style={{ flex: '1 1 380px', maxWidth: 560 }}>{I.search}
         <input value={q} placeholder="КИЗ (с криптохвостом) или короткий КМ…"
           onChange={(e) => setQ(e.target.value)}
@@ -2068,7 +2068,7 @@ function Identifiers({ ctx, initial }) {
   return <>
     <Head title="Идентификаторы WB" sub="Любой ключ Wildberries — заказ, задание, КМ, GTIN, артикул или поставка — и всё, что платформа о нём знает. КиЗ непроданных заказов — живые закрепления WB."
       tools={<Sync tick={ctx.tick} />} />
-    <div className="frow" style={{ marginBottom: 14 }}>
+    <div className="frow" style={{ marginBottom: 14, alignItems: 'center' }}>
       <div className="search" style={{ flex: '1 1 380px', maxWidth: 560 }}>{I.search}
         <input value={q} placeholder="rid заказа, ID сборочного задания, КМ/КИЗ, GTIN, nmId или поставка…"
           onChange={(e) => setQ(e.target.value)}
@@ -2284,7 +2284,7 @@ function Labels({ ctx, initial }) {
   return <>
     <Head title="Нанесение КиЗ" sub="Печать этикетки 58×40 мм с DataMatrix полного КиЗ — перепечатка бирки невыкупа в «повторной поставке». Один код — один экземпляр товара."
       tools={<Sync tick={ctx.tick} />} />
-    <div className="frow" style={{ marginBottom: 14 }}>
+    <div className="frow" style={{ marginBottom: 14, alignItems: 'center' }}>
       <div className="search" style={{ flex: '1 1 380px', maxWidth: 560 }}>{I.search}
         <input value={q} placeholder="rid заказа / ID задания — или полный КиЗ (01… 21… 91… 92…)"
           onChange={(e) => setQ(e.target.value)}
