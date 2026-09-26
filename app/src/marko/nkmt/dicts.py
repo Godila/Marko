@@ -172,5 +172,8 @@ def agent_context(db: Session) -> dict:
             "resolve_check": "POST /v1/nkmt/resolve {brand, product_type}",
             "hints": "GET /v1/nkmt/dicts/hints",
             "declarations": "GET /v1/nkmt/declarations",
+            "declarations_update": "PUT /v1/nkmt/declarations/{id} {doc_number, doc_date, doc_type, title}",
+            "producers_update": "PUT /v1/nkmt/producers/{id} {name, inn, kind, note}",
+            "rules_update": "PUT /v1/nkmt/rules/{id} {brand, product_types, declaration_id, producer, fields}",
         },
     }

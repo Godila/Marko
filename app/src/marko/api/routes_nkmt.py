@@ -60,6 +60,92 @@ class ResolveBody(BaseModel):
     product_type: str = ""
 
 
+# --- нормализация/дедуп справочников: единая точка для POST и PUT, чтобы
+# валидации создания и правки не разъезжались ---
+
+
+def _norm_declaration(body: DeclarationBody) -> tuple[str, str]:
+    # номер и дата обязательны и валидны: пара едет в карточки правилами
+    # и справочником брендов, битая дата уронит DATE_RE валидатора построчно
+    doc_number, doc_date = body.doc_number.strip(), body.doc_date.strip()
+    if not doc_number:
+        raise HTTPException(400, "укажите номер декларации")
+    if not DATE_RE.fullmatch(doc_date):
+        raise HTTPException(400, "дата декларации: ожидается ГГГГ-ММ-ДД")
+    return doc_number, doc_date
+
+
+def _norm_producer(body: ProducerBody) -> tuple[str, str, str, str]:
+    name = body.name.strip()
+    if not name:
+        raise HTTPException(400, "укажите наименование производителя")
+    inn = body.inn.strip()
+    if inn and (not inn.isdigit() or len(inn) not in (10, 12)):
+        raise HTTPException(400, "ИНН: 10 или 12 цифр")
+    kind = body.kind if body.kind in ("entrepreneur", "company") else ""
+    return name, inn, kind, body.note.strip()
+
+
+def _norm_rule(db: Session, body: RuleBody) -> tuple[str, list[str], dict[str, str]]:
+    brand = body.brand.strip()
+    # виды товара — список: пустые выбрасываем, дедуп по casefold (первое
+    # написание выигрывает), порядок сохраняем — как матчит match_rule
+    seen: dict[str, str] = {}
+    for t in body.product_types:
+        v = t.strip()
+        if v:
+            seen.setdefault(v.casefold(), v)
+    ptypes = list(seen.values())
+    if not brand and not ptypes:
+        raise HTTPException(400, "укажите бренд или вид товара — правило без условия матчит все строки")
+    if db.get(Declaration, body.declaration_id) is None:
+        raise HTTPException(404, "declaration not found")
+    # дополнительные поля: whitelist, пустые значения выкидываются
+    fields = {}
+    for key, value in (body.fields or {}).items():
+        k = str(key).strip()
+        if not k:
+            continue
+        if k not in RULE_FIELDS:
+            raise HTTPException(400, f"поле «{k}» недоступно для подстановки правилом")
+        v = str(value).strip()
+        if v:
+            fields[k] = v
+    return brand, ptypes, fields
+
+
+def _dup_declaration(db: Session, doc_number: str, doc_date: str,
+                     exclude_id: int | None = None) -> None:
+    q = db.query(Declaration).filter_by(doc_number=doc_number, doc_date=doc_date)
+    if exclude_id is not None:   # PUT: своя запись — не дубль сама с собой
+        q = q.filter(Declaration.id != exclude_id)
+    if q.first():
+        raise HTTPException(409, "declaration pair already exists")
+
+
+def _dup_producer(db: Session, name: str,
+                  exclude_id: int | None = None) -> None:
+    # дедуп casefold в Python, не lower() БД: локаль сервера не фолдит
+    # кириллицу; справочник мал — полный скан дешёвый
+    low_name = name.casefold()
+    if any(p.name.casefold() == low_name for p in db.query(Producer).all()
+           if p.id != exclude_id):
+        raise HTTPException(409, "производитель с таким наименованием уже есть")
+
+
+def _dup_rule_condition(db: Session, brand: str, ptypes: list[str],
+                        exclude_id: int | None = None) -> None:
+    # дубль условия — как матчит match_rule: бренд и МНОЖЕСТВО видов без учёта
+    # регистра; сравнение в Python (casefold), справочник правил мал
+    low_brand, low_types = brand.casefold(), {t.casefold() for t in ptypes}
+    for r in db.query(Rule).all():
+        if r.id == exclude_id:
+            continue
+        if r.brand.casefold() == low_brand \
+                and {t.casefold() for t in (r.product_types or [])} == low_types:
+            raise HTTPException(409, "правило с таким условием уже существует")
+
+
 def _decl_row(d: Declaration) -> dict:
     return {"id": d.id, "doc_number": d.doc_number, "doc_date": d.doc_date,
             "doc_type": d.doc_type, "title": d.title,
@@ -104,17 +190,8 @@ def declarations_create(
     tok: PlatformToken = Depends(require_scope("nkmt:import")),
     db: Session = Depends(get_db),
 ):
-    # номер и дата обязательны и валидны: пара едет в карточки правилами
-    # и справочником брендов, битая дата уронит DATE_RE валидатора построчно
-    doc_number, doc_date = body.doc_number.strip(), body.doc_date.strip()
-    if not doc_number:
-        raise HTTPException(400, "укажите номер декларации")
-    if not DATE_RE.fullmatch(doc_date):
-        raise HTTPException(400, "дата декларации: ожидается ГГГГ-ММ-ДД")
-    dup = db.query(Declaration).filter_by(
-        doc_number=doc_number, doc_date=doc_date).first()
-    if dup:
-        raise HTTPException(409, "declaration pair already exists")
+    doc_number, doc_date = _norm_declaration(body)
+    _dup_declaration(db, doc_number, doc_date)
     d = Declaration(doc_number=doc_number, doc_date=doc_date,
                     doc_type=body.doc_type, title=body.title)
     db.add(d)
@@ -143,6 +220,44 @@ def declarations_delete(
     audit(db, tok.principal_id, "nkmt.declaration.delete",
           {"id": decl_id, "doc_number": d.doc_number})
     return {"ok": True}
+
+
+@router.put("/declarations/{decl_id}")
+def declarations_update(
+    decl_id: int,
+    body: DeclarationBody,
+    tok: PlatformToken = Depends(require_scope("nkmt:import")),
+    db: Session = Depends(get_db),
+):
+    """Правка ядровых полей (номер/дата/тип/название). Смена пары — ключ
+    rd/list и подстановок: rich-поля ЧЗ сбрасываются и обогащаются заново
+    (best-effort); правка только типа/названия их сохраняет."""
+    d = db.get(Declaration, decl_id)
+    if not d:
+        raise HTTPException(404, "declaration not found")
+    doc_number, doc_date = _norm_declaration(body)
+    _dup_declaration(db, doc_number, doc_date, exclude_id=decl_id)
+    was = {"doc_number": d.doc_number, "doc_date": d.doc_date,
+           "doc_type": d.doc_type, "title": d.title}
+    pair_changed = (doc_number, doc_date) != (d.doc_number, d.doc_date)
+    d.doc_number, d.doc_date = doc_number, doc_date
+    d.doc_type, d.title = body.doc_type, body.title
+    if pair_changed:
+        d.status = d.date_to = d.product_name = d.techregs = \
+            d.applicant = d.manufacturer = ""
+        d.tnved_list = []
+        d.checked_at = None
+    db.commit()
+    db.refresh(d)
+    audit(db, tok.principal_id, "nkmt.declaration.update",
+          {"id": decl_id, "was": was,
+           "now": {"doc_number": d.doc_number, "doc_date": d.doc_date,
+                   "doc_type": d.doc_type, "title": d.title}})
+    if pair_changed:
+        _enrich(db, [d])
+        db.refresh(d)
+    return {"id": d.id, "found": bool(d.status or d.tnved_list),
+            "declaration": _decl_row(d)}
 
 
 @router.post("/declarations/{decl_id}/check")
@@ -213,21 +328,9 @@ def producers_create(
     tok: PlatformToken = Depends(require_scope("nkmt:import")),
     db: Session = Depends(get_db),
 ):
-    name = body.name.strip()
-    if not name:
-        raise HTTPException(400, "укажите наименование производителя")
-    inn = body.inn.strip()
-    if inn and (not inn.isdigit() or len(inn) not in (10, 12)):
-        raise HTTPException(400, "ИНН: 10 или 12 цифр")
-    kind = body.kind if body.kind in ("entrepreneur", "company") else ""
-    # дедуп casefold в Python, не lower() БД: локаль сервера не фолдит кириллицу
-    # (как дубль-чек правил); справочник мал — полный скан дешёвый
-    low_name = name.casefold()
-    dup = next((p for p in db.query(Producer).all()
-                if p.name.casefold() == low_name), None)
-    if dup:
-        raise HTTPException(409, "производитель с таким наименованием уже есть")
-    p = Producer(name=name, inn=inn, kind=kind, note=body.note.strip())
+    name, inn, kind, note = _norm_producer(body)
+    _dup_producer(db, name)
+    p = Producer(name=name, inn=inn, kind=kind, note=note)
     db.add(p)
     db.commit()
     db.refresh(p)
@@ -251,6 +354,30 @@ def producers_delete(
     return {"ok": True}
 
 
+@router.put("/producers/{producer_id}")
+def producers_update(
+    producer_id: int,
+    body: ProducerBody,
+    tok: PlatformToken = Depends(require_scope("nkmt:import")),
+    db: Session = Depends(get_db),
+):
+    """Правка производителя (полная замена). Правила/дефолты ссылаются на него
+    текстом — переименование их не переписывает (only hints updated)."""
+    p = db.get(Producer, producer_id)
+    if not p:
+        raise HTTPException(404, "producer not found")
+    name, inn, kind, note = _norm_producer(body)
+    _dup_producer(db, name, exclude_id=producer_id)
+    was = {"name": p.name, "inn": p.inn, "kind": p.kind, "note": p.note}
+    p.name, p.inn, p.kind, p.note = name, inn, kind, note
+    db.commit()
+    db.refresh(p)
+    audit(db, tok.principal_id, "nkmt.producer.update",
+          {"id": producer_id, "was": was,
+           "now": {"name": name, "inn": inn, "kind": kind, "note": note}})
+    return {"id": p.id}
+
+
 # --- правила РД: бренд × вид товара → декларация/производитель ---
 
 @router.get("/rules")
@@ -267,39 +394,8 @@ def rules_create(
     tok: PlatformToken = Depends(require_scope("nkmt:import")),
     db: Session = Depends(get_db),
 ):
-    brand = body.brand.strip()
-    # виды товара — список: пустые выбрасываем, дедуп по casefold (первое
-    # написание выигрывает), порядок сохраняем — как матчит match_rule
-    seen: dict[str, str] = {}
-    for t in body.product_types:
-        v = t.strip()
-        if v:
-            seen.setdefault(v.casefold(), v)
-    ptypes = list(seen.values())
-    if not brand and not ptypes:
-        raise HTTPException(400, "укажите бренд или вид товара — правило без условия матчит все строки")
-    if db.get(Declaration, body.declaration_id) is None:
-        raise HTTPException(404, "declaration not found")
-    # дополнительные поля: whitelist, пустые значения выкидываются
-    fields = {}
-    for key, value in (body.fields or {}).items():
-        k = str(key).strip()
-        if not k:
-            continue
-        if k not in RULE_FIELDS:
-            raise HTTPException(400, f"поле «{k}» недоступно для подстановки правилом")
-        v = str(value).strip()
-        if v:
-            fields[k] = v
-    # дубль условия — как матчит match_rule: бренд и МНОЖЕСТВО видов без учёта
-    # регистра. Сравнение в Python (casefold), не lower() БД: локаль сервера
-    # не фолдит кириллицу; справочник правил мал — полный скан дешёвый
-    low_brand, low_types = brand.casefold(), {t.casefold() for t in ptypes}
-    dup = next((r for r in db.query(Rule).all()
-                if r.brand.casefold() == low_brand
-                and {t.casefold() for t in (r.product_types or [])} == low_types), None)
-    if dup:
-        raise HTTPException(409, "правило с таким условием уже существует")
+    brand, ptypes, fields = _norm_rule(db, body)
+    _dup_rule_condition(db, brand, ptypes)
     r = Rule(brand=brand, product_types=ptypes,
              declaration_id=body.declaration_id, producer=body.producer.strip(),
              fields=fields)
@@ -327,6 +423,37 @@ def rules_delete(
     audit(db, tok.principal_id, "nkmt.rule.delete",
           {"id": rule_id, "brand": r.brand, "product_types": r.product_types})
     return {"ok": True}
+
+
+@router.put("/rules/{rule_id}")
+def rules_update(
+    rule_id: int,
+    body: RuleBody,
+    tok: PlatformToken = Depends(require_scope("nkmt:import")),
+    db: Session = Depends(get_db),
+):
+    """Правка правила (полная замена: условие, декларация, подстановки).
+    Действует со следующего резолва; созданные карточки не пересобираются."""
+    r = db.get(Rule, rule_id)
+    if not r:
+        raise HTTPException(404, "rule not found")
+    brand, ptypes, fields = _norm_rule(db, body)
+    _dup_rule_condition(db, brand, ptypes, exclude_id=rule_id)
+    was = {"brand": r.brand, "product_types": r.product_types or [],
+           "declaration_id": r.declaration_id, "producer": r.producer,
+           "fields": r.fields or {}}
+    r.brand, r.product_types = brand, ptypes
+    r.declaration_id = body.declaration_id
+    r.producer = body.producer.strip()
+    r.fields = fields
+    db.commit()
+    db.refresh(r)
+    audit(db, tok.principal_id, "nkmt.rule.update",
+          {"id": rule_id, "was": was,
+           "now": {"brand": brand, "product_types": ptypes,
+                   "declaration_id": body.declaration_id, "producer": r.producer,
+                   "fields": fields}})
+    return {"id": r.id}
 
 
 @router.post("/resolve")
