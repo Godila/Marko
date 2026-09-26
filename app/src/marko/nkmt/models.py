@@ -1,4 +1,4 @@
-from sqlalchemy import CheckConstraint, DateTime, ForeignKey, Integer, String, UniqueConstraint, func, text
+from sqlalchemy import Boolean, CheckConstraint, DateTime, ForeignKey, Integer, String, UniqueConstraint, func, text
 from sqlalchemy.dialects.postgresql import JSON, JSONB
 from sqlalchemy.orm import Mapped, mapped_column
 from marko.db import Base
@@ -29,8 +29,28 @@ class Card(Base):
     attributes: Mapped[dict] = mapped_column(JSON, default=dict)
     status: Mapped[str] = mapped_column(String(16), default="ok")  # ok|fed|moderation|notsigned|signing|published|error|errors|error_sign
     error_text: Mapped[str] = mapped_column(String, default="")
+    is_set: Mapped[bool] = mapped_column(Boolean, default=False, server_default=text("false"))
     created_at = mapped_column(DateTime, server_default=func.now())
     updated_at = mapped_column(DateTime, server_default=func.now(), onupdate=func.now())
+
+
+class SetItem(Base):
+    """Компонент набора (у Cards с is_set=true).
+
+    Ссылка на компонент — артикул нашей карточки (article_src; резолвится в
+    gtin на подаче — компонент может быть ещё без GTIN) и/или внешний GTIN.
+    Дубли компонентов проверяются в сервисе: UNIQUE-констрейнт не подходит
+    из-за пустых gtin у ссылок по артикулу.
+    """
+    __tablename__ = "set_items"
+    __table_args__ = {"schema": "nkmt"}
+    id: Mapped[int] = mapped_column(primary_key=True)
+    card_id: Mapped[int] = mapped_column(
+        ForeignKey("nkmt.cards.id", ondelete="CASCADE"))
+    gtin: Mapped[str] = mapped_column(String(32), default="")
+    article_src: Mapped[str] = mapped_column(String(64), default="")
+    quantity: Mapped[int] = mapped_column(Integer)
+    created_at = mapped_column(DateTime, server_default=func.now())
 
 
 class Declaration(Base):

@@ -8,6 +8,7 @@ DATE_RE валидатора). apply_defaults подставляет платф�
 пустые ключи (techreg — всегда) и возвращает новые dict'ы, не мутируя вход.
 """
 import io
+import re
 from dataclasses import dataclass
 from datetime import date, datetime
 
@@ -86,20 +87,6 @@ def _cell(value) -> str:
     return "" if value is None else str(value).strip()
 
 
-def parse_xlsx(data: bytes) -> list[dict]:
-    """bytes xlsx → список строк-словарей по COLUMNS; пустые строки пропущены."""
-    ws = openpyxl.load_workbook(io.BytesIO(data)).worksheets[0]
-    rows_iter = ws.iter_rows(values_only=True)
-    header = next(rows_iter, None) or ()
-    keys = [COLUMNS.get(_cell(h).casefold()) for h in header]
-    rows = []
-    for values in rows_iter:
-        row = {k: _cell(v) for k, v in zip(keys, values) if k}
-        if any(row.values()):
-            rows.append(row)
-    return rows
-
-
 def apply_defaults(rows: list[dict], defaults: dict) -> list[dict]:
     """Пустые/отсутствующие DEFAULTED_KEYS — из defaults; techreg — всегда.
 
@@ -114,3 +101,69 @@ def apply_defaults(rows: list[dict], defaults: dict) -> list[dict]:
         r["techreg"] = defaults.get("techreg", "")  # колонки в шаблоне нет
         out.append(r)
     return out
+
+
+# --- шаблон наборов: отдельная выгрузка, лёгкая (у карточки набора нет вида/
+# размера/цвета/декларации — состав набора лёгпрома = 6 атрибутов, live 22.09) ---
+SPEC_SETS: list[ColumnSpec] = [
+    ColumnSpec("Артикул", "article", required=True,
+               hint="ключ идемпотентности: повторный импорт обновит набор, не дублируя"),
+    ColumnSpec("Наименование", "name",
+               hint="пусто — соберём из имён компонентов «Набор: X + Y»"),
+    ColumnSpec("Бренд", "brand", hint="пусто — дефолтный бренд консоли"),
+    ColumnSpec("ТН ВЭД набора", "tnved",
+               hint="10 цифр; пусто — возьмём ТН ВЭД первого компонента"),
+    ColumnSpec("GTIN набора", "gtin",
+               hint="пустой — сгенерируется при подаче фида"),
+    ColumnSpec("Компоненты", "components",
+               hint="через «;»: артикул или GTIN с количеством после ×/x "
+                    "(умолчание 1), например «AB-1001; 04630562322355x2». "
+                    "Либо эта колонка, либо «Кол-во предметов»"),
+    ColumnSpec("Кол-во предметов", "count",
+               hint="для набора без привязки GTIN (только количество; live: "
+                    "лёгпром допускает набор-«количество» без set_gtins)"),
+    ColumnSpec("Состав (немаркируемые)", "composition",
+               hint="текстом, что ещё входит в набор без кодов — уйдёт в атрибут «Состав набора»"),
+]
+SETS_COLUMNS = {s.title.casefold(): s.key for s in SPEC_SETS if s.title}
+
+
+def parse_xlsx(data: bytes, columns: dict[str, str] | None = None) -> list[dict]:
+    """bytes xlsx → список строк-словарей по COLUMNS (или SETS_COLUMNS);
+    пустые строки пропущены."""
+    cols = columns if columns is not None else COLUMNS
+    ws = openpyxl.load_workbook(io.BytesIO(data)).worksheets[0]
+    rows_iter = ws.iter_rows(values_only=True)
+    header = next(rows_iter, None) or ()
+    keys = [cols.get(_cell(h).casefold()) for h in header]
+    rows = []
+    for values in rows_iter:
+        row = {k: _cell(v) for k, v in zip(keys, values) if k}
+        if any(row.values()):
+            rows.append(row)
+    return rows
+
+
+_QTY_RE = re.compile(r"^(.+?)[×xX*]([0-9]+)$")
+
+
+def parse_components(cell: str, known_article=None) -> list[dict]:
+    """Ячейка «Компоненты» → [{ref, quantity}]: «AB-1; 0463...x2».
+
+    Разделитель «;», количество — хвост «×/x/X/*N» у элемента (умолчание 1).
+    known_article(ref) → bool (артикул есть в нашем каталоге): известный
+    артикул целиком не режется количеством — «HX2» остаётся «HX2», а не
+    «H×2». Резолв ссылок (наша карточка или внешний GTIN) — в sets.build_set_row.
+    """
+    items: list[dict] = []
+    for chunk in str(cell or "").split(";"):
+        ref = chunk.strip()
+        if not ref:
+            continue
+        quantity = 1
+        if not (known_article and known_article(ref)):
+            m = _QTY_RE.fullmatch(ref)
+            if m:
+                ref, quantity = m.group(1).strip(), int(m.group(2))
+        items.append({"ref": ref, "quantity": quantity})
+    return items

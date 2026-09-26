@@ -12,7 +12,7 @@ import openpyxl
 from openpyxl.styles import Alignment, Font
 from openpyxl.utils import get_column_letter
 
-from marko.nkmt.parse import SPEC
+from marko.nkmt.parse import SPEC, SPEC_SETS
 
 # строки-примеры по ключам SPEC учат валидным значениям живых справочников ЧЗ:
 # пол — литералы («ЖЕНСКИЙ», «УНИВЕРСАЛЬНЫЙ (УНИСЕКС)»), у шапок размер — из
@@ -47,30 +47,64 @@ _D_COL_CHARS = INFO_WIDTHS["D"] - 4                  # символов в ст�
 def build_template() -> bytes:
     """Лист «Выгрузка» (шапка + примеры) и лист «Инструкция» (колонка,
     обязательность, подстановка, описание + правила игры)."""
+    return _build_book(SPEC, "Выгрузка", EXAMPLES, NOTES)
+
+
+# примеры наборов: артикулы компонентов — ссылки на карточки из каталога,
+# количество после «x» (умолчание 1); вторая строка — набор без привязки
+EXAMPLES_SETS = [
+    {"article": "SET-0001", "name": "", "tnved": "6505009000",
+     "components": "GH-2001; SHARF-01x2", "composition": "подарочная упаковка"},
+    {"article": "SET-0002", "name": "Набор из 2 предметов", "tnved": "6505009000",
+     "count": 2},
+]
+NOTES_SETS = [
+    ("Компоненты", "Артикул нашей карточки (приоритет; работает до генерации её "
+                   "GTIN) или внешний GTIN 13–14 цифр, количество после ×/x, "
+                   "умолчание 1. Разделитель — точка с запятой."),
+    ("Набор без привязки", "Пустая колонка «Компоненты» + «Кол-во предметов» — "
+                           "лёгпром допускает набор-«количество»: в КИН можно "
+                           "складывать любые товары в этом количестве."),
+    ("Ещё не опубликованные", "Компонент-черновик — предупреждение в предпросмотре: "
+                              "набор сохранится черновиком, подача фида подождёт "
+                              "публикации компонента."),
+    ("Анти-дубли", "Повтор строки с тем же артикулом обновляет набор (не дублирует); "
+                   "точный дубль состава другим артикулом — ошибка."),
+    ("После подачи", "Состав поданного набора не меняется (КИН должен "
+                     "соответствовать карточке) — соберите аналог."),
+]
+
+
+def build_set_template() -> bytes:
+    """Шаблон импорта наборов: листы «Наборы» и «Инструкция»."""
+    return _build_book(SPEC_SETS, "Наборы", EXAMPLES_SETS, NOTES_SETS)
+
+
+def _build_book(spec: list, sheet: str, examples: list[dict], notes: list) -> bytes:
     wb = openpyxl.Workbook()
     head_font = Font(bold=True)
 
     ws = wb.active
-    ws.title = "Выгрузка"
-    cols = [s for s in SPEC if s.title]
+    ws.title = sheet
+    cols = [s for s in spec if s.title]
     ws.append([s.title for s in cols])
-    for ex in EXAMPLES:
+    for ex in examples:
         ws.append([ex.get(s.key, "") for s in cols])
     for cell in ws[1]:
         cell.font = head_font
         cell.alignment = Alignment(vertical="center")
     for i, s in enumerate(cols, start=1):
         longest = max([len(s.title)]
-                      + [len(str(ex.get(s.key, ""))) for ex in EXAMPLES])
+                      + [len(str(ex.get(s.key, ""))) for ex in examples])
         ws.column_dimensions[get_column_letter(i)].width = min(34, max(12, longest * 0.9 + 4))
     ws.freeze_panes = "A2"
 
     info = wb.create_sheet("Инструкция")
     info.append(["Колонка", "Обязательная", "Подставляется", "Описание"])
-    for s in SPEC:
+    for s in spec:
         info.append([s.title, "да" if s.required else "нет",
                      "да" if s.defaultable else "—", s.hint or "—"])
-    for label, text in NOTES:
+    for label, text in notes:
         info.append([label, "", "", text])
     for cell in info[1]:
         cell.font = head_font

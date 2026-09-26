@@ -7,7 +7,7 @@ from marko.nkmt.dicts import (AmbiguousCategory, UnknownBrand, attrs_model,
 class FakeNk:
     def __init__(self, attrs=None, cats=None, brands=None):
         self.attrs, self.cats, self.brands, self.calls = attrs or [], cats or [], brands or [], 0
-    def attributes(self, token, tnved, attr_type=None):
+    def attributes(self, token, tnved, attr_type=None, is_set=False):
         self.calls += 1
         return [{"attr_id": 12}] if attr_type == "m" else [{"attr_id": 23557}]
     def categories(self, token, tnved):

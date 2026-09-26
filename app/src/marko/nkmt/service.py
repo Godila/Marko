@@ -17,7 +17,7 @@ import json
 from marko.connector_mt.manager import _sign_via_gateway
 from marko.nkmt import resolve as _resolve
 from marko.nkmt.client import NkHttpError
-from marko.nkmt.models import Batch, Card, Declaration
+from marko.nkmt.models import Batch, Card, Declaration, SetItem
 from marko.nkmt.parse import PROV_KEYS
 from marko.nkmt.validate import GTIN_RE
 
@@ -50,6 +50,16 @@ def plan_batch(db, validated: list[dict]) -> list[dict]:
             continue
         seen_article.add(art)
         existing = by_article.get(art)
+        if existing is not None and existing.is_set and not v.get("is_set"):
+            # обычная карточка с артикулом набора — не по адресу: превью и
+            # импорт едины (без записи, stats.error), как внутрифайловые дубли.
+            # Строка набора (is_set) сюда не попадает — её update-семантику
+            # решает sets-слой (идемпотентность по артикулу)
+            p.update(dup=True, gtin_final="", gtin_status="",
+                     error=(v["error"] + "; " if v["error"] else "")
+                     + "артикул занят набором")
+            planned.append(p)
+            continue
         error = v["error"]
         gtin, gstatus = "", ""
         if GTIN_RE.fullmatch(v["gtin"]):
@@ -83,13 +93,25 @@ def _persist_batch(db, filename: str, planned: list[dict]) -> int:
         if card is None:
             card = Card(article=p["article"], gtin=p["gtin_final"], batch_id=batch.id)
             db.add(card)
+        elif card.is_set != bool(p.get("is_set")):
+            # набор и товар не могут делить артикул: строка не по адресу —
+            # не перезаписываем чужую карточку (числим ошибкой, как дубли)
+            stats["error"] += 1
+            continue
         elif p["gtin_final"] and not card.gtin:
             card.gtin = p["gtin_final"]  # дозаполняем только пустой; непустой сохраняем
         card.batch_id = batch.id
         card.tnved, card.name, card.cat_id = p["tnved"], p["name"], p["cat_id"]
         card.attributes = p["attributes"]
+        card.is_set = bool(p.get("is_set"))
         card.status = "ok" if p["error"] == "" else "error"
         card.error_text = p["error"]
+        if card.is_set:  # компоненты набора заменяются целиком (правка = замена)
+            db.query(SetItem).filter_by(card_id=card.id).delete()
+            for it in p.get("components") or []:
+                db.add(SetItem(card_id=card.id, gtin=it.get("gtin", ""),
+                               article_src=it.get("article_src", ""),
+                               quantity=it["quantity"]))
         stats["ok" if card.status == "ok" else "error"] += 1
     batch.status = "new" if stats["error"] == 0 else "partial"
     batch.stats = stats
@@ -160,7 +182,36 @@ def preview_batch(db, data: bytes, client, token) -> dict:
     return {"rows": rows, "stats": stats}
 
 
-def _feed_entry(card: Card) -> dict:
+def _set_entry(card: Card, db) -> dict:
+    """Карточка набора → entry /nk/feed: is_set + set_gtins[]. GTIN наших
+    компонентов резолвится из карточки по article_src НА МОМЕНТ подачи —
+    компонент мог получить GTIN после сборки набора. Непривязанный набор
+    (только количество) уходит без set_gtins — live 22.09: лёгпром это
+    допускает, 23821 задаёт состав количеством."""
+    attrs = card.attributes or {}
+    set_gtins = []
+    for it in db.query(SetItem).filter_by(card_id=card.id).order_by(SetItem.id).all():
+        gtin = it.gtin
+        if it.article_src:
+            src = db.query(Card).filter_by(article=it.article_src).first()
+            if src is not None and src.gtin:
+                gtin = src.gtin
+        if gtin:
+            set_gtins.append({"gtin": gtin, "quantity": it.quantity})
+    good_attrs = [{"attr_id": int(k), "attr_value": v}
+                  for k, v in attrs.items()
+                  if k != "2504" and v not in (None, "", [])]
+    entry = {"gtin": card.gtin, "good_name": card.name, "tnved": card.tnved,
+             "brand": attrs.get("2504", ""), "moderation": 1, "is_set": True,
+             "good_attrs": good_attrs}
+    if card.cat_id:
+        entry["categories"] = [int(card.cat_id)]
+    if set_gtins:
+        entry["set_gtins"] = set_gtins
+    return entry
+
+
+def _feed_entry(card: Card, db=None) -> dict:
     """Карточка → entry /nk/feed.
 
     moderation — ПОЛЕ ENTRY (дамп trueapi: таблица «Параметры тела запроса»
@@ -173,6 +224,8 @@ def _feed_entry(card: Card) -> dict:
     вовсе — live: «attr_id можно использовать только с attr_value» (producer
     по умолчанию "" не должен попадать в фид как {"attr_id": 2503, ""}).
     """
+    if card.is_set:
+        return _set_entry(card, db)
     attrs = card.attributes or {}
     good_attrs = []
     for k, v in attrs.items():
@@ -220,6 +273,16 @@ def feed_batch(db, batch_id: int, client, token) -> dict:
     if not cards:
         raise ValueError("batch has no ok-cards to feed")
 
+    set_cards = [c for c in cards if c.is_set]
+    if set_cards:  # гард наборов ДО генерации GTIN: компоненты должны быть
+        # опубликованы (наши) / существовать в НК (внешние) — иначе вся подача
+        # блокируется с перечнем (оператор чинит и подаёт снова)
+        from marko.nkmt.sets import sets_feed_guard
+        blocked = sets_feed_guard(db, set_cards, client, token)
+        if blocked:
+            raise ValueError("подача наборов заблокирована: " + "; ".join(
+                f"{c.article} — {reason}" for c, reason in blocked))
+
     stats = dict(batch.stats or {})
     need = [c for c in cards if not c.gtin]
     if need:
@@ -239,7 +302,7 @@ def feed_batch(db, batch_id: int, client, token) -> dict:
                     f"generate-gtins: draft gtin {draft['gtin']!r} is not 14 digits")
             card.gtin = gtin
 
-    entries = [_feed_entry(c) for c in cards]
+    entries = [_feed_entry(c, db) for c in cards]
     feed_ids = []
     for i in range(0, len(entries), FEED_CHUNK):
         feed_ids.append(client.feed(token, entries[i:i + FEED_CHUNK])["feed_id"])

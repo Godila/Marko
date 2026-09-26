@@ -70,14 +70,16 @@ def _kv_put(db: Session, key: str, value: dict) -> None:
     db.commit()
 
 
-def attrs_model(db: Session, client, token: str, tnved: str) -> dict:
-    """{"m": [...], "r": [...]} по ТН ВЭД; kv nk_attrs:{tnved}, просрочка > TTL."""
-    key = f"nk_attrs:{tnved}"
+def attrs_model(db: Session, client, token: str, tnved: str,
+                is_set: bool = False) -> dict:
+    """{"m": [...], "r": [...]} по ТН ВЭД; kv nk_attrs:{tnved} (наборы —
+    nk_attrs_set:{tnved}: атрибутный состав другой, live 22.09), TTL."""
+    key = f"nk_attrs_set:{tnved}" if is_set else f"nk_attrs:{tnved}"
     kv = db.get(PlatformKV, key)
     if kv and time.time() - kv.value.get("fetched_at", 0) <= TTL:
         return {"m": kv.value.get("m", []), "r": kv.value.get("r", [])}
-    m = client.attributes(token, tnved, "m")
-    r = client.attributes(token, tnved, "r")
+    m = client.attributes(token, tnved, "m", is_set=is_set)
+    r = client.attributes(token, tnved, "r", is_set=is_set)
     _kv_put(db, key, {"fetched_at": time.time(), "m": m, "r": r})
     return {"m": m, "r": r}
 
@@ -172,6 +174,10 @@ def agent_context(db: Session) -> dict:
             "resolve_check": "POST /v1/nkmt/resolve {brand, product_type}",
             "hints": "GET /v1/nkmt/dicts/hints",
             "declarations": "GET /v1/nkmt/declarations",
+            "sets": "GET /v1/nkmt/sets; POST /v1/nkmt/sets {components:[{ref,"
+                    "quantity}], ...} — набор = карточка is_set со своим GTIN, "
+                    "собирается из существующих карточек (ref: артикул или GTIN);"
+                    "импорт: GET /v1/nkmt/sets/import/template → POST /v1/nkmt/sets/import",
             "declarations_update": "PUT /v1/nkmt/declarations/{id} {doc_number, doc_date, doc_type, title}",
             "producers_update": "PUT /v1/nkmt/producers/{id} {name, inn, kind, note}",
             "rules_update": "PUT /v1/nkmt/rules/{id} {brand, product_types, declaration_id, producer, fields}",

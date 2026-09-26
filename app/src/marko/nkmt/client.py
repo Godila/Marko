@@ -52,8 +52,14 @@ class NkClient:
 
     # --- справочники НК ---
 
-    def attributes(self, token: str, tnved: str, attr_type: str | None = None) -> list[dict]:
+    def attributes(self, token: str, tnved: str, attr_type: str | None = None,
+                   is_set: bool = False) -> list[dict]:
+        # is_set=true — атрибутный состав карточки НАБОРА (live 22.09: лёгпром
+        # даёт отдельный лёгкий набор атрибутов: 2478/2504/3959/23768/16271/23821);
+        # параметр не шлём вовсе у обычных карточек — поведение прежнее
         params = {"tnved": tnved}
+        if is_set:
+            params["is_set"] = "true"
         if attr_type is not None:
             params["attr_type"] = attr_type
         return self._get("/nk/attributes", token, params)["result"]
@@ -66,6 +72,15 @@ class NkClient:
 
     def generate_gtins(self, token: str, quantity: int) -> dict:
         return self._get("/nk/generate-gtins", token, {"quantity": quantity})["result"]
+
+    def product(self, token: str, gtin: str) -> dict:
+        """Карточка по GTIN из НК (GET /nk/product, live 22.09): good_status,
+        is_set/is_kit, set_gtins, good_name, категории — чтение наборов и
+        проверка внешних компонентов набора."""
+        res = self._get("/nk/product", token, {"gtin": gtin})["result"]
+        if isinstance(res, list):  # живой ответ: result — список из одной карточки
+            res = res[0] if res else {}
+        return res or {}
 
     # --- реестр разрешительных документов (v4 true-api/rd/list) ---
 

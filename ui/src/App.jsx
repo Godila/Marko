@@ -771,6 +771,20 @@ function ImportPreview({ ctx, file, onDone }) {
 }
 
 function Catalog({ ctx }) {
+  const [cTab, setCTab] = useState('cards')
+  const tabs = [['cards', 'Карточки'], ['sets', 'Наборы']]
+  return <>
+    <Head title="Каталог НК" sub="Карточки и наборы Национального каталога: импорт или конструктор → фид → модерация → подпись УКЭП → публикация."
+      tools={<Sync tick={ctx.tick} />} />
+    <div className="chiprow" style={{ marginBottom: 14 }}>
+      {tabs.map(([k, l]) => <button key={k} className="chip" aria-pressed={cTab === k}
+        onClick={() => setCTab(k)}>{l}</button>)}
+    </div>
+    {cTab === 'sets' ? <SetsTab ctx={ctx} /> : <CatalogCards ctx={ctx} />}
+  </>
+}
+
+function CatalogCards({ ctx }) {
   const { notify, confirm, bump, openDrawer } = ctx
   const [batches, setBatches] = useState(null)
   const [stage, setStage] = useState('')
@@ -806,8 +820,6 @@ function Catalog({ ctx }) {
     setFile(f); showPreview(f) }
   const shown = (batches || []).filter((b) => stage === '' || (stageMatch?.match || [stage]).includes(b.status))
   return <>
-    <Head title="Каталог НК" sub="Карточки Национального каталога: импорт выгрузки 1С → фид → модерация → подпись УКЭП → публикация → отчёт для 1С."
-      tools={<Sync tick={ctx.tick} />} />
     <div className="pipeline" role="group" aria-label="Конвейер батчей">
       {STAGES.map((st) => { const n = st.key === '' ? (batches || []).length
         : (batches || []).filter((b) => (st.match || [st.key]).includes(b.status)).length
@@ -880,6 +892,399 @@ function Catalog({ ctx }) {
       </div>
     </div>
   </>
+}
+
+/* ================= наборы ================= */
+// колонки грида наборов: все ширины заданы (DESIGN.md §7), строка кликабельна → drawer
+const SETS_COLUMNS = { article: 108, gtin: 140, name: 300, comps: 440, count: 76, status: 104 }
+
+const setChips = (s) => s.mode === 'unbound'
+  ? <span className="bdg blue" title="Состав задаётся количеством: в КИН можно складывать любые товары">без привязки</span>
+  : <>{s.components.slice(0, 2).map((c, i) => <span key={i} className="bdg grey"
+      style={{ marginRight: 4 }} title={`${c.name || c.gtin} · ${c.article || 'внешний GTIN'}`}>
+      {c.name || c.gtin} ×{c.quantity}</span>)}
+    {s.components.length > 2 && <span className="bdg grey"
+      title={s.components.slice(2).map((c) => `${c.name || c.gtin} ×${c.quantity}`).join(', ')}>
+      +{s.components.length - 2}</span>}</>
+
+function SetsTab({ ctx }) {
+  const { notify, openWide, bump } = ctx
+  const [rows, setRows] = useState(null)
+  const [file, setFile] = useState(null)
+  const [dragOn, setDragOn] = useState(false)
+  const fileRef = useRef(null)
+  const load = useCallback(() => { api('/v1/nkmt/sets')
+    .then(setRows).catch((e) => { setRows([]); notify('Не удалось загрузить наборы', e.message, 'bad') }) },
+    [ctx.tick]) // eslint-disable-line react-hooks/exhaustive-deps
+  useEffect(load, [load])
+  const builder = (initial, editId) => ctx.openWide(
+    editId ? `Набор · ${initial.article}` : 'Собрать набор',
+    <SetBuilder ctx={ctx} initial={initial} editId={editId}
+      onDone={() => { load(); bump() }} />)
+  const showPreview = (f) => { if (!f) return
+    ctx.openWide(`Предпросмотр наборов · ${f.name}`,
+      <SetsImportPreview ctx={ctx} file={f}
+        onDone={() => { setFile(null); if (fileRef.current) fileRef.current.value = ''; load(); bump() }} />) }
+  const pickFile = (f) => { if (!f) return
+    if (!/\.xlsx$/i.test(f.name)) return notify('Нужен файл .xlsx', f.name, 'warn')
+    setFile(f); showPreview(f) }
+  return <>
+    <div className="card">
+      <div className="card-h"><h2>Импорт наборов</h2>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+          <span className="hint">.xlsx: компоненты — артикул или GTIN с количеством</span>
+          <button className="btn sm" onClick={() => dl('/v1/nkmt/sets/import/template', 'nkmt-sets-template.xlsx')
+            .catch((e) => notify('Шаблон не скачался', e.message, 'bad'))}>Шаблон наборов</button>
+          <button className="btn sm pri" onClick={() => builder(null)}>Собрать набор…</button>
+        </div></div>
+      <div className="card-b">
+        <label className={`drop${dragOn ? ' on' : ''}`} style={{ display: 'block' }}
+          onDragOver={(e) => { e.preventDefault(); setDragOn(true) }}
+          onDragLeave={(e) => { if (!e.currentTarget.contains(e.relatedTarget)) setDragOn(false) }}
+          onDrop={(e) => { e.preventDefault(); setDragOn(false); pickFile(e.dataTransfer.files[0]) }}>
+          <input ref={fileRef} type="file" accept=".xlsx" style={{ display: 'none' }}
+            onChange={(e) => { const f = e.target.files[0] || null
+              e.target.value = ''
+              pickFile(f) }} />
+          <b>Выберите или перетащите файл наборов .xlsx</b>
+          <div style={{ fontSize: 12.5, marginTop: 2 }}>предпросмотр покажет резолв компонентов,
+            дубли и ошибки — до записи в базу. Повтор строки с тем же артикулом обновит набор.</div>
+          {file && <div className="file">{file.name}</div>}
+        </label>
+      </div>
+    </div>
+    <div className="card">
+      <div className="card-h"><h2>Наборы</h2>
+        <span className="hint">набор = свой GTIN, один код на упаковку; состав — из опубликованных карточек</span></div>
+      <div className="twrap"><table className="t fit">
+        <colgroup>{Object.values(SETS_COLUMNS).map((w, i) => <col key={i} style={{ width: w }} />)}</colgroup>
+        <thead><tr><th>Артикул</th><th>GTIN набора</th><th>Название</th><th>Состав</th>
+          <th>Предм.</th><th>Статус</th></tr></thead>
+        <tbody>{(rows || []).map((s) => <tr key={s.id} style={{ cursor: 'pointer' }}
+          onClick={() => ctx.openDrawer(`Набор · ${s.article}`,
+            <SetCard s={s} ctx={ctx} onDone={() => { load(); bump() }} />)}>
+          <td className="ell mono" title={s.article}>{s.article}</td>
+          <td className="ell mono" title={s.gtin || 'сгенерируется при подаче'}>{s.gtin || '—'}</td>
+          <td className="ell" title={s.name}>{s.name}</td>
+          <td>{setChips(s)}</td>
+          <td className="num">{s.count}</td>
+          <td><Badge dict={CARD_STATUS} v={s.status} /></td></tr>)}
+          {rows && !rows.length && <tr><td colSpan={6}><div className="empty"><b>Наборов пока нет</b>Соберите первый из опубликованных карточек — «Собрать набор…» — или импортируйте шаблон.</div></td></tr>}
+          {!rows && <tr><td colSpan={6}><div className="empty"><b>Загрузка…</b></div></td></tr>}
+        </tbody></table></div>
+    </div>
+  </>
+}
+
+/* карточка набора в drawer: состав, атрибуты и действия по состоянию конвейера */
+function SetCard({ s, ctx, onDone }) {
+  const { notify, confirm, closeDrawer, openWide } = ctx
+  const [st, setSt] = useState(s)
+  const [chk, setChk] = useState(null)
+  const [busy, setBusy] = useState(false)
+  const reload = () => api('/v1/nkmt/sets')
+    .then((rows) => setSt(rows.find((r) => r.id === s.id) || st)).catch(() => {})
+  const post = (path, okMsg, ask) => () => { if (busy) return
+    const run = async () => { setBusy(true)
+      try { const r = await api(path, { method: 'POST' })
+        notify(okMsg(r), ''); await reload(); onDone()
+      } catch (e) { notify('Не удалось', e.message, 'bad') } finally { setBusy(false) } }
+    if (ask) confirm(ask[0], ask[1], path, ask[2], run)
+    else run() }
+  const before = ['ok', 'error'].includes(st.status)   // до подачи: правка/удаление доступны
+  const check = async () => { if (busy) return
+    setBusy(true)
+    try { const r = await api(`/v1/nkmt/sets/${st.id}/check`, { method: 'POST' })
+      setChk(r); onDone()
+      notify(r.found ? `ЧЗ: ${r.good_status || 'статус не указан'}` : 'ЧЗ не знает этот GTIN',
+        r.found ? `Карточка «${r.name || st.name}»${r.is_set ? ', признак набора на месте' : ', БЕЗ признака набора — сверьтесь'}` : 'Подождите модерацию или проверьте GTIN.',
+        r.found && r.is_set ? '' : 'warn')
+    } catch (e) { notify('Проверка не удалась', e.message, 'bad') } finally { setBusy(false) } }
+  const edit = () => openWide(`Набор · ${st.article}`,
+    <SetBuilder ctx={ctx} editId={st.id} initial={st} onDone={() => { reload(); onDone() }} />)
+  const analog = () => openWide('Собрать набор (аналог)',
+    <SetBuilder ctx={ctx} initial={{ ...st, article: '', gtin: '' }} onDone={onDone} />)
+  const del = () => confirm(`Удалить набор ${st.article}?`,
+    'Черновик исчезнет вместе с компонентами; до подачи фида — никаких следов в ЧЗ.',
+    `DELETE /v1/nkmt/sets/${st.id}`, 'Удалить', async () => {
+      try { await api(`/v1/nkmt/sets/${st.id}`, { method: 'DELETE' })
+        closeDrawer(); onDone(); notify('Набор удалён', '')
+      } catch (e) { notify('Не удалено', e.message, 'bad') } })
+  return <div>
+    <div style={{ marginBottom: 12, display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' }}>
+      <b style={{ fontSize: 13 }}>{st.name}</b>
+      <Badge dict={CARD_STATUS} v={st.status} />
+      <span className={`bdg ${st.mode === 'unbound' ? 'blue' : 'grey'}`}>
+        {st.mode === 'unbound' ? 'без привязки' : 'привязанный'}</span>
+    </div>
+    {st.error_text && <div className="note" style={{ marginBottom: 10 }}>{st.error_text}</div>}
+    <div className="row" style={{ gap: 8, marginBottom: 14, flexWrap: 'wrap' }}>
+      {before && <button className="btn pri" disabled={busy}
+        onClick={post(`/v1/nkmt/sets/${st.id}/feed`, (r) => `Фид отправлен (id ${r.feed_id}) — дальше автоматика`,
+          ['Подать фид набора в НК?', 'Карточка набора уйдёт в НК на модерацию; компоненты должны быть опубликованы — иначе подача сообщит, чего ждать.', `POST /v1/nkmt/sets/${st.id}/feed`, 'Подать фид'])}>Подать фид</button>}
+      {['fed', 'moderation'].includes(st.status) && <button className="btn" disabled={busy}
+        onClick={post(`/v1/nkmt/batches/${st.batch_id}/refresh`, () => 'Модерация опрошена')}>Обновить</button>}
+      {['notsigned', 'signing', 'error_sign'].includes(st.status) && <button className="btn pri" disabled={busy}
+        onClick={post(`/v1/nkmt/batches/${st.batch_id}/sign`, (r) => `Подписано ${r.signed}, ошибок ${r.failed}`,
+          ['Подписать карточку набора?', 'Подписание боевым УКЭП через signer-агент; после подписи набор опубликован.', `POST /v1/nkmt/batches/${st.batch_id}/sign`, 'Подписать'])}>Подписать</button>}
+      {st.status === 'published' && <button className="btn pri" disabled={busy} onClick={check}>Проверить в ЧЗ</button>}
+      {before && <button className="btn" onClick={edit}>Изменить</button>}
+      {before && <button className="btn" onClick={del}>Удалить</button>}
+      {!before && <button className="btn" onClick={analog}>Собрать аналог</button>}
+    </div>
+    <b style={{ fontSize: 12.5 }}>Карточка набора</b>
+    <div className="twrap" style={{ margin: '6px 0 10px' }}><table className="t small"><tbody>
+      <tr><td className="faint" style={{ width: '40%' }}>Артикул</td><td className="mono">{st.article}</td></tr>
+      <tr><td className="faint">GTIN набора</td><td className="mono">{st.gtin || 'сгенерируется при подаче фида'}</td></tr>
+      <tr><td className="faint">ТН ВЭД</td><td className="mono">{st.tnved}</td></tr>
+      <tr><td className="faint">Бренд</td><td>{st.brand}</td></tr>
+      <tr><td className="faint">Предметов в наборе</td><td className="num">{st.count}</td></tr>
+      {st.composition && <tr><td className="faint">Немаркируемые</td><td>{st.composition}</td></tr>}
+    </tbody></table></div>
+    <b style={{ fontSize: 12.5 }}>Состав</b>
+    <div className="twrap" style={{ margin: '6px 0 10px' }}><table className="t small"><tbody>
+      {(st.components || []).map((c, i) => <tr key={i}>
+        <td className="faint" style={{ width: '40%' }}>{c.name || c.gtin}</td>
+        <td>×{c.quantity}{c.article ? <span className="faint mono" style={{ fontSize: 11 }}> · {c.article}</span>
+          : <span className="bdg grey" style={{ marginLeft: 6 }}>внешний</span>}
+          {c.kind === 'ours' && <span style={{ marginLeft: 6 }}><Badge dict={CARD_STATUS} v={c.status} /></span>}
+          {c.kind === 'lost' && <span className="bdg red" style={{ marginLeft: 6 }}>карточка исчезла</span>}</td>
+      </tr>)}
+      {st.mode === 'unbound' && <tr><td className="faint">Состав</td>
+        <td>не привязан: {st.count} предмет(ов) любых GTIN при сборке КИН</td></tr>}
+    </tbody></table></div>
+    {chk && <div className="note" style={{ marginBottom: 10 }}>ЧЗ: {chk.good_status || '—'} ·
+      состав в ЧЗ: {(chk.set_gtins || []).map((g) => `${g.gtin}×${g.quantity}`).join(', ') || '—'}</div>}
+    <div className="note">GTIN набора — штрихкод карточки WB: каждый набор-листинг получает
+      свой код. Состав поданного набора не меняется — для вариаций соберите аналог.</div>
+  </div>
+}
+
+/* конструктор набора: 3 шага — состав → карточка → проверка (DESIGN.md §7) */
+function SetBuilder({ ctx, initial, editId, onDone }) {
+  const { notify, closeWide } = ctx
+  const [step, setStep] = useState(1)
+  const [comps, setComps] = useState((initial?.components || []).filter((c) => c.kind !== 'lost').map((c) => ({
+    article: c.article || '', gtin: c.gtin || '', name: c.name || '', quantity: c.quantity || 1 })))
+  const [f, setF] = useState({ name: initial?.name || '', brand: initial?.brand || '',
+    tnved: initial?.tnved || '', composition: initial?.composition || '',
+    unbound: initial?.mode === 'unbound', count: String(initial?.count || 2) })
+  const [q, setQ] = useState('')
+  const [found, setFound] = useState(null)
+  const [pv, setPv] = useState(null)
+  const [busy, setBusy] = useState(false)
+  useEffect(() => { const s = q.trim(); if (s.length < 2) { setFound(null); return }
+    const t = setTimeout(() => api(`/v1/nkmt/sets/cards?q=${encodeURIComponent(s)}`)
+      .then(setFound).catch(() => setFound([])), 350)
+    return () => clearTimeout(t) }, [q])
+  const total = comps.reduce((a, c) => a + c.quantity, 0)
+  const add = (c) => { if (comps.some((x) => (c.article && x.article === c.article) || (c.gtin && x.gtin === c.gtin)))
+      return notify('Компонент уже в составе', '', 'warn')
+    setComps([...comps, { article: c.article || '', gtin: c.gtin || '', name: c.name || '', quantity: 1 }]) }
+  const setQty = (i, d) => setComps(comps.map((c, j) => j === i
+    ? { ...c, quantity: Math.max(1, c.quantity + d) } : c))
+  const body = () => ({ article: initial?.article || '',
+    name: f.name, brand: f.brand, tnved: f.tnved, gtin: initial?.gtin || '',
+    composition: f.composition,
+    components: f.unbound ? [] : comps.map((c) => ({ ref: c.article || c.gtin, quantity: c.quantity })),
+    count: f.unbound ? (parseInt(f.count, 10) || 0) : 0 })
+  const runPv = () => { setBusy(true)
+    api('/v1/nkmt/sets/preview', { method: 'POST', body: JSON.stringify(body()) })
+      .then(setPv).catch((e) => setPv({ ok: false, error: e.message }))
+      .finally(() => setBusy(false)) }
+  useEffect(() => { if (step === 3 && !pv) runPv() }, [step]) // eslint-disable-line
+  const save = (feed) => { if (busy) return
+    setBusy(true)
+    const req = editId
+      ? api(`/v1/nkmt/sets/${editId}`, { method: 'PUT', body: JSON.stringify(body()) })
+      : api('/v1/nkmt/sets', { method: 'POST', body: JSON.stringify(body()) })
+    req.then(async (r) => {
+        if (feed && !editId) {
+          try { await api(`/v1/nkmt/sets/${r.id}/feed`, { method: 'POST' })
+            notify('Набор создан и подан', 'Фид в НК — дальше модерация и подпись автоматикой.')
+          } catch (e) {
+            notify('Черновик создан, подача не удалась', e.message +
+              ' — набор сохранён черновиком, подайте из карточки.', 'warn')
+          }
+        } else notify(editId ? 'Набор обновлён' : 'Черновик набора создан',
+          'Дальше: подача фида из карточки набора.')
+        closeWide(); onDone()
+      }).catch((e) => notify('Не сохранено', e.message, 'bad')).finally(() => setBusy(false)) }
+  const step1Valid = f.unbound || comps.length > 0
+  const autoName = 'Набор: ' + comps.slice(0, 3).map((c) => c.name || c.gtin).join(' + ')
+    + (comps.length > 3 ? ` +${comps.length - 3}` : '')
+  return <div className="wide-fill">
+    <div className="wide-scroll">
+      {step === 1 && <div className="card-b">
+        <div className="frow" style={{ alignItems: 'center' }}>
+          <div className="field" style={{ flex: 1 }}><label>Поиск карточек (артикул / GTIN / название)</label>
+            <input value={q} autoFocus placeholder="например, SHAPKA или 046305…" onChange={(e) => setQ(e.target.value)} /></div>
+        </div>
+        {found && <div className="twrap" style={{ marginTop: 10 }}><table className="t small fit">
+          <colgroup><col style={{ width: 120 }} /><col style={{ width: 140 }} /><col /><col style={{ width: 110 }} /><col style={{ width: 96 }} /></colgroup>
+          <thead><tr><th>Артикул</th><th>GTIN</th><th>Наименование</th><th>Статус</th><th></th></tr></thead>
+          <tbody>{found.map((c) => <tr key={c.article}>
+            <td className="ell mono">{c.article}</td>
+            <td className="ell mono">{c.gtin}</td>
+            <td className="ell">{c.name}</td>
+            <td><Badge dict={CARD_STATUS} v={c.status} /></td>
+            <td><button className="btn sm" onClick={() => add(c)}>Добавить</button></td></tr>)}
+          {!found.length && <tr><td colSpan={5}><div className="empty"><b>Ничего не нашлось</b>
+            В поиске только опубликованные карточки с GTIN. Внешний GTIN можно ввести на шаге 2… или добавить строкой ниже.</div></td></tr>}</tbody>
+        </table></div>}
+        {/^[0-9]{13,14}$/.test(q.trim()) && !(found || []).length && <div style={{ marginTop: 10 }}>
+          <button className="btn sm" onClick={() => add({ gtin: q.trim(), name: '' })}>
+            Добавить внешний GTIN {q.trim()}</button>
+          <span className="hint" style={{ marginLeft: 8 }}>карточка не наша — проверим в ЧЗ при предпросмотре</span></div>}
+        <div style={{ marginTop: 14 }}>
+          <b style={{ fontSize: 12.5 }}>Состав набора {comps.length ? `· итого предметов: ${total}` : ''}</b>
+          <div className="chiprow" style={{ marginTop: 8 }}>
+            {comps.map((c, i) => <span key={i} className="chip" style={{ gap: 6 }}>
+              {c.name || c.gtin}
+              <button className="btn sm" title="Меньше" onClick={() => setQty(i, -1)}>−</button>
+              <b>×{c.quantity}</b>
+              <button className="btn sm" title="Больше" onClick={() => setQty(i, 1)}>+</button>
+              <a title="Убрать" style={{ cursor: 'pointer' }} onClick={() => setComps(comps.filter((_, j) => j !== i))}>×</a>
+            </span>)}
+            {!comps.length && <span className="hint">пока пусто — найдите карточки поиском выше</span>}
+          </div>
+        </div>
+      </div>}
+      {step === 2 && <div className="card-b">
+        <div className="frow">
+          <div className="field" style={{ flex: 2 }}><label>Наименование</label>
+            <input value={f.name} placeholder={comps.length ? autoName : 'Набор шапка + шарф'}
+              onChange={(e) => setF({ ...f, name: e.target.value })} /></div>
+          <div className="field"><label>Бренд</label>
+            <input value={f.brand} placeholder="пусто — дефолтный" onChange={(e) => setF({ ...f, brand: e.target.value })} /></div>
+        </div>
+        <div className="frow">
+          <div className="field"><label>ТН ВЭД набора</label>
+            <input value={f.tnved} placeholder={comps[0]?.gtin ? '10 цифр; пусто — из первого компонента' : '10 цифр'}
+              onChange={(e) => setF({ ...f, tnved: e.target.value })} /></div>
+          {f.unbound && <div className="field"><label>Количество предметов</label>
+            <input type="number" min="1" value={f.count} onChange={(e) => setF({ ...f, count: e.target.value })} /></div>}
+          <div className="field" style={{ flex: 2 }}><label>Немаркируемые вложения (для атрибута «Состав набора»)</label>
+            <input value={f.composition} placeholder="например, подарочная упаковка"
+              onChange={(e) => setF({ ...f, composition: e.target.value })} /></div>
+        </div>
+        <label style={{ display: 'flex', gap: 8, alignItems: 'center', margin: '4px 0 10px' }}>
+          <input type="checkbox" checked={f.unbound} onChange={(e) => setF({ ...f, unbound: e.target.checked })} />
+          <span style={{ fontSize: 12.5 }}>Без привязки GTIN — одна карточка на все наборы из N предметов
+            (лёгпром допускает; в КИН тогда складываются любые товары)</span></label>
+        {f.unbound && <div className="hint" style={{ marginBottom: 8 }}>Состав на шаге 1 не используется:
+          количество предметов задаётся полем выше.</div>}
+        {!f.unbound && comps.length > 0 && <div className="hint">Состав: {comps.length} позиций, итого {total} предметов —
+          это уйдёт в карточку набора (атрибут «Количество маркированных товаров в наборе»).</div>}
+      </div>}
+      {step === 3 && (busy && !pv ? <div className="empty"><b>Проверяем…</b>Валидация, каталог и ЧЗ.</div> : pv && <>
+        {pv.ok
+          ? <div className="note" style={{ marginBottom: 10 }}><span className="bdg green">проверка пройдена</span>{' '}
+              {(pv.warnings || []).length ? (pv.warnings || []).join('; ') : 'замечаний нет'}</div>
+          : <div className="note" style={{ marginBottom: 10 }}>
+              <span className="bdg red">ошибки</span> {pv.error}
+              {(pv.warnings || []).length > 0 && <div style={{ marginTop: 4 }}>
+                Предупреждения: {(pv.warnings || []).join('; ')}</div>}</div>}
+        <div className="twrap"><table className="t small fit">
+          <colgroup><col style={{ width: 320 }} /><col style={{ width: 120 }} /><col /><col style={{ width: 90 }} /><col style={{ width: 120 }} /></colgroup>
+          <thead><tr><th>Компонент</th><th>Ссылка</th><th>Статус</th><th>×</th><th>Источник</th></tr></thead>
+          <tbody>{(pv.components || []).map((c, i) => <tr key={i}>
+            <td className="ell">{c.name || c.gtin || '—'}</td>
+            <td className="ell mono">{c.article || c.gtin}</td>
+            <td>{c.kind === 'ours' ? <Badge dict={CARD_STATUS} v={c.status} />
+              : c.kind === 'external' ? <span className="bdg grey">внешний GTIN</span> : '—'}</td>
+            <td className="num">{c.quantity}</td>
+            <td>{c.kind === 'ours' ? 'наш каталог' : 'Честный ЗНАК'}</td></tr>)}
+            {pv.mode === 'unbound' && <tr><td colSpan={5} className="hint">Набор без привязки: {pv.count} предмет(ов)</td></tr>}
+          </tbody></table></div>
+      </>)}
+    </div>
+    <div className="modal-f">
+      <span className="hint">Шаг {step} из 3{comps.length ? ` · предметов: ${f.unbound ? f.count : total}` : ''}
+        {editId ? ' · правка набора' : ''}</span>
+      <span style={{ display: 'flex', gap: 8 }}>
+        {step > 1 && <button className="btn sm" onClick={() => setStep(step - 1)}>Назад</button>}
+        {step < 3 && <button className="btn sm pri" disabled={!step1Valid}
+          onClick={() => setStep(step + 1)}>Далее</button>}
+        {step === 3 && <button className="btn sm" disabled={busy} onClick={runPv}>Перепроверить</button>}
+        {step === 3 && pv?.ok && !editId && <>
+          <button className="btn sm" disabled={busy} onClick={() => save(false)}>Создать черновик</button>
+          <button className="btn sm pri" disabled={busy} onClick={() => save(true)}>Создать и подать</button></>}
+        {step === 3 && pv?.ok && editId && <button className="btn sm pri" disabled={busy} onClick={() => save(false)}>Сохранить изменения</button>}
+      </span>
+    </div>
+  </div>
+}
+
+/* превью импорта наборов: тот же разбор, что сделает импорт */
+const SETS_PREVIEW_COLUMNS = [
+  { key: 'article', label: 'Артикул', w: 96, mono: true, text: (r) => r.article, render: (r) => r.article },
+  { key: 'name', label: 'Название', w: 200, ell: true, text: (r) => r.name, render: (r) => r.name },
+  { key: 'tnved', label: 'ТН ВЭД', w: 88, mono: true, text: (r) => r.tnved, render: (r) => r.tnved },
+  { key: 'gtin', label: 'GTIN', w: 120, text: (r) => r.gtin, render: (r) => <>{r.gtin || '—'}
+    {r.gtin_status && <div style={{ marginTop: 3 }}><Badge dict={GTIN_STATUS} v={r.gtin_status} /></div>}</> },
+  { key: 'comps', label: 'Состав', w: 330, ell: true,
+    text: (r) => (r.components || []).map((c) => `${c.article || c.gtin}×${c.quantity}`).join('; '),
+    render: (r) => r.mode === 'unbound' ? <span className="bdg blue">без привязки</span>
+      : <>{(r.components || []).slice(0, 3).map((c, i) => <span key={i} className="bdg grey" style={{ marginRight: 4 }}>
+          {c.name || c.article || c.gtin} ×{c.quantity}</span>)}
+        {(r.components || []).length > 3 && <span className="bdg grey">+{r.components.length - 3}</span>}</> },
+  { key: 'count', label: 'Предм.', w: 62, text: (r) => String(r.count), render: (r) => r.count },
+  { key: 'warn', label: 'Замечания', w: 190, ell: true,
+    text: (r) => [...(r.warnings || []), r.ok ? '' : r.error].filter(Boolean).join('; '),
+    render: (r) => r.ok
+      ? (r.warnings || []).map((w, i) => <div key={i} style={{ fontSize: 11, color: 'var(--wait)' }}>⚠ {w}</div>)
+      : <span className="err-tx">{r.error}</span> },
+  { key: 'res', label: 'Итог', w: 66,
+    render: (r) => r.ok ? <span className="bdg green">ok</span> : <span className="bdg red">ошибка</span> },
+]
+
+function SetsImportPreview({ ctx, file, onDone }) {
+  const { notify, closeWide, bump } = ctx
+  const [data, setData] = useState(null)
+  const [err, setErr] = useState('')
+  const [busy, setBusy] = useState(false)
+  const load = useCallback(() => {
+    setErr(''); setData(null)
+    const fd = new FormData(); fd.append('file', file)
+    api('/v1/nkmt/sets/import/preview', { method: 'POST', body: fd })
+      .then(setData).catch((e) => setErr(e.message))
+  }, [file])
+  useEffect(load, [load])
+  const doImport = () => { if (busy) return
+    setBusy(true)
+    const fd = new FormData(); fd.append('file', file)
+    api('/v1/nkmt/sets/import', { method: 'POST', body: fd })
+      .then((r) => { notify(`Импорт наборов: батч №${r.batch_id}`, `ok ${r.stats.ok}, ошибок ${r.stats.error}`)
+        closeWide(); onDone(); bump() })
+      .catch((e) => { notify('Импорт не удался', e.message, 'bad'); setBusy(false) }) }
+  if (err) return <div className="empty"><b>Предпросмотр не удался</b>{err}
+    <div style={{ marginTop: 12 }}><button className="btn sm" onClick={load}>Повторить</button></div></div>
+  if (!data) return <div className="empty"><b>Разбираем файл…</b>Резолв компонентов, дубли и справочники.</div>
+  const s = data.stats
+  return <div className="wide-fill">
+    <div className="wide-scroll">
+      <p style={{ fontSize: 12.5, color: 'var(--muted)', marginTop: 0 }}>
+        Компоненты резолвятся артикулом (наш каталог) или GTIN. Повтор строки с тем же
+        артикулом обновит набор. Импорт повторит ровно этот разбор.</p>
+      <div className="twrap"><table className="t small fit">
+        <colgroup>{SETS_PREVIEW_COLUMNS.map((c) => <col key={c.key} style={{ width: c.w }} />)}</colgroup>
+        <thead><tr>{SETS_PREVIEW_COLUMNS.map((c) => <th key={c.key}>{c.label}</th>)}</tr></thead>
+        <tbody>{data.rows.map((r, i) => <tr key={i} className={r.ok ? undefined : 'rowhot'}>
+          {SETS_PREVIEW_COLUMNS.map((c) => c.ell
+            ? <EllCell key={c.key} title={c.text(r)} mono={c.mono}>{c.render(r)}</EllCell>
+            : <td key={c.key} className={c.mono ? 'mono' : undefined}>{c.render(r)}</td>)}
+        </tr>)}
+      </tbody></table></div>
+    </div>
+    <div className="modal-f">
+      <span className="hint">ok {s.ok} · ошибок {s.error} · GTIN: новых {s.new}, обновится {s.update}, конфликтов {s.conflict}</span>
+      <span style={{ display: 'flex', gap: 8 }}>
+        <button className="btn sm" onClick={closeWide}>Отмена</button>
+        <button className="btn sm pri" disabled={busy || !s.ok} onClick={doImport}>Импортировать</button>
+      </span>
+    </div>
+  </div>
 }
 
 /* карточка декларации: вся мета из ЧЗ + действия — клик по строке реестра */

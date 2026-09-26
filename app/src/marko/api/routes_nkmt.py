@@ -60,6 +60,24 @@ class ResolveBody(BaseModel):
     product_type: str = ""
 
 
+class SetComponentBody(BaseModel):
+    ref: str            # артикул нашей карточки (приоритет) или GTIN 13–14 цифр
+    quantity: int = 1
+
+
+class SetBody(BaseModel):
+    """Тело конструктора набора. components пуст + count>0 — набор без
+    привязки GTIN (лёгпром допускает: состав задаётся количеством)."""
+    article: str = ""           # пусто → авто SET-#### (конструктор)
+    name: str = ""              # пусто → авто из имён компонентов
+    brand: str = ""             # пусто → дефолтный бренд
+    tnved: str = ""             # 10 цифр; пусто → ТНВЭД первого компонента
+    gtin: str = ""              # пусто → генерация при подаче
+    components: list[SetComponentBody] = []
+    count: int = 0              # только для набора без привязки
+    composition: str = ""       # текст немаркируемых вложений (attr 16271)
+
+
 # --- нормализация/дедуп справочников: единая точка для POST и PUT, чтобы
 # валидации создания и правки не разъезжались ---
 
@@ -454,6 +472,217 @@ def rules_update(
                    "declaration_id": body.declaration_id, "producer": r.producer,
                    "fields": fields}})
     return {"id": r.id}
+
+
+# --- наборы: конструктор + импорт xlsx поверх общего конвейера ---
+
+def _nk_client(db):
+    """Токен ЧЗ + NkClient для превью/проверок; NkHttpError наверх → 502."""
+    from marko.connector_mt import manager
+    from marko.nkmt.client import NkClient
+    from marko.settings import settings
+    return NkClient(settings.mt_base_v3), manager.get_token(db)
+
+
+@router.get("/sets")
+def sets_view(
+    tok: PlatformToken = Depends(require_scope("read")),
+    db: Session = Depends(get_db),
+):
+    from marko.nkmt.sets import sets_list
+    return sets_list(db)
+
+
+@router.get("/sets/cards")
+def sets_cards(
+    q: str = "",
+    tok: PlatformToken = Depends(require_scope("read")),
+    db: Session = Depends(get_db),
+):
+    """Пикер компонентов конструктора: опубликованные карточки с GTIN."""
+    query = db.query(Card).filter(Card.is_set.is_(False), Card.status == "published",
+                                  Card.gtin != "")
+    if q:
+        like = f"%{q}%"
+        query = query.filter(Card.article.ilike(like) | Card.gtin.ilike(like)
+                             | Card.name.ilike(like))
+    return [{"article": c.article, "gtin": c.gtin, "name": c.name,
+             "tnved": c.tnved, "status": c.status}
+            for c in query.order_by(Card.id.desc()).limit(20).all()]
+
+
+@router.post("/sets/preview")
+def sets_preview(
+    body: SetBody,
+    tok: PlatformToken = Depends(require_scope("nkmt:import")),
+    db: Session = Depends(get_db),
+):
+    """Dry-run конструктора: валидации, статусы компонентов, gtin-план."""
+    from marko.nkmt.sets import _row_view, build_set_row, plan_sets
+    client, token = _nk_client(db)
+    row = build_set_row(db, body.model_dump(), client, token, auto_article=True,
+                        allow_update=False)
+    p = plan_sets(db, [row])[0]
+    return _row_view(p)
+
+
+@router.post("/sets")
+def sets_create(
+    body: SetBody,
+    tok: PlatformToken = Depends(require_scope("nkmt:import")),
+    db: Session = Depends(get_db),
+):
+    from marko.nkmt.client import NkHttpError
+    from marko.nkmt.sets import create_set
+    try:
+        client, token = _nk_client(db)
+        card_id, batch_id = create_set(db, body.model_dump(), client, token)
+    except NkHttpError as e:
+        raise HTTPException(502, f"nk upstream error: {e}")
+    except ValueError as e:
+        raise HTTPException(400, str(e))
+    audit(db, tok.principal_id, "nkmt.set.create",
+          {"id": card_id, "batch_id": batch_id, "article": body.article,
+           "components": [c.ref for c in body.components]})
+    return {"id": card_id, "batch_id": batch_id}
+
+
+@router.put("/sets/{set_id}")
+def sets_update(
+    set_id: int,
+    body: SetBody,
+    tok: PlatformToken = Depends(require_scope("nkmt:import")),
+    db: Session = Depends(get_db),
+):
+    from marko.nkmt.client import NkHttpError
+    from marko.nkmt.sets import SetSubmittedError, update_set
+    try:
+        client, token = _nk_client(db)
+        card = update_set(db, set_id, body.model_dump(), client, token)
+    except NkHttpError as e:
+        raise HTTPException(502, f"nk upstream error: {e}")
+    except LookupError:
+        raise HTTPException(404, "set not found")
+    except SetSubmittedError:
+        raise HTTPException(409, "набор уже подан — правка недоступна")
+    except ValueError as e:
+        raise HTTPException(400, str(e))
+    audit(db, tok.principal_id, "nkmt.set.update",
+          {"id": set_id, "article": card.article,
+           "components": [c.ref for c in body.components]})
+    return {"id": card.id}
+
+
+@router.delete("/sets/{set_id}")
+def sets_delete(
+    set_id: int,
+    tok: PlatformToken = Depends(require_scope("nkmt:import")),
+    db: Session = Depends(get_db),
+):
+    from marko.nkmt.sets import SetSubmittedError, delete_set
+    try:
+        article = delete_set(db, set_id)
+    except LookupError:
+        raise HTTPException(404, "set not found")
+    except SetSubmittedError:
+        raise HTTPException(409, "набор уже подан — удаление недоступно")
+    audit(db, tok.principal_id, "nkmt.set.delete", {"id": set_id, "article": article})
+    return {"ok": True}
+
+
+@router.post("/sets/{set_id}/feed")
+def sets_feed(
+    set_id: int,
+    tok: PlatformToken = Depends(require_scope("nkmt:import")),
+    db: Session = Depends(get_db),
+):
+    """Подать фид набора — его батч целиком (обычно батч из одного набора;
+    гард наборов отработает по всем ok-карточкам батча)."""
+    from marko.nkmt.client import NkHttpError
+    from marko.nkmt.service import feed_batch
+    card = db.get(Card, set_id)
+    if card is None or not card.is_set:
+        raise HTTPException(404, "set not found")
+    try:
+        client, token = _nk_client(db)
+        out = feed_batch(db, card.batch_id, client, token)
+    except (NkHttpError, RuntimeError) as e:
+        raise HTTPException(502, f"nk upstream error: {e}")
+    except ValueError as e:
+        raise HTTPException(409, str(e))
+    audit(db, tok.principal_id, "nkmt.set.feed",
+          {"id": set_id, "batch_id": card.batch_id, "feed_id": out["feed_id"]})
+    return out
+
+
+@router.post("/sets/{set_id}/check")
+def sets_check(
+    set_id: int,
+    tok: PlatformToken = Depends(require_scope("nkmt:import")),
+    db: Session = Depends(get_db),
+):
+    """Проверить набор в ЧЗ (/nk/product): статус карточки, состав set_gtins."""
+    from marko.nkmt.client import NkHttpError
+    from marko.nkmt.sets import check_set
+    card = db.get(Card, set_id)
+    if card is None or not card.is_set:
+        raise HTTPException(404, "set not found")
+    if not card.gtin:
+        raise HTTPException(409, "у набора ещё нет GTIN — подайте фид")
+    try:
+        client, token = _nk_client(db)
+        out = check_set(card, client, token)
+    except NkHttpError as e:
+        raise HTTPException(502, f"nk upstream error: {e}")
+    audit(db, tok.principal_id, "nkmt.set.check",
+          {"id": set_id, "found": out["found"]})
+    return out
+
+
+@router.get("/sets/import/template")
+def sets_import_template(tok: PlatformToken = Depends(require_scope("read"))):
+    from marko.nkmt.template import build_set_template
+    return Response(build_set_template(), media_type=XLSX_MIME,
+                    headers={"Content-Disposition":
+                             'attachment; filename="nkmt-sets-template.xlsx"'})
+
+
+@router.post("/sets/import/preview")
+def sets_import_preview(
+    file: UploadFile = File(...),
+    tok: PlatformToken = Depends(require_scope("nkmt:import")),
+    db: Session = Depends(get_db),
+):
+    from marko.nkmt.client import NkHttpError
+    from marko.nkmt.sets import preview_sets
+    try:
+        client, token = _nk_client(db)
+        return preview_sets(db, file.file.read(), client, token)
+    except NkHttpError as e:
+        raise HTTPException(502, f"nk upstream error: {e}")
+    except BAD_XLSX:
+        raise HTTPException(400, "не удалось прочитать файл как xlsx")
+
+
+@router.post("/sets/import")
+def sets_import(
+    file: UploadFile = File(...),
+    tok: PlatformToken = Depends(require_scope("nkmt:import")),
+    db: Session = Depends(get_db),
+):
+    from marko.nkmt.client import NkHttpError
+    from marko.nkmt.sets import import_sets
+    try:
+        client, token = _nk_client(db)
+        batch_id = import_sets(db, file.filename, file.file.read(), client, token)
+    except NkHttpError as e:
+        raise HTTPException(502, f"nk upstream error: {e}")
+    except BAD_XLSX:
+        raise HTTPException(400, "не удалось прочитать файл как xlsx")
+    b = db.get(Batch, batch_id)
+    audit(db, tok.principal_id, "nkmt.set.import",
+          {"batch_id": batch_id, "filename": file.filename, "stats": b.stats})
+    return {"batch_id": batch_id, "stats": b.stats}
 
 
 @router.post("/resolve")
